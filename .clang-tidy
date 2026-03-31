@@ -1,0 +1,32 @@
+Checks: >
+  # Modern C++ improvements
+  modernize-*, 
+  readability-*, 
+  performance-*, 
+  cppcoreguidelines-*, 
+  bugprone-*, 
+  misc-*, 
+  hicpp-*,
+
+# Treat warnings as errors for stricter enforcement
+WarningsAsErrors: '*'
+
+# Some checks can be adjusted if too strict
+CheckOptions:
+  # Enforce use of override on virtual functions
+  - key: modernize-use-override.IgnoreDestructors
+    value: '0'
+  # Suggest [[nodiscard]] when return value is important
+  - key: modernize-use-nodiscard.IgnoreCasts
+    value: '0'
+  # Prefer smart pointers over raw
+  - key: cppcoreguidelines-owning-memory.CheckSpelling
+    value: '1'
+
+  # Extra options for bugprone checks
+  - key: bugprone-use-after-move.WarnOnPtr
+    value: '1'
+
+# Keep clang-tidy quiet about headers you include
+HeaderFilterRegex: '.*'
+FormatStyle: file  # optional, uses clang-format config if present

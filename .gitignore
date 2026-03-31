@@ -1,0 +1,14 @@
+/guild_master
+/build
+
+.idea
+.claude
+/deps
+/dist-windows
+/build-windows/
+/guild_master-windows.zip
+
+/scripts/*.safetensors
+/scripts/*/*
+/models/*.onnx
+/models/*.data
