@@ -3,7 +3,7 @@
 #include "enum/constants.hpp"
 #include "managers/Logger.hpp"
 
-App::App() : win(sf::VideoMode(WIN_W, WIN_H), "Guild Master", sf::Style::Close) {
+App::App() : win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close) {
     Logger::info("app constructor");
     win.setFramerateLimit(60);
 
@@ -22,6 +22,7 @@ void App::run() {
         } else {
             while (win.pollEvent(e))
                 menuController.handleEvent(e, win, menuScreen, screen);
+            menuScreen.render(win);
         }
         win.display();
     }
