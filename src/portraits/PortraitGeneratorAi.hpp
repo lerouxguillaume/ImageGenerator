@@ -1,7 +1,8 @@
 #pragma once
 #include <atomic>
 #include <string>
-#include "../entities/Character.hpp"
+
+#include "../enum/enums.hpp"
 
 struct GenerationParams {
     int   numSteps      = 20;
@@ -10,7 +11,8 @@ struct GenerationParams {
 
 class PortraitGeneratorAi {
 public:
-    static void generatePortrait(const Character& character,
+    static void generatePortrait(const Race race,
+                                 const Gender gender,
                                  const GenerationParams& params,
                                  std::atomic<int>* progressStep = nullptr);
 

@@ -614,16 +614,16 @@ namespace {
 
 // ── Public entry points ───────────────────────────────────────────────────────
 
-void PortraitGeneratorAi::generatePortrait(const Character &character, const GenerationParams &params,
+void PortraitGeneratorAi::generatePortrait(const Race race, Gender gender, const GenerationParams &params,
                                            std::atomic<int> *progressStep) {
-    Logger::info("generatePortrait — id: " + std::to_string(character.getId())
-                 + " race: " + std::to_string(static_cast<int>(character.getRace()))
-                 + " gender: " + std::to_string(static_cast<int>(character.getGender()))
-                 + " class: " + std::to_string(static_cast<int>(character.getAdventurerClass())));
 
-    const std::string prompt = buildCharacterPrompt(character).build();
-    const std::string neg_prompt = buildNegativePrompt(character).build();
-    const std::string outputPath = "assets/generated/portrait_" + std::to_string(character.getId()) + ".png";
+    const std::string prompt = buildCharacterPrompt(race, gender).build();
+    const std::string neg_prompt = buildNegativePrompt(race, gender).build();
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()
+    ).count();
+    const std::string outputPath = "assets/generated/portrait_" + std::to_string(timestamp) + ".png";
 
     runPipeline(prompt, neg_prompt, outputPath, params, progressStep, nullptr);
 }

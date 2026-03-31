@@ -1,10 +1,8 @@
 #pragma once
 #include <atomic>
 #include <thread>
-#include <functional>
-#include "../entities/Character.hpp"
-#include "../portraits/PortraitGeneratorAi.hpp"
-#include "../events/EventSystem.h"
+
+#include "../enum/enums.hpp"
 
 class PortraitGenerationService {
 public:
@@ -17,7 +15,7 @@ public:
     ~PortraitGenerationService();
 
     // Start portrait generation
-    void startGeneration(const Character& character, const GenerationParams& params);
+    void startGeneration(Race race, Gender gender, const GenerationParams& params);
     
     // Check if generation is in progress
     bool isGenerating() const;
@@ -38,7 +36,7 @@ private:
     std::atomic<int> generationStep_{0};
     std::thread generationThread_;
     
-    void generationThreadFunc(const Character& character, const GenerationParams& params);
+    void generationThreadFunc(Race race, Gender gender, const GenerationParams& params);
     void cleanupGeneration();
     void emitProgressEvent(int currentStep, int totalSteps);
 };

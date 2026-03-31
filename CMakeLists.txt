@@ -39,29 +39,29 @@ file(GLOB_RECURSE SOURCES
         "src/*.h"
 )
 
-add_executable(guild_master ${SOURCES})
+add_executable(image_generator ${SOURCES})
 
 if(USE_CUDA)
-    target_compile_definitions(guild_master PRIVATE USE_CUDA)
+    target_compile_definitions(image_generator PRIVATE USE_CUDA)
     message(STATUS "CUDA GPU acceleration enabled")
 endif()
 if(USE_DML)
-    target_compile_definitions(guild_master PRIVATE USE_DML)
+    target_compile_definitions(image_generator PRIVATE USE_DML)
     message(STATUS "DirectML GPU acceleration enabled")
 endif()
 
 if(UNIX AND NOT APPLE)
-    target_compile_options(guild_master PRIVATE -g -fno-omit-frame-pointer -fno-pie)
-    target_link_options(guild_master PRIVATE -rdynamic -no-pie)
+    target_compile_options(image_generator PRIVATE -g -fno-omit-frame-pointer -fno-pie)
+    target_link_options(image_generator PRIVATE -rdynamic -no-pie)
 elseif(APPLE)
-    target_compile_options(guild_master PRIVATE -g -fno-omit-frame-pointer)
+    target_compile_options(image_generator PRIVATE -g -fno-omit-frame-pointer)
 else()
     # Statically link GCC/C++ runtimes so libgcc_s_seh-1.dll / libstdc++-6.dll
     # don't need to be shipped alongside the executable.
-    target_link_options(guild_master PRIVATE -static-libgcc -static-libstdc++)
+    target_link_options(image_generator PRIVATE -static-libgcc -static-libstdc++)
 
     # ONNX Runtime Windows headers use MSVC SAL annotations not available in MinGW
-    target_compile_definitions(guild_master PRIVATE
+    target_compile_definitions(image_generator PRIVATE
         _Frees_ptr_opt_=
         _In_=
         _Out_=
@@ -72,7 +72,7 @@ else()
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(guild_master PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(image_generator PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # On Windows the SQLite3 amalgamation is in the custom deps dir;
@@ -88,13 +88,13 @@ else()
     set(SQLITE3_LIB         sqlite3)
 endif()
 
-target_include_directories(guild_master PRIVATE
+target_include_directories(image_generator PRIVATE
     ${ONNXRUNTIME_ROOT}/include
     ${OpenCV_INCLUDE_DIRS}
     ${SQLITE3_INCLUDE_DIR}
 )
 
-target_link_libraries(guild_master
+target_link_libraries(image_generator
     sfml-graphics
     sfml-window
     sfml-system
@@ -104,42 +104,19 @@ target_link_libraries(guild_master
     ${OpenCV_LIBS}
 )
 
-# Copy config.json next to the binary so the game can find it at runtime
-add_custom_command(TARGET guild_master POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_SOURCE_DIR}/config.json"
-    "$<TARGET_FILE_DIR:guild_master>/config.json")
-
-# Copy schema.sql next to the binary so Connection::init() can find it
-add_custom_command(TARGET guild_master POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_SOURCE_DIR}/src/db/schema.sql"
-    "$<TARGET_FILE_DIR:guild_master>/schema.sql")
-
-# Copy lang/ directory next to the binary
-add_custom_command(TARGET guild_master POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/lang"
-    "$<TARGET_FILE_DIR:guild_master>/lang")
-
 # Copy portrait models (ONNX + tokenizer files) next to the binary
-add_custom_command(TARGET guild_master POST_BUILD
+add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/models"
-    "$<TARGET_FILE_DIR:guild_master>/models")
-
-# Create saves directory next to the binary
-add_custom_command(TARGET guild_master POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-    "$<TARGET_FILE_DIR:guild_master>/saves")
+    "$<TARGET_FILE_DIR:image_generator>/models")
 
 # Create generated portraits directory next to the binary and drop a placeholder
 # so the empty directory survives zip packaging (zip tools drop empty dirs).
-add_custom_command(TARGET guild_master POST_BUILD
+add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:guild_master>/assets/generated"
+        "$<TARGET_FILE_DIR:image_generator>/assets/generated"
     COMMAND ${CMAKE_COMMAND} -E touch
-        "$<TARGET_FILE_DIR:guild_master>/assets/generated/.gitkeep")
+        "$<TARGET_FILE_DIR:image_generator>/assets/generated/.gitkeep")
 
 # On Windows copy all required DLLs next to the binary
 if(WIN32)
@@ -163,14 +140,14 @@ if(WIN32)
     )
     # Copy MinGW runtime DLLs individually (they may come from different dirs)
     foreach(_dll ${_MINGW_RUNTIME_DLLS})
-        add_custom_command(TARGET guild_master POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "$<TARGET_FILE_DIR:guild_master>")
+        add_custom_command(TARGET image_generator POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "$<TARGET_FILE_DIR:image_generator>")
     endforeach()
     foreach(_dir ${_WIN_DLL_DIRS})
         file(GLOB _dlls "${_dir}/*.dll")
         foreach(_dll ${_dlls})
-            add_custom_command(TARGET guild_master POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "$<TARGET_FILE_DIR:guild_master>")
+            add_custom_command(TARGET image_generator POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "$<TARGET_FILE_DIR:image_generator>")
         endforeach()
     endforeach()
 endif()
@@ -180,9 +157,9 @@ endif()
 if(WIN32)
     # Use a font bundled in the repo; copy it as arial.ttf so Screen.cpp finds it.
     if(EXISTS "${CMAKE_SOURCE_DIR}/assets/fonts/arial.ttf")
-        add_custom_command(TARGET guild_master POST_BUILD
+        add_custom_command(TARGET image_generator POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/assets/fonts/arial.ttf"
-            "$<TARGET_FILE_DIR:guild_master>/arial.ttf")
+            "$<TARGET_FILE_DIR:image_generator>/arial.ttf")
     endif()
 endif()

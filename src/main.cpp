@@ -65,7 +65,7 @@ void onTerminate() {
 
 int main() {
     std::filesystem::current_path(executableDir());
-    Logger::init("guild_master.log");
+    Logger::init("Image_generator.log");
 
     std::set_terminate(onTerminate);
     std::signal(SIGSEGV, onSignal);

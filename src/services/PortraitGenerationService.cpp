@@ -3,15 +3,11 @@
 
 PortraitGenerationService::PortraitGenerationService() = default;
 
-void PortraitGenerationService::emitProgressEvent(int currentStep, int totalSteps) {
-    EventSystem::getInstance().emit(PortraitGenerationProgressEvent(currentStep, totalSteps));
-}
-
 PortraitGenerationService::~PortraitGenerationService() {
     cleanupGeneration();
 }
 
-void PortraitGenerationService::startGeneration(const Character& character, const GenerationParams& params) {
+void PortraitGenerationService::startGeneration(Race race, Gender gender, const GenerationParams& params) {
     // Clean up any previous generation
     cleanupGeneration();
     
@@ -21,7 +17,7 @@ void PortraitGenerationService::startGeneration(const Character& character, cons
     
     // Start generation thread
     generationThread_ = std::thread(&PortraitGenerationService::generationThreadFunc, this, 
-                                    std::cref(character), params);
+                                    race, gender, params);
 }
 
 bool PortraitGenerationService::isGenerating() const {
@@ -43,28 +39,13 @@ void PortraitGenerationService::cancelGeneration() {
 
 
 
-void PortraitGenerationService::generationThreadFunc(const Character& character, const GenerationParams& params) {
-    // Emit start event
-    EventSystem::getInstance().emit(PortraitGenerationStartedEvent());
-    
-    try {
-        // Convert our params to the format expected by PortraitGeneratorAi
-        ::GenerationParams aiParams;
-        aiParams.numSteps = params.numSteps;
-        aiParams.guidanceScale = params.guidanceScale;
+void PortraitGenerationService::generationThreadFunc(const Race race, Gender gender, const GenerationParams& params) {
+    // Convert our params to the format expected by PortraitGeneratorAi
+    ::GenerationParams aiParams;
+    aiParams.numSteps = params.numSteps;
+    aiParams.guidanceScale = params.guidanceScale;
 
-        PortraitGeneratorAi::generatePortrait(character, aiParams, &generationStep_);
-        
-        // Generation completed successfully
-        generationDone_ = true;
-        
-        // Emit completion event
-        EventSystem::getInstance().emit(PortraitGenerationCompletedEvent(true));
-        EventSystem::getInstance().emit(PortraitReloadRequestedEvent());
-    } catch (const std::exception& e) {
-        generationDone_ = true;
-        EventSystem::getInstance().emit(PortraitGenerationCompletedEvent(false));
-    }
+    PortraitGeneratorAi::generatePortrait(race, gender, aiParams, &generationStep_);
 }
 
 void PortraitGenerationService::cleanupGeneration() {

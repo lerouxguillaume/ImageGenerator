@@ -3,7 +3,6 @@
 #include <vector>
 #include <cmath>
 #include <cstdio>
-#include "../entities/Character.hpp"
 
 struct PromptToken {
     std::string text;
@@ -37,12 +36,12 @@ private:
     std::vector<PromptToken> tokens;
 };
 
-inline PromptBuilder buildCharacterPrompt(const Character& character) {
+inline PromptBuilder buildCharacterPrompt(const Race& race, const Gender gender) {
     PromptBuilder pb;
 
     // Gender first — anchors the model before any composition tokens
-    const float genderBoost = (character.getRace() == Race::Elf) ? 1.5f : 1.4f;
-    if (character.getGender() == Gender::Male) {
+    const float genderBoost = (race == Race::Elf) ? 1.5f : 1.4f;
+    if (gender == Gender::Male) {
         pb.add("1boy",      genderBoost);
         pb.add("male",      1.2f);
         pb.add("masculine", 1.1f);
@@ -63,34 +62,11 @@ inline PromptBuilder buildCharacterPrompt(const Character& character) {
     pb.add("highly detailed face", 1.2f);
 
     // Race
-    switch (character.getRace()) {
+    switch (race) {
         case Race::Elf:   pb.add("elf",   1.2f); break;
         case Race::Dwarf: pb.add("dwarf", 1.2f); break;
         case Race::Orc:   pb.add("orc",   1.2f); break;
         default:          pb.add("human", 1.0f); break;
-    }
-
-    // Class — reduced weights to avoid full-body composition bias
-    switch (character.getAdventurerClass()) {
-        case AdventurerClass::Warrior:
-            pb.add("warrior", 1.2f);
-            pb.add("armor",   1.05f);
-            break;
-        case AdventurerClass::Mage:
-            pb.add("mage",       1.2f);
-            pb.add("magic aura", 1.1f);
-            break;
-        case AdventurerClass::Rogue:
-            pb.add("rogue", 1.2f);
-            pb.add("hood",  1.05f);
-            break;
-        case AdventurerClass::Cleric:
-            pb.add("cleric",     1.2f);
-            pb.add("holy light", 1.1f);
-            break;
-        default:
-            pb.add("adventurer");
-            break;
     }
 
     // Quality
@@ -101,11 +77,11 @@ inline PromptBuilder buildCharacterPrompt(const Character& character) {
     return pb;
 }
 
-inline PromptBuilder buildNegativePrompt(const Character& character) {
+inline PromptBuilder buildNegativePrompt(const Race& race, const Gender gender) {
     PromptBuilder neg;
 
     // Opposite gender first
-    if (character.getGender() == Gender::Male) {
+    if (gender == Gender::Male) {
         neg.add("female", 1.3f);
         neg.add("1girl",  1.3f);
     } else {
