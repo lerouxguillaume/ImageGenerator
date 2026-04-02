@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <thread>
 
 void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
@@ -29,6 +30,10 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             const float t   = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
             const float raw = 1.0f + t * 14.0f;
             view.generationParams.guidanceScale = std::round(raw * 2.f) / 2.f;
+        } else if (view.draggingSlider == DraggingSlider::Images) {
+            const sf::FloatRect& track = view.imagesSliderTrack;
+            const float t = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
+            view.generationParams.numImages = static_cast<int>(std::round(1.f + t * 9.f));
         }
     }
 
@@ -53,9 +58,31 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 }
 
 void ImageGeneratorController::update(ImageGeneratorView& view) {
+    // Scan models/ subdirectories once on first update
+    if (view.availableModels.empty()) {
+        for (const auto& entry : std::filesystem::directory_iterator("models")) {
+            if (!entry.is_directory()) continue;
+            const auto dir = entry.path();
+            if (std::filesystem::exists(dir / "unet.onnx"))
+                view.availableModels.push_back(dir.string());
+        }
+        std::sort(view.availableModels.begin(), view.availableModels.end());
+        view.selectedModelIdx = 0;
+    }
+
     if (view.generating && view.generationDone.load()) {
         presenter.finishGeneration(view);
-        if (view.resultTexture.loadFromFile(view.lastImagePath))
+        // For multi-image runs the last image has an _N suffix; single image has no suffix.
+        std::string pathToLoad = view.lastImagePath;
+        const int n = view.generationParams.numImages;
+        if (n > 1) {
+            const auto dot = view.lastImagePath.rfind('.');
+            const std::string idx = std::to_string(n);
+            pathToLoad = (dot == std::string::npos)
+                ? view.lastImagePath + "_" + idx
+                : view.lastImagePath.substr(0, dot) + "_" + idx + view.lastImagePath.substr(dot);
+        }
+        if (view.resultTexture.loadFromFile(pathToLoad))
             view.resultLoaded = true;
     }
 }
@@ -91,6 +118,18 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         return;
     }
 
+    if (!view.availableModels.empty()) {
+        if (view.btnModelPrev.contains(pos)) {
+            view.selectedModelIdx = (view.selectedModelIdx - 1 + static_cast<int>(view.availableModels.size()))
+                                    % static_cast<int>(view.availableModels.size());
+            return;
+        }
+        if (view.btnModelNext.contains(pos)) {
+            view.selectedModelIdx = (view.selectedModelIdx + 1) % static_cast<int>(view.availableModels.size());
+            return;
+        }
+    }
+
     if (view.showAdvancedParams) {
         if (view.stepsSliderTrack.contains(pos)) {
             view.draggingSlider = DraggingSlider::Steps;
@@ -98,6 +137,10 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         }
         if (view.cfgSliderTrack.contains(pos)) {
             view.draggingSlider = DraggingSlider::Cfg;
+            return;
+        }
+        if (view.imagesSliderTrack.contains(pos)) {
+            view.draggingSlider = DraggingSlider::Images;
             return;
         }
     }
@@ -112,15 +155,23 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
 
         const std::string prompt      = view.positivePrompt;
         const std::string negPrompt   = view.negativePrompt;
-        const std::string outPath     = view.lastImagePath;
+        const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
         const GenerationParams params = view.generationParams;
-        std::atomic<bool>* done   = &view.generationDone;
-        std::atomic<int>*  step   = &view.generationStep;
-        std::atomic<bool>* cancel = &view.cancelToken;
-        std::atomic<int>*  idPtr  = &view.generationId;
+        const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
+        std::atomic<bool>* done       = &view.generationDone;
+        std::atomic<int>*  step       = &view.generationStep;
+        std::atomic<bool>* cancel     = &view.cancelToken;
+        std::atomic<int>*  idPtr      = &view.generationId;
+        std::atomic<int>*  imgNum     = &view.generationImageNum;
 
-        std::thread generationThread([prompt, negPrompt, outPath, params, done, step, cancel, idPtr, myId]() {
-            PortraitGeneratorAi::generateFromPrompt(prompt, negPrompt, outPath, params, step, cancel);
+        view.generationTotalImages.store(params.numImages);
+
+        std::thread generationThread([prompt, negPrompt, outPathBase, params, modelDir,
+                                      done, step, cancel, idPtr, imgNum, myId]() {
+            // Models and text encoding happen once inside generateFromPrompt;
+            // the multi-image loop runs there too, so no reload per image.
+            PortraitGeneratorAi::generateFromPrompt(
+                prompt, negPrompt, outPathBase, params, modelDir, step, imgNum, cancel);
 
             if (idPtr->load() == myId)
                 done->store(true);

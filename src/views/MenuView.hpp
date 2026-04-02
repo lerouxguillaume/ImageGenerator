@@ -3,7 +3,6 @@
 #include <vector>
 #include <SFML/Graphics.hpp>
 #include "Screen.hpp"
-#pragma message("Using MenuView.hpp from THIS project")
 
 class MenuView : public Screen {
 public:

@@ -1,4 +1,3 @@
-/guild_master
 /build
 
 .idea
@@ -6,9 +5,9 @@
 /deps
 /dist-windows
 /build-windows/
-/guild_master-windows.zip
 
 /scripts/*.safetensors
 /scripts/*/*
-/models/*.onnx
-/models/*.data
+/models/*/*.onnx
+/models/*/*.data
+/image-generation-windows.zip

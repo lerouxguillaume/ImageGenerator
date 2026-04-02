@@ -142,7 +142,7 @@ cmake -S . -B "$BUILD_DIR" \
 echo "Building..."
 cmake --build "$BUILD_DIR"
 
-ZIP_OUT="$(pwd)/guild_master-windows.zip"
+ZIP_OUT="$(pwd)/image-generation-windows.zip"
 echo "Packaging..."
 cd "$BUILD_DIR"
 zip -r "$ZIP_OUT" . -x "*.o" "*.a" "CMakeFiles/*" "cmake_install.cmake" "Makefile" "CMakeCache.txt"

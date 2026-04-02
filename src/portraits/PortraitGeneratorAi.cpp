@@ -21,6 +21,15 @@ extern "C" OrtStatus *OrtSessionOptionsAppendExecutionProvider_DML(
 #include "../managers/Logger.hpp"
 
 namespace {
+    // ── Timing helper ─────────────────────────────────────────────────────────────
+
+    using Clock = std::chrono::steady_clock;
+
+    std::string fmtMs(Clock::time_point start) {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+        return std::to_string(ms) + " ms";
+    }
+
     // ── Type conversion helpers ───────────────────────────────────────────────────
 
     std::vector<Ort::Float16_t> toFp16(const std::vector<float> &src) {
@@ -80,7 +89,8 @@ namespace {
 
     struct GenerationContext {
         Ort::Env env;
-        Ort::SessionOptions session_opts; // GPU EP (unet, vae)
+        Ort::SessionOptions session_opts;     // GPU EP (unet)
+        Ort::SessionOptions vae_session_opts; // GPU EP (vae) — basic optimization to avoid DML Reshape issues
         Ort::SessionOptions cpu_session_opts; // CPU only (text encoder + fallback)
         Ort::Session text_encoder;
         Ort::Session unet;
@@ -149,10 +159,13 @@ namespace {
 
     // ── Model loading ─────────────────────────────────────────────────────────────
 
-    GenerationContext loadModels(int latent_w, int latent_h) {
+    GenerationContext loadModels(int latent_w, int latent_h, const std::string& modelDir) {
+        auto t0 = Clock::now();
         GenerationContext ctx;
         const int numThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-        Logger::info("Using " + std::to_string(numThreads) + " CPU threads");
+        Logger::info("=== loadModels ===");
+        Logger::info("Model dir: " + modelDir);
+        Logger::info("CPU threads: " + std::to_string(numThreads));
         ctx.session_opts.SetIntraOpNumThreads(numThreads);
         ctx.cpu_session_opts.SetIntraOpNumThreads(numThreads);
 
@@ -163,7 +176,12 @@ namespace {
             ctx.session_opts.DisableMemPattern();
             ctx.session_opts.SetExecutionMode(ORT_SEQUENTIAL);
             Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(ctx.session_opts, 0));
-            Logger::info("DirectML execution provider enabled (unet + vae on GPU, text encoder on CPU)");
+
+            // VAE decoder runs on CPU: DirectML rejects node_view_2 (a Reshape in the
+            // VAE attention) at both load and inference time regardless of optimization
+            // level or dtype. The VAE runs once per image (not per step) so the CPU
+            // overhead is small relative to the UNet's 20 GPU steps.
+            Logger::info("EP: DirectML (unet=GPU, vae=CPU, text_encoder=CPU)");
         } catch (const Ort::Exception &e) {
             Logger::info(std::string("DirectML EP unavailable, falling back to CPU: ") + e.what());
         }
@@ -171,34 +189,47 @@ namespace {
         try {
             OrtCUDAProviderOptions cuda_options;
             ctx.session_opts.AppendExecutionProvider_CUDA(cuda_options);
-            Logger::info("CUDA execution provider enabled");
+            Logger::info("EP: CUDA");
         } catch (const Ort::Exception &e) {
             Logger::info(std::string("CUDA EP unavailable, falling back to CPU: ") + e.what());
         }
 #else
-        Logger::info("Running on CPU");
+        Logger::info("EP: CPU");
 #endif
 
-        Logger::info("Loading models...");
-        for (const char *p: {
-                 "models/text_encoder.onnx", "models/unet.onnx", "models/vae_decoder.onnx",
-                 "models/vocab.json", "models/merges.txt"
+        Logger::info("Checking model files...");
+        for (const std::string p: {
+                 modelDir + "/text_encoder.onnx", modelDir + "/unet.onnx", modelDir + "/vae_decoder.onnx",
+                 std::string("models/vocab.json"), std::string("models/merges.txt")
              }) {
-            if (!std::filesystem::exists(p))
-                Logger::info("WARNING: model file not found: " + std::string(p));
+            if (std::filesystem::exists(p))
+                Logger::info("  [OK] " + p);
+            else
+                Logger::info("  [MISSING] " + p);
         }
+
+        auto loadSession = [&](const char *label, auto path, Ort::SessionOptions &opts) {
+            Logger::info("Loading " + std::string(label) + "...");
+            auto ts = Clock::now();
+            Ort::Session s(ctx.env, path, opts);
+            Logger::info("  " + std::string(label) + " loaded in " + fmtMs(ts));
+            return s;
+        };
+
 #ifdef _WIN32
-        // Text encoder and cpu_unet run on CPU — the encoder is fast and avoids DML
-        // reshape incompatibilities; cpu_unet is the fallback if the GPU unet fails.
-        ctx.text_encoder = Ort::Session(ctx.env, L"models/text_encoder.onnx", ctx.cpu_session_opts);
-        ctx.unet = Ort::Session(ctx.env, L"models/unet.onnx", ctx.session_opts);
-        ctx.cpu_unet = Ort::Session(ctx.env, L"models/unet.onnx", ctx.cpu_session_opts);
-        ctx.vae_decoder = Ort::Session(ctx.env, L"models/vae_decoder.onnx", ctx.session_opts);
+        // ORT on Windows requires wchar_t paths. Model dir names are ASCII, so a
+        // simple char-by-char widening is sufficient.
+        auto toWide = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+        const std::wstring wModelDir = toWide(modelDir);
+        ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
+        ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         ctx.session_opts);
+        ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
 #else
-        ctx.text_encoder = Ort::Session(ctx.env, "models/text_encoder.onnx", ctx.cpu_session_opts);
-        ctx.unet = Ort::Session(ctx.env, "models/unet.onnx", ctx.session_opts);
-        ctx.cpu_unet = Ort::Session(ctx.env, "models/unet.onnx", ctx.cpu_session_opts);
-        ctx.vae_decoder = Ort::Session(ctx.env, "models/vae_decoder.onnx", ctx.session_opts);
+        ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
+        ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         ctx.session_opts);
+        ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
 #endif
 
         logModelIO("text_encoder", ctx.text_encoder, ctx.allocator);
@@ -217,6 +248,8 @@ namespace {
         ctx.latent_shape = {1, 4, latent_h, latent_w};
         ctx.latent_size = 1 * 4 * latent_h * latent_w;
 
+        Logger::info("All models loaded in " + fmtMs(t0));
+        Logger::info("=================");
         return ctx;
     }
 
@@ -227,14 +260,10 @@ namespace {
                                   GenerationContext &ctx,
                                   std::vector<int64_t> &out_shape) {
         auto token_ids = tokenizer.encode(prompt);
-        Logger::info("Prompt tokens (" + std::to_string(token_ids.size()) + "): " + [&] {
-            std::string s;
-            for (auto id: token_ids) s += std::to_string(id) + " ";
-            return s;
-        }());
-        Logger::info("Text encoder input:  " + ctx.te_input);
-        Logger::info("Text encoder output: " + ctx.te_output);
+        Logger::info("encodeText: " + std::to_string(token_ids.size()) + " tokens"
+                     + "  prompt=\"" + prompt.substr(0, 80) + (prompt.size() > 80 ? "..." : "") + "\"");
 
+        auto tEnc = Clock::now();
         std::vector<int64_t> token_shape = {1, 77};
         Ort::Value token_tensor = Ort::Value::CreateTensor<int64_t>(
             ctx.memory_info, token_ids.data(), token_ids.size(),
@@ -245,6 +274,7 @@ namespace {
         auto te_out = ctx.text_encoder.Run(Ort::RunOptions{nullptr},
                                            in_names, &token_tensor, 1,
                                            out_names, 1);
+        Logger::info("  text encoder run: " + fmtMs(tEnc));
 
         auto shape_info = te_out.front().GetTensorTypeAndShapeInfo();
         auto shape = shape_info.GetShape();
@@ -253,7 +283,7 @@ namespace {
         std::string shape_str = "[";
         for (size_t k = 0; k < shape.size(); ++k)
             shape_str += std::to_string(shape[k]) + (k + 1 < shape.size() ? ", " : "]");
-        Logger::info("Text encoder output shape: " + shape_str);
+        Logger::info("  embedding shape: " + shape_str);
 
         const auto *raw = te_out.front().GetTensorData<Ort::Float16_t>();
         std::vector<float> embedding(elem_count);
@@ -452,6 +482,7 @@ namespace {
 
         std::vector<float> prev_denoised;
         float h_prev = 0.0f;
+        auto tDenoise = Clock::now();
 
         for (int step = 0; step < num_steps; ++step) {
             if (cancelToken && cancelToken->load()) {
@@ -460,6 +491,7 @@ namespace {
             }
             float sigma = sigmas[step];
             float sigma_next = sigmas[step + 1];
+            auto tStep = Clock::now();
             Logger::info("DPM++ step " + std::to_string(step + 1) + "/" + std::to_string(num_steps)
                          + "  sigma=" + std::to_string(sigma));
 
@@ -492,9 +524,11 @@ namespace {
             prev_denoised = denoised;
             h_prev = h;
 
+            Logger::info("  step done in " + fmtMs(tStep));
             if (progressStep) progressStep->fetch_add(1);
         }
 
+        Logger::info("Denoising complete in " + fmtMs(tDenoise));
         return x;
     }
 
@@ -502,19 +536,30 @@ namespace {
 
     // The exported ONNX model handles the 0.18215 unscaling internally.
     cv::Mat decodeLatent(const std::vector<float> &x, GenerationContext &ctx) {
-        std::vector<float> vae_latent(x);
+        // Log input latent stats to catch numerical issues before they hit the GPU.
+        {
+            float vMin = 1e9f, vMax = -1e9f, vSum = 0.0f;
+            for (float v : x) { vMin = std::min(vMin, v); vMax = std::max(vMax, v); vSum += v; }
+            Logger::info("VAE input latent — min: " + std::to_string(vMin)
+                         + "  max: " + std::to_string(vMax)
+                         + "  mean: " + std::to_string(vSum / static_cast<float>(x.size())));
+        }
 
-        Ort::Value vae_input = Ort::Value::CreateTensor<float>(
-            ctx.memory_info, vae_latent.data(), vae_latent.size(),
+        // VAE model is exported as FP16 so inputs must match — ORT throws on type mismatch.
+        auto vae_latent_fp16 = toFp16(x);
+
+        Ort::Value vae_input = Ort::Value::CreateTensor<Ort::Float16_t>(
+            ctx.memory_info, vae_latent_fp16.data(), vae_latent_fp16.size(),
             ctx.latent_shape.data(), ctx.latent_shape.size());
 
         const char *vae_in_names[] = {ctx.vae_in.c_str()};
         const char *vae_out_names[] = {ctx.vae_out.c_str()};
+        auto tVae = Clock::now();
         Logger::info("VAE decoding latent → image...");
         auto vae_out = ctx.vae_decoder.Run(Ort::RunOptions{nullptr},
                                            vae_in_names, &vae_input, 1,
                                            vae_out_names, 1);
-        Logger::info("VAE decoding done.");
+        Logger::info("VAE decode done in " + fmtMs(tVae));
 
         auto &vae_tensor = vae_out.front();
         auto shape_info = vae_tensor.GetTensorTypeAndShapeInfo();
@@ -522,10 +567,11 @@ namespace {
         int img_h = static_cast<int>(shape[2]);
         int img_w = static_cast<int>(shape[3]);
         size_t elem_count = shape_info.GetElementCount();
-        Logger::info("VAE output shape: [1, 3, " + std::to_string(img_h) + ", " + std::to_string(img_w) + "]");
+        auto elem_type = shape_info.GetElementType();
+        Logger::info("VAE output shape: [1, 3, " + std::to_string(img_h) + ", " + std::to_string(img_w) + "]"
+                     + "  dtype=" + ((elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ? "fp16" : "fp32"));
 
         std::vector<float> img_float(elem_count);
-        auto elem_type = shape_info.GetElementType();
         if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
             const auto *raw = vae_tensor.GetTensorData<Ort::Float16_t>();
             for (size_t j = 0; j < elem_count; ++j)
@@ -544,31 +590,42 @@ namespace {
                      const std::string &neg_prompt,
                      const std::string &outputPath,
                      const GenerationParams &params,
+                     const std::string &modelDir,
                      std::atomic<int> *progressStep,
+                     std::atomic<int> *currentImage,
                      std::atomic<bool> *cancelToken) {
-        seedRng();
+        auto tTotal = Clock::now();
 
+        Logger::info("=== runPipeline ===");
         Logger::info("Working directory: " + std::filesystem::current_path().string());
+        Logger::info("Output base: " + outputPath);
         std::filesystem::create_directories("assets/generated");
 
         constexpr int image_w = 512;
         constexpr int image_h = 512;
         const int num_steps = params.numSteps;
+        const int num_images = params.numImages;
         constexpr int T = 1000;
         constexpr float beta_start = 0.00085f;
         constexpr float beta_end = 0.012f;
 
-        auto ctx = loadModels(image_w / 8, image_h / 8);
-        ctx.guidance_scale = params.guidanceScale;
-
-        Logger::info("Latent size: " + std::to_string(image_w / 8) + "x" + std::to_string(image_h / 8));
-        Logger::info("Expected image size: " + std::to_string(image_w) + "x" + std::to_string(image_h));
+        Logger::info("Steps: " + std::to_string(num_steps)
+                     + "  guidance: " + std::to_string(params.guidanceScale)
+                     + "  images: " + std::to_string(num_images)
+                     + "  latent: " + std::to_string(image_w / 8) + "x" + std::to_string(image_h / 8));
         Logger::info("Prompt: " + prompt);
         Logger::info("Neg:    " + neg_prompt);
 
+        // Load models once for all images in this run.
+        auto ctx = loadModels(image_w / 8, image_h / 8, modelDir);
+        ctx.guidance_scale = params.guidanceScale;
+
+        // Encode text once — same prompt for every image in the batch.
+        auto tEncode = Clock::now();
         ClipTokenizer tokenizer("models/vocab.json", "models/merges.txt");
         ctx.text_embed = encodeText(prompt, tokenizer, ctx, ctx.embed_shape);
         ctx.uncond_embed = encodeText(neg_prompt, tokenizer, ctx, ctx.embed_shape);
+        Logger::info("Text encoding total: " + fmtMs(tEncode));
 
         auto alphas_cumprod = buildAlphasCumprod(T, beta_start, beta_end);
         auto sigmas = buildKarrasSchedule(alphas_cumprod, num_steps);
@@ -587,22 +644,43 @@ namespace {
         });
 
         try {
-            Logger::info("Generating: " + prompt);
-            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx, progressStep, cancelToken);
+            for (int i = 0; i < num_images; ++i) {
+                if (cancelToken && cancelToken->load()) break;
 
-            float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;
-            for (float v: latent) {
-                lat_min = std::min(lat_min, v);
-                lat_max = std::max(lat_max, v);
-                lat_sum += v;
+                if (currentImage) currentImage->store(i + 1);
+                if (progressStep) progressStep->store(0);
+                seedRng();
+
+                // Build per-image output path: insert _N before extension for multi-image runs.
+                std::string outPath = outputPath;
+                if (num_images > 1) {
+                    const auto dot = outputPath.rfind('.');
+                    const std::string idx = std::to_string(i + 1);
+                    outPath = (dot == std::string::npos)
+                        ? outputPath + "_" + idx
+                        : outputPath.substr(0, dot) + "_" + idx + outputPath.substr(dot);
+                }
+
+                Logger::info("--- Image " + std::to_string(i + 1) + "/" + std::to_string(num_images) + " ---");
+                auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx, progressStep, cancelToken);
+
+                if (cancelToken && cancelToken->load()) break;
+
+                float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;
+                for (float v: latent) {
+                    lat_min = std::min(lat_min, v);
+                    lat_max = std::max(lat_max, v);
+                    lat_sum += v;
+                }
+                Logger::info("Latent stats — min: " + std::to_string(lat_min)
+                             + "  max: " + std::to_string(lat_max)
+                             + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.size())));
+
+                auto img = decodeLatent(latent, ctx);
+                cv::imwrite(outPath, img);
+                Logger::info("Image saved: " + outPath);
             }
-            Logger::info("Latent stats — min: " + std::to_string(lat_min)
-                         + "  max: " + std::to_string(lat_max)
-                         + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.size())));
-
-            auto img = decodeLatent(latent, ctx);
-            cv::imwrite(outputPath, img);
-            Logger::info("Image saved: " + outputPath);
+            Logger::info("=== Pipeline complete in " + fmtMs(tTotal) + " ===");
         } catch (const Ort::Exception &) {
             Logger::info("Generation cancelled mid-step (ORT terminated).");
         }
@@ -625,15 +703,17 @@ void PortraitGeneratorAi::generatePortrait(const Race race, Gender gender, const
     ).count();
     const std::string outputPath = "assets/generated/portrait_" + std::to_string(timestamp) + ".png";
 
-    runPipeline(prompt, neg_prompt, outputPath, params, progressStep, nullptr);
+    runPipeline(prompt, neg_prompt, outputPath, params, "models", progressStep, nullptr, nullptr);
 }
 
 void PortraitGeneratorAi::generateFromPrompt(const std::string &prompt,
                                              const std::string &negativePrompt,
                                              const std::string &outputPath,
                                              const GenerationParams &params,
+                                             const std::string &modelDir,
                                              std::atomic<int> *progressStep,
+                                             std::atomic<int> *currentImage,
                                              std::atomic<bool> *cancelToken) {
-    Logger::info("generateFromPrompt");
-    runPipeline(prompt, negativePrompt, outputPath, params, progressStep, cancelToken);
+    Logger::info("generateFromPrompt — model: " + modelDir);
+    runPipeline(prompt, negativePrompt, outputPath, params, modelDir, progressStep, currentImage, cancelToken);
 }

@@ -7,6 +7,7 @@
 struct GenerationParams {
     int   numSteps      = 20;
     float guidanceScale = 8.0f;
+    int   numImages     = 1;
 };
 
 class PortraitGeneratorAi {
@@ -20,6 +21,8 @@ public:
                                    const std::string& negativePrompt,
                                    const std::string& outputPath,
                                    const GenerationParams& params,
+                                   const std::string& modelDir = "models",
                                    std::atomic<int>* progressStep = nullptr,
+                                   std::atomic<int>* currentImage = nullptr,
                                    std::atomic<bool>* cancelToken = nullptr);
 };

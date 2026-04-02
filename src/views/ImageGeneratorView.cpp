@@ -27,6 +27,23 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     drawTextC(win, font, "Image Generator", Col::GoldLt, cx, y + 5.f, 18, true);
     y += 44.f;
 
+    // Model selector
+    {
+        constexpr float arrowW = 24.f;
+        constexpr float arrowH = 22.f;
+        const std::string modelName = availableModels.empty()
+            ? "(no models found)"
+            : availableModels[selectedModelIdx];
+        drawText(win, font, "Model:", Col::Muted, LEFT_X, y + 4.f, 12);
+        const float arrowX = LEFT_X + 60.f;
+        btnModelPrev = {arrowX, y, arrowW, arrowH};
+        drawButton(win, btnModelPrev, "<", Col::Panel2, Col::Muted, false, 12, font);
+        drawText(win, font, modelName, Col::Text, arrowX + arrowW + 8.f, y + 4.f, 12);
+        btnModelNext = {arrowX + arrowW + 8.f + 200.f, y, arrowW, arrowH};
+        drawButton(win, btnModelNext, ">", Col::Panel2, Col::Muted, false, 12, font);
+    }
+    y += 34.f;
+
     // Positive prompt
     drawText(win, font, "Positive prompt:", Col::Muted, LEFT_X, y, 12);
     y += 18.f;
@@ -70,6 +87,13 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
         char cfgBuf[16];
         std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", generationParams.guidanceScale);
         drawSlider(win, cfgSliderTrack, cfgNorm, "CFG Scale", cfgBuf);
+        y += 34.f;
+
+        // Images slider (range 1–10)
+        imagesSliderTrack = {LEFT_X, y + 14.f, sliderWidth, sliderH};
+        const float imagesNorm = (generationParams.numImages - 1.f) / 9.f;
+        drawSlider(win, imagesSliderTrack, imagesNorm,
+                   "Images", std::to_string(generationParams.numImages));
         y += 44.f;
     }
 
@@ -127,7 +151,12 @@ void ImageGeneratorView::drawGeneratingOverlay(sf::RenderWindow& win) {
                                     modalWidth, modalHeight};
     drawRect(win, modalBox, Col::Panel, Col::Border, 1.f);
 
-    drawTextC(win, font, "Generating image...", Col::GoldLt, cx, modalBox.top + 16.f, 15, true);
+    const int imgNum   = generationImageNum.load();
+    const int imgTotal = generationTotalImages.load();
+    const std::string imgLabel = imgTotal > 1
+        ? "Generating image " + std::to_string(imgNum) + " / " + std::to_string(imgTotal) + "..."
+        : "Generating image...";
+    drawTextC(win, font, imgLabel, Col::GoldLt, cx, modalBox.top + 16.f, 15, true);
 
     const int   currentStep = generationStep.load();
     const int   totalSteps  = generationParams.numSteps;

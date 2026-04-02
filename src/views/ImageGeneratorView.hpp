@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include <atomic>
 #include <SFML/Graphics.hpp>
 #include "Screen.hpp"
@@ -21,12 +22,18 @@ public:
     std::atomic<bool> generationDone{false};
     std::atomic<bool> cancelToken{false};
     std::atomic<int>  generationStep{0};
+    std::atomic<int>  generationImageNum{0};   // 1-based current image
+    std::atomic<int>  generationTotalImages{1};
     std::string       lastImagePath;
 
     std::atomic<int> generationId{0};
 
     sf::Texture resultTexture;
     bool        resultLoaded = false;
+
+    // Model selection
+    std::vector<std::string> availableModels;
+    int selectedModelIdx = 0;
 
     // Hit rects (written during render, read by controller)
     sf::FloatRect positiveField;
@@ -35,8 +42,11 @@ public:
     sf::FloatRect btnBack;
     sf::FloatRect btnAdvanced;
     sf::FloatRect btnCancelGenerate;
+    sf::FloatRect btnModelPrev;
+    sf::FloatRect btnModelNext;
     sf::FloatRect stepsSliderTrack;
     sf::FloatRect cfgSliderTrack;
+    sf::FloatRect imagesSliderTrack;
     DraggingSlider draggingSlider = DraggingSlider::None;
 
     void render(sf::RenderWindow& win) override;

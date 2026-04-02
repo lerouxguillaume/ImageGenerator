@@ -5,9 +5,9 @@ import os
 # ----------------------------
 # Paths
 # ----------------------------
-MODEL_NAME = "dreamshaper_8"
+MODEL_NAME = "toonyou_beta6"
 MODEL_FILE = f"./{MODEL_NAME}.safetensors"
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", MODEL_NAME)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----------------------------
@@ -90,20 +90,37 @@ class VAEWrapper(torch.nn.Module):
     def forward(self, latent):
         return self.vae.decode(latent / self.vae.config.scaling_factor).sample
 
-pipe.vae.to(torch.float32)
+pipe.vae.to(torch.float16)
 vae_wrapper = VAEWrapper(pipe.vae).eval()
 
 dummy_latent_vae = torch.randn(1, 4, 64, 64, dtype=torch.float16)
 
+vae_path = f"{OUTPUT_DIR}/vae_decoder.onnx"
 torch.onnx.export(
     vae_wrapper,
     (dummy_latent_vae,),
-    f"{OUTPUT_DIR}/vae_decoder.onnx",
+    vae_path,
     opset_version=18,
     input_names=["latent"],
     output_names=["image"],
-    dynamic_axes={"latent": {0: "batch"}, "image": {0: "batch"}},
+    # No dynamic_axes: fully static graph so constant folding can bake Reshape
+    # shape tensors as constants — required for DirectML which rejects runtime-
+    # computed shapes in Reshape nodes (E_INVALIDARG on node_view_2).
     do_constant_folding=True,
-    keep_initializers_as_inputs=False,  # single file
+    keep_initializers_as_inputs=False,
 )
 print("✅ vae_decoder.onnx exported as single file")
+
+# Optional: further simplify with onnxsim (pip install onnxsim) to eliminate
+# any remaining dynamic shape computations DML can't handle.
+try:
+    import onnx, onnxsim
+    model = onnx.load(vae_path)
+    model_sim, ok = onnxsim.simplify(model)
+    if ok:
+        onnx.save(model_sim, vae_path)
+        print("✅ vae_decoder.onnx simplified with onnxsim")
+    else:
+        print("⚠️  onnxsim simplification check failed, keeping original")
+except ImportError:
+    pass  # onnxsim not installed, skip
