@@ -76,14 +76,14 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
 
         // Steps slider (range 5–30)
         stepsSliderTrack = {LEFT_X, y + 14.f, sliderWidth, sliderH};
-        const float stepsNorm = (generationParams.numSteps - 5.f) / 25.f;
+        const float stepsNorm = (generationParams.numSteps - 5.f) / 45.f;
         drawSlider(win, stepsSliderTrack, stepsNorm,
                    "Steps", std::to_string(generationParams.numSteps));
         y += 34.f;
 
         // CFG Scale slider (range 1.0–15.0)
         cfgSliderTrack = {LEFT_X, y + 14.f, sliderWidth, sliderH};
-        const float cfgNorm = (generationParams.guidanceScale - 1.0f) / 14.0f;
+        const float cfgNorm = (generationParams.guidanceScale - 1.0f) / 19.0f;
         char cfgBuf[16];
         std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", generationParams.guidanceScale);
         drawSlider(win, cfgSliderTrack, cfgNorm, "CFG Scale", cfgBuf);
@@ -91,7 +91,7 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
 
         // Images slider (range 1–10)
         imagesSliderTrack = {LEFT_X, y + 14.f, sliderWidth, sliderH};
-        const float imagesNorm = (generationParams.numImages - 1.f) / 9.f;
+        const float imagesNorm = (generationParams.numImages - 1.f) / 19.f;
         drawSlider(win, imagesSliderTrack, imagesNorm,
                    "Images", std::to_string(generationParams.numImages));
         y += 44.f;

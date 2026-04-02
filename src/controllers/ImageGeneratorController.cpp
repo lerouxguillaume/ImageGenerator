@@ -1,5 +1,6 @@
 #include "ImageGeneratorController.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
+#include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -24,26 +25,39 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.draggingSlider == DraggingSlider::Steps) {
             const sf::FloatRect& track = view.stepsSliderTrack;
             const float t = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            view.generationParams.numSteps = static_cast<int>(std::round(5.f + t * 25.f));
+            view.generationParams.numSteps = static_cast<int>(std::round(5.f + t * 45.f));
         } else if (view.draggingSlider == DraggingSlider::Cfg) {
             const sf::FloatRect& track = view.cfgSliderTrack;
             const float t   = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            const float raw = 1.0f + t * 14.0f;
+            const float raw = 1.0f + t * 19.0f;
             view.generationParams.guidanceScale = std::round(raw * 2.f) / 2.f;
         } else if (view.draggingSlider == DraggingSlider::Images) {
             const sf::FloatRect& track = view.imagesSliderTrack;
             const float t = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            view.generationParams.numImages = static_cast<int>(std::round(1.f + t * 9.f));
+            view.generationParams.numImages = static_cast<int>(std::round(1.f + t * 19.f));
         }
     }
 
     // Text input for active field
     if (!view.generating) {
-        if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::BackSpace) {
-            if (view.positiveActive && !view.positivePrompt.empty())
-                view.positivePrompt.pop_back();
-            else if (view.negativeActive && !view.negativePrompt.empty())
-                view.negativePrompt.pop_back();
+        if (e.type == sf::Event::KeyPressed) {
+            std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
+            const bool anyActive = view.positiveActive || view.negativeActive;
+
+            if (e.key.code == sf::Keyboard::BackSpace && anyActive && !activeField.empty()) {
+                activeField.pop_back();
+            } else if (e.key.control && e.key.code == sf::Keyboard::V && anyActive) {
+                const std::string clip = sf::Clipboard::getString().toAnsiString();
+                for (char c : clip) {
+                    if (static_cast<unsigned char>(c) >= 32 && activeField.size() < 300)
+                        activeField += c;
+                }
+            } else if (e.key.control && e.key.code == sf::Keyboard::C && anyActive) {
+                sf::Clipboard::setString(activeField);
+            } else if (e.key.control && e.key.code == sf::Keyboard::A && anyActive) {
+                sf::Clipboard::setString(activeField);
+                activeField.clear();
+            }
         }
         if (e.type == sf::Event::TextEntered) {
             const auto c = e.text.unicode;
