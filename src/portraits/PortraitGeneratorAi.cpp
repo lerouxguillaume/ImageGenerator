@@ -15,8 +15,10 @@ extern "C" OrtStatus *OrtSessionOptionsAppendExecutionProvider_DML(
 #include <cmath>
 #include <random>
 #include <filesystem>
+#include <fstream>
 #include <chrono>
 #include <thread>
+#include <nlohmann/json.hpp>
 
 #include "../managers/Logger.hpp"
 
@@ -51,6 +53,44 @@ namespace {
         unsigned int seed = rd();
         srand(seed);
         Logger::info("RNG seed: " + std::to_string(seed));
+    }
+
+    // ── Model configuration ───────────────────────────────────────────────────────
+
+    struct ModelConfig {
+        ModelType type       = ModelType::SD15;
+        int       image_w    = 512;
+        int       image_h    = 512;
+        int       T          = 1000;
+        float     beta_start = 0.00085f;
+        float     beta_end   = 0.012f;
+    };
+
+    // Reads model.json from modelDir to detect the model architecture.
+    // Falls back to SD 1.5 defaults if the file is absent or unparseable.
+    ModelConfig loadModelConfig(const std::string& modelDir) {
+        ModelConfig cfg;
+        const std::string jsonPath = modelDir + "/model.json";
+        if (!std::filesystem::exists(jsonPath)) {
+            Logger::info("No model.json found — assuming SD 1.5");
+            return cfg;
+        }
+        try {
+            std::ifstream f(jsonPath);
+            const auto j = nlohmann::json::parse(f);
+            const std::string type = j.value("type", "sd15");
+            if (type == "sdxl") {
+                cfg.type    = ModelType::SDXL;
+                cfg.image_w = 1024;
+                cfg.image_h = 1024;
+            }
+            Logger::info("model.json: type=" + type
+                         + "  resolution=" + std::to_string(cfg.image_w)
+                         + "x" + std::to_string(cfg.image_h));
+        } catch (const std::exception& e) {
+            Logger::info(std::string("model.json parse error, defaulting to SD 1.5: ") + e.what());
+        }
+        return cfg;
     }
 
     // Convert a CHW float32 buffer to an OpenCV BGR Mat.
@@ -93,6 +133,7 @@ namespace {
         Ort::SessionOptions vae_session_opts; // GPU EP (vae) — basic optimization to avoid DML Reshape issues
         Ort::SessionOptions cpu_session_opts; // CPU only (text encoder + fallback)
         Ort::Session text_encoder;
+        Ort::Session text_encoder_2;          // SDXL only: OpenCLIP-G
         Ort::Session unet;
         Ort::Session cpu_unet; // fallback if GPU unet fails
         Ort::Session vae_decoder;
@@ -100,13 +141,25 @@ namespace {
         Ort::AllocatorWithDefaultOptions allocator;
         bool dmlFailed = false;
 
+        ModelType model_type = ModelType::SD15;
+
+        // Text encoder 1 I/O names
         std::string te_input, te_output;
-        std::string unet_in0, unet_in1, unet_in2, unet_out0;
+        // Text encoder 2 I/O names (SDXL only)
+        std::string te2_input, te2_output, te2_pooled;
+        // UNet I/O names (in3/in4 are SDXL extras: text_embeds, time_ids)
+        std::string unet_in0, unet_in1, unet_in2, unet_in3, unet_in4, unet_out0;
         std::string vae_in, vae_out;
 
         std::vector<float> text_embed;
         std::vector<float> uncond_embed;
         std::vector<int64_t> embed_shape; // [1, seq_len, embed_dim]
+
+        // SDXL: pooled text embeddings passed as extra UNet input (1, 1280)
+        std::vector<float> text_embeds_pool;
+        std::vector<float> uncond_embeds_pool;
+        // SDXL: time conditioning [orig_h, orig_w, crop_top, crop_left, target_h, target_w]
+        std::vector<float> time_ids;
 
         std::vector<int64_t> latent_shape; // [1, 4, H, W]
         int latent_size = 0;
@@ -117,6 +170,7 @@ namespace {
         GenerationContext()
             : env(ORT_LOGGING_LEVEL_WARNING, "LocalAI")
               , text_encoder(nullptr)
+              , text_encoder_2(nullptr)
               , unet(nullptr)
               , cpu_unet(nullptr)
               , vae_decoder(nullptr)
@@ -159,12 +213,16 @@ namespace {
 
     // ── Model loading ─────────────────────────────────────────────────────────────
 
-    GenerationContext loadModels(int latent_w, int latent_h, const std::string& modelDir) {
+    GenerationContext loadModels(const ModelConfig& cfg, const std::string& modelDir) {
+        const int latent_w = cfg.image_w / 8;
+        const int latent_h = cfg.image_h / 8;
         auto t0 = Clock::now();
         GenerationContext ctx;
+        ctx.model_type = cfg.type;
         const int numThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
         Logger::info("=== loadModels ===");
         Logger::info("Model dir: " + modelDir);
+        Logger::info("Model type: " + std::string(cfg.type == ModelType::SDXL ? "SDXL" : "SD 1.5"));
         Logger::info("CPU threads: " + std::to_string(numThreads));
         ctx.session_opts.SetIntraOpNumThreads(numThreads);
         ctx.cpu_session_opts.SetIntraOpNumThreads(numThreads);
@@ -198,14 +256,18 @@ namespace {
 #endif
 
         Logger::info("Checking model files...");
-        for (const std::string p: {
-                 modelDir + "/text_encoder.onnx", modelDir + "/unet.onnx", modelDir + "/vae_decoder.onnx",
-                 std::string("models/vocab.json"), std::string("models/merges.txt")
-             }) {
-            if (std::filesystem::exists(p))
-                Logger::info("  [OK] " + p);
-            else
-                Logger::info("  [MISSING] " + p);
+        {
+            std::vector<std::string> required = {
+                modelDir + "/text_encoder.onnx",
+                modelDir + "/unet.onnx",
+                modelDir + "/vae_decoder.onnx",
+                "models/vocab.json",
+                "models/merges.txt",
+            };
+            if (cfg.type == ModelType::SDXL)
+                required.push_back(modelDir + "/text_encoder_2.onnx");
+            for (const auto& p : required)
+                Logger::info((std::filesystem::exists(p) ? "  [OK] " : "  [MISSING] ") + p);
         }
 
         auto loadSession = [&](const char *label, auto path, Ort::SessionOptions &opts) {
@@ -225,25 +287,39 @@ namespace {
         ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         ctx.session_opts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
         ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
+        if (cfg.type == ModelType::SDXL)
+            ctx.text_encoder_2 = loadSession("text_encoder_2", (wModelDir + L"/text_encoder_2.onnx").c_str(), ctx.cpu_session_opts);
 #else
         ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
         ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         ctx.session_opts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
         ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
+        if (cfg.type == ModelType::SDXL)
+            ctx.text_encoder_2 = loadSession("text_encoder_2", (modelDir + "/text_encoder_2.onnx").c_str(), ctx.cpu_session_opts);
 #endif
 
         logModelIO("text_encoder", ctx.text_encoder, ctx.allocator);
         logModelIO("unet", ctx.unet, ctx.allocator);
         logModelIO("vae_decoder", ctx.vae_decoder, ctx.allocator);
+        if (cfg.type == ModelType::SDXL)
+            logModelIO("text_encoder_2", ctx.text_encoder_2, ctx.allocator);
 
-        ctx.te_input = ctx.text_encoder.GetInputNameAllocated(0, ctx.allocator).get();
+        ctx.te_input  = ctx.text_encoder.GetInputNameAllocated(0, ctx.allocator).get();
         ctx.te_output = ctx.text_encoder.GetOutputNameAllocated(0, ctx.allocator).get();
-        ctx.unet_in0 = ctx.unet.GetInputNameAllocated(0, ctx.allocator).get();
-        ctx.unet_in1 = ctx.unet.GetInputNameAllocated(1, ctx.allocator).get();
-        ctx.unet_in2 = ctx.unet.GetInputNameAllocated(2, ctx.allocator).get();
+        ctx.unet_in0  = ctx.unet.GetInputNameAllocated(0, ctx.allocator).get();
+        ctx.unet_in1  = ctx.unet.GetInputNameAllocated(1, ctx.allocator).get();
+        ctx.unet_in2  = ctx.unet.GetInputNameAllocated(2, ctx.allocator).get();
         ctx.unet_out0 = ctx.unet.GetOutputNameAllocated(0, ctx.allocator).get();
-        ctx.vae_in = ctx.vae_decoder.GetInputNameAllocated(0, ctx.allocator).get();
-        ctx.vae_out = ctx.vae_decoder.GetOutputNameAllocated(0, ctx.allocator).get();
+        ctx.vae_in    = ctx.vae_decoder.GetInputNameAllocated(0, ctx.allocator).get();
+        ctx.vae_out   = ctx.vae_decoder.GetOutputNameAllocated(0, ctx.allocator).get();
+
+        if (cfg.type == ModelType::SDXL) {
+            ctx.te2_input  = ctx.text_encoder_2.GetInputNameAllocated(0, ctx.allocator).get();
+            ctx.te2_output = ctx.text_encoder_2.GetOutputNameAllocated(0, ctx.allocator).get();
+            ctx.te2_pooled = ctx.text_encoder_2.GetOutputNameAllocated(1, ctx.allocator).get();
+            ctx.unet_in3   = ctx.unet.GetInputNameAllocated(3, ctx.allocator).get();
+            ctx.unet_in4   = ctx.unet.GetInputNameAllocated(4, ctx.allocator).get();
+        }
 
         ctx.latent_shape = {1, 4, latent_h, latent_w};
         ctx.latent_size = 1 * 4 * latent_h * latent_w;
@@ -292,6 +368,73 @@ namespace {
 
         out_shape = std::vector<int64_t>(shape.begin(), shape.end());
         return embedding;
+    }
+
+    // SDXL dual-encoder text encoding.
+    // Runs text_encoder (CLIP-L → 768) and text_encoder_2 (OpenCLIP-G → 1280),
+    // concatenates their hidden states along the embedding dim → (1, 77, 2048).
+    // out_pooled receives the pooled text embed from encoder 2: (1, 1280).
+    std::vector<float> encodeTextSDXL(const std::string& prompt,
+                                      ClipTokenizer& tokenizer,
+                                      GenerationContext& ctx,
+                                      std::vector<int64_t>& out_shape,
+                                      std::vector<float>& out_pooled) {
+        auto token_ids = tokenizer.encode(prompt);
+        Logger::info("encodeTextSDXL: " + std::to_string(token_ids.size()) + " tokens"
+                     + "  prompt=\"" + prompt.substr(0, 80) + (prompt.size() > 80 ? "..." : "") + "\"");
+
+        std::vector<int64_t> token_shape = {1, 77};
+
+        // ── Encoder 1: CLIP-L → (1, 77, 768) ────────────────────────────────────
+        Ort::Value tokens1 = Ort::Value::CreateTensor<int64_t>(
+            ctx.memory_info, token_ids.data(), token_ids.size(),
+            token_shape.data(), token_shape.size());
+        const char* enc1_in[]  = {ctx.te_input.c_str()};
+        const char* enc1_out[] = {ctx.te_output.c_str()};
+        auto enc1_result = ctx.text_encoder.Run(Ort::RunOptions{nullptr},
+                                                enc1_in, &tokens1, 1, enc1_out, 1);
+        auto shape1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetShape();
+        size_t elem1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetElementCount();
+        const auto* raw1 = enc1_result.front().GetTensorData<Ort::Float16_t>();
+        std::vector<float> emb1(elem1);
+        for (size_t k = 0; k < elem1; ++k) emb1[k] = static_cast<float>(raw1[k]);
+        const int dim1 = static_cast<int>(shape1[2]); // 768
+
+        // ── Encoder 2: OpenCLIP-G → (1, 77, 1280) + pooled (1, 1280) ────────────
+        Ort::Value tokens2 = Ort::Value::CreateTensor<int64_t>(
+            ctx.memory_info, token_ids.data(), token_ids.size(),
+            token_shape.data(), token_shape.size());
+        const char* enc2_in[]  = {ctx.te2_input.c_str()};
+        const char* enc2_out[] = {ctx.te2_output.c_str(), ctx.te2_pooled.c_str()};
+        auto enc2_result = ctx.text_encoder_2.Run(Ort::RunOptions{nullptr},
+                                                  enc2_in, &tokens2, 1, enc2_out, 2);
+        auto shape2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetShape();
+        size_t elem2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetElementCount();
+        const auto* raw2 = enc2_result[0].GetTensorData<Ort::Float16_t>();
+        std::vector<float> emb2(elem2);
+        for (size_t k = 0; k < elem2; ++k) emb2[k] = static_cast<float>(raw2[k]);
+        const int dim2 = static_cast<int>(shape2[2]); // 1280
+
+        size_t pool_elem = enc2_result[1].GetTensorTypeAndShapeInfo().GetElementCount();
+        const auto* raw_pool = enc2_result[1].GetTensorData<Ort::Float16_t>();
+        out_pooled.resize(pool_elem);
+        for (size_t k = 0; k < pool_elem; ++k) out_pooled[k] = static_cast<float>(raw_pool[k]);
+
+        // ── Concatenate along embedding dim → (1, 77, dim1+dim2) ─────────────────
+        const int seq_len   = 77;
+        const int dim_total = dim1 + dim2;
+        std::vector<float> combined(seq_len * dim_total);
+        for (int s = 0; s < seq_len; ++s) {
+            std::copy(emb1.begin() + s * dim1, emb1.begin() + (s + 1) * dim1,
+                      combined.begin() + s * dim_total);
+            std::copy(emb2.begin() + s * dim2, emb2.begin() + (s + 1) * dim2,
+                      combined.begin() + s * dim_total + dim1);
+        }
+        out_shape = {1, seq_len, dim_total};
+        Logger::info("  SDXL embedding shape: [1, " + std::to_string(seq_len)
+                     + ", " + std::to_string(dim_total) + "]"
+                     + "  pooled: [1, " + std::to_string(pool_elem) + "]");
+        return combined;
     }
 
     // ── Noise schedule ────────────────────────────────────────────────────────────
@@ -347,11 +490,15 @@ namespace {
     // ── UNet CFG pass ─────────────────────────────────────────────────────────────
 
     // Run a single batch=1 UNet pass and return the raw eps output.
+    // pooled_embed: SDXL text_embeds input (1, 1280); ignored (empty) for SD 1.5.
     static std::vector<float> runUNetSingle(
         const std::vector<float> &x_t,
         int t,
         const std::vector<float> &embed,
+        const std::vector<float> &pooled_embed,
         GenerationContext &ctx) {
+        const bool isXL = ctx.model_type == ModelType::SDXL;
+
         std::vector<float> latent_fp32 = x_t;
         std::vector<float> embed_fp32 = embed;
         std::vector<float> ts_fp32 = {static_cast<float>(t)};
@@ -360,88 +507,94 @@ namespace {
         std::vector<int64_t> ts_shape = {1};
         std::vector<int64_t> embed_shape = {1, ctx.embed_shape[1], ctx.embed_shape[2]};
 
-        const char *in_names[] = {ctx.unet_in0.c_str(), ctx.unet_in1.c_str(), ctx.unet_in2.c_str()};
-        const char *out_names[] = {ctx.unet_out0.c_str()};
+        // Build dynamic input name list (3 for SD 1.5, 5 for SDXL).
+        std::vector<const char*> in_names = {
+            ctx.unet_in0.c_str(), ctx.unet_in1.c_str(), ctx.unet_in2.c_str()
+        };
+        if (isXL) {
+            in_names.push_back(ctx.unet_in3.c_str()); // text_embeds  (1, 1280)
+            in_names.push_back(ctx.unet_in4.c_str()); // time_ids     (1, 6)
+        }
+        const char* out_names[] = {ctx.unet_out0.c_str()};
 
-        // CPU fallback: unet.onnx expects float16 inputs regardless of EP.
-        // Convert to FP16 and handle FP16 or FP32 output.
-        auto runOnCpu = [&]() {
-            auto latent_fp16_cpu = toFp16(latent_fp32);
-            auto ts_fp16_cpu = toFp16(ts_fp32);
-            auto embed_fp16_cpu = toFp16(embed_fp32);
-            std::vector<Ort::Value> inputs;
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, latent_fp16_cpu.data(),
-                                                                      latent_fp16_cpu.size(), latent_shape.data(),
-                                                                      latent_shape.size()));
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, ts_fp16_cpu.data(),
-                                                                      ts_fp16_cpu.size(), ts_shape.data(),
-                                                                      ts_shape.size()));
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, embed_fp16_cpu.data(),
-                                                                      embed_fp16_cpu.size(), embed_shape.data(),
-                                                                      embed_shape.size()));
-            auto output = ctx.cpu_unet.Run(ctx.run_opts, in_names, inputs.data(), inputs.size(), out_names, 1);
-            auto &out_tensor = output.front();
+        // Helper: add SDXL extra inputs (text_embeds + time_ids) to an input vector.
+        auto appendSDXLInputs = [&](std::vector<Ort::Value>& inputs) {
+            if (!isXL) return;
+            auto pool_fp16 = toFp16(pooled_embed);
+            std::vector<int64_t> pool_shape = {1, static_cast<int64_t>(pooled_embed.size())};
+            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(
+                ctx.memory_info, pool_fp16.data(), pool_fp16.size(),
+                pool_shape.data(), pool_shape.size()));
+
+            auto time_fp16 = toFp16(ctx.time_ids);
+            std::vector<int64_t> time_shape = {1, static_cast<int64_t>(ctx.time_ids.size())};
+            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(
+                ctx.memory_info, time_fp16.data(), time_fp16.size(),
+                time_shape.data(), time_shape.size()));
+        };
+
+        auto decodeOutput = [&](std::vector<Ort::Value>& output) {
+            auto& out_tensor = output.front();
             auto elem_type = out_tensor.GetTensorTypeAndShapeInfo().GetElementType();
             std::vector<float> result(ctx.latent_size);
             if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-                const auto *data = out_tensor.GetTensorData<Ort::Float16_t>();
+                const auto* data = out_tensor.GetTensorData<Ort::Float16_t>();
                 for (int j = 0; j < ctx.latent_size; ++j)
                     result[j] = static_cast<float>(data[j]);
             } else {
-                const auto *data = out_tensor.GetTensorData<float>();
+                const auto* data = out_tensor.GetTensorData<float>();
                 std::copy(data, data + ctx.latent_size, result.begin());
             }
             return result;
         };
 
+        // CPU fallback: unet.onnx expects float16 inputs regardless of EP.
+        auto runOnCpu = [&]() {
+            auto latent_fp16_cpu = toFp16(latent_fp32);
+            auto ts_fp16_cpu     = toFp16(ts_fp32);
+            auto embed_fp16_cpu  = toFp16(embed_fp32);
+            std::vector<Ort::Value> inputs;
+            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                latent_fp16_cpu.data(), latent_fp16_cpu.size(), latent_shape.data(), latent_shape.size()));
+            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                ts_fp16_cpu.data(), ts_fp16_cpu.size(), ts_shape.data(), ts_shape.size()));
+            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                embed_fp16_cpu.data(), embed_fp16_cpu.size(), embed_shape.data(), embed_shape.size()));
+            appendSDXLInputs(inputs);
+            auto output = ctx.cpu_unet.Run(ctx.run_opts, in_names.data(), inputs.data(), inputs.size(), out_names, 1);
+            return decodeOutput(output);
+        };
+
         if (ctx.dmlFailed)
             return runOnCpu();
 
-        // GPU path: the exported ONNX UNet expects float16 for all three inputs.
+        // GPU path: the exported ONNX UNet expects float16 for all inputs.
         // Keep latent/denoising math in float32; convert to FP16 only at the GPU boundary.
         auto latent_fp16 = toFp16(latent_fp32);
-        auto ts_fp16 = toFp16(ts_fp32);
-        auto embed_fp16 = toFp16(embed_fp32);
+        auto ts_fp16     = toFp16(ts_fp32);
+        auto embed_fp16  = toFp16(embed_fp32);
 
         // Sanity check: FP32 values that overflow FP16 become inf and will corrupt DML silently.
         {
             bool hasInf = false;
-            for (auto v: latent_fp16) if (!std::isfinite(static_cast<float>(v))) {
-                hasInf = true;
-                break;
-            }
+            for (auto v: latent_fp16) if (!std::isfinite(static_cast<float>(v))) { hasInf = true; break; }
             if (!hasInf)
-                for (auto v: embed_fp16) if (!std::isfinite(static_cast<float>(v))) {
-                    hasInf = true;
-                    break;
-                }
+                for (auto v: embed_fp16) if (!std::isfinite(static_cast<float>(v))) { hasInf = true; break; }
             if (hasInf) Logger::info("WARNING: FP16 overflow detected before GPU UNet run");
         }
 
         std::vector<Ort::Value> gpu_inputs;
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, latent_fp16.data(),
-                                                                      latent_fp16.size(), latent_shape.data(),
-                                                                      latent_shape.size()));
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, ts_fp16.data(), ts_fp16.size(),
-                                                                      ts_shape.data(), ts_shape.size()));
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info, embed_fp16.data(),
-                                                                      embed_fp16.size(), embed_shape.data(),
-                                                                      embed_shape.size()));
+        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+            latent_fp16.data(), latent_fp16.size(), latent_shape.data(), latent_shape.size()));
+        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+            ts_fp16.data(), ts_fp16.size(), ts_shape.data(), ts_shape.size()));
+        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+            embed_fp16.data(), embed_fp16.size(), embed_shape.data(), embed_shape.size()));
+        appendSDXLInputs(gpu_inputs);
 
         try {
-            auto output = ctx.unet.Run(ctx.run_opts, in_names, gpu_inputs.data(), gpu_inputs.size(), out_names, 1);
-            auto &out_tensor = output.front();
-            auto elem_type = out_tensor.GetTensorTypeAndShapeInfo().GetElementType();
-            std::vector<float> result(ctx.latent_size);
-            if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-                const auto *data = out_tensor.GetTensorData<Ort::Float16_t>();
-                for (int j = 0; j < ctx.latent_size; ++j)
-                    result[j] = static_cast<float>(data[j]);
-            } else {
-                const auto *data = out_tensor.GetTensorData<float>();
-                std::copy(data, data + ctx.latent_size, result.begin());
-            }
-            return result;
+            auto output = ctx.unet.Run(ctx.run_opts, in_names.data(), gpu_inputs.data(), gpu_inputs.size(), out_names, 1);
+            return decodeOutput(output);
         } catch (const Ort::Exception &e) {
             ctx.dmlFailed = true;
             Logger::info(std::string("GPU unet failed, switching to CPU for remaining steps: ") + e.what());
@@ -459,8 +612,8 @@ namespace {
                                   GenerationContext &ctx) {
         int t = sigmaToTimestep(sigma, alphas_cumprod);
 
-        auto u_eps_fp16 = runUNetSingle(x_t, t, ctx.uncond_embed, ctx);
-        auto c_eps_fp16 = runUNetSingle(x_t, t, ctx.text_embed, ctx);
+        auto u_eps_fp16 = runUNetSingle(x_t, t, ctx.uncond_embed, ctx.uncond_embeds_pool, ctx);
+        auto c_eps_fp16 = runUNetSingle(x_t, t, ctx.text_embed,   ctx.text_embeds_pool,   ctx);
 
         std::vector<float> eps(ctx.latent_size);
         for (int j = 0; j < ctx.latent_size; ++j)
@@ -601,33 +754,38 @@ namespace {
         Logger::info("Output base: " + outputPath);
         std::filesystem::create_directories("assets/generated");
 
-        constexpr int image_w = 512;
-        constexpr int image_h = 512;
-        const int num_steps = params.numSteps;
+        const ModelConfig cfg = loadModelConfig(modelDir);
+        const int num_steps  = params.numSteps;
         const int num_images = params.numImages;
-        constexpr int T = 1000;
-        constexpr float beta_start = 0.00085f;
-        constexpr float beta_end = 0.012f;
 
         Logger::info("Steps: " + std::to_string(num_steps)
                      + "  guidance: " + std::to_string(params.guidanceScale)
                      + "  images: " + std::to_string(num_images)
-                     + "  latent: " + std::to_string(image_w / 8) + "x" + std::to_string(image_h / 8));
+                     + "  latent: " + std::to_string(cfg.image_w / 8) + "x" + std::to_string(cfg.image_h / 8));
         Logger::info("Prompt: " + prompt);
         Logger::info("Neg:    " + neg_prompt);
 
         // Load models once for all images in this run.
-        auto ctx = loadModels(image_w / 8, image_h / 8, modelDir);
+        auto ctx = loadModels(cfg, modelDir);
         ctx.guidance_scale = params.guidanceScale;
 
         // Encode text once — same prompt for every image in the batch.
         auto tEncode = Clock::now();
         ClipTokenizer tokenizer("models/vocab.json", "models/merges.txt");
-        ctx.text_embed = encodeText(prompt, tokenizer, ctx, ctx.embed_shape);
-        ctx.uncond_embed = encodeText(neg_prompt, tokenizer, ctx, ctx.embed_shape);
+        if (cfg.type == ModelType::SDXL) {
+            ctx.text_embed   = encodeTextSDXL(prompt,     tokenizer, ctx, ctx.embed_shape, ctx.text_embeds_pool);
+            ctx.uncond_embed = encodeTextSDXL(neg_prompt, tokenizer, ctx, ctx.embed_shape, ctx.uncond_embeds_pool);
+            // SDXL time conditioning: [orig_h, orig_w, crop_top, crop_left, target_h, target_w]
+            const float h = static_cast<float>(cfg.image_h);
+            const float w = static_cast<float>(cfg.image_w);
+            ctx.time_ids = {h, w, 0.0f, 0.0f, h, w};
+        } else {
+            ctx.text_embed   = encodeText(prompt,     tokenizer, ctx, ctx.embed_shape);
+            ctx.uncond_embed = encodeText(neg_prompt, tokenizer, ctx, ctx.embed_shape);
+        }
         Logger::info("Text encoding total: " + fmtMs(tEncode));
 
-        auto alphas_cumprod = buildAlphasCumprod(T, beta_start, beta_end);
+        auto alphas_cumprod = buildAlphasCumprod(cfg.T, cfg.beta_start, cfg.beta_end);
         auto sigmas = buildKarrasSchedule(alphas_cumprod, num_steps);
 
         // Watcher thread: calls SetTerminate() on the shared RunOptions as soon as

@@ -3,6 +3,8 @@
 #include <string>
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
+enum class ModelType : std::uint8_t { SD15, SDXL };
+
 enum class AdventurerClass : std::uint8_t { None, Warrior, Rogue, Mage, Cleric };
 
 enum class Race : std::uint8_t { Human, Elf, Dwarf, Orc };
