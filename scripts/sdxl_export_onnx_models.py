@@ -15,60 +15,93 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ----------------------------
 pipe = StableDiffusionXLPipeline.from_single_file(MODEL_FILE, torch_dtype=torch.float32)
 pipe.enable_attention_slicing()
-pipe.unet.to(torch.float32).eval()
 pipe.text_encoder.to(torch.float32).eval()
 pipe.text_encoder_2.to(torch.float32).eval()
+pipe.unet.to(torch.float32).eval()
 pipe.vae.to(torch.float32).eval()
 
+seq_len = 77
+
 # ----------------------------
-# Helper wrapper for pooled mean
+# 1. Text Encoder (CLIP-L → hidden states [1, 77, 768])
+#    C++ expects: 1 input (input_ids), 1 output (hidden states)
 # ----------------------------
-class CLIPTextEncoderWrapper(torch.nn.Module):
+class CLIPL_Wrapper(torch.nn.Module):
     def __init__(self, text_encoder):
         super().__init__()
         self.text_encoder = text_encoder
 
     def forward(self, input_ids):
         out = self.text_encoder(input_ids, output_hidden_states=True)
-        pooled = out.last_hidden_state.mean(dim=1)
-        return pooled
+        # SDXL uses penultimate hidden state ([-2]), shape [batch, 77, 768]
+        return out.hidden_states[-2]
 
-dummy_input_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
+clip_l = CLIPL_Wrapper(pipe.text_encoder).cpu().eval()
+dummy_input_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, seq_len), dtype=torch.int64)
 
-# ----------------------------
-# Export both text encoders
-# ----------------------------
-for idx, encoder in enumerate([pipe.text_encoder, pipe.text_encoder_2], start=1):
-    clip_encoder = CLIPTextEncoderWrapper(encoder).cpu().eval()
-    path = os.path.join(OUTPUT_DIR, f"text_encoder{'' if idx==1 else '_2'}.onnx")
-    torch.onnx.export(
-        clip_encoder,
-        dummy_input_ids,
-        path,
-        opset_version=18,
-        input_names=["input_ids"],
-        output_names=["text_embeds"],
-        dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
-        do_constant_folding=True,
-        keep_initializers_as_inputs=False,
-    )
-    print(f"✅ {os.path.basename(path)} exported successfully")
+torch.onnx.export(
+    clip_l,
+    (dummy_input_ids,),
+    os.path.join(OUTPUT_DIR, "text_encoder.onnx"),
+    opset_version=18,
+    input_names=["input_ids"],
+    output_names=["hidden_states"],
+    dynamic_axes={
+        "input_ids": {0: "batch"},
+        "hidden_states": {0: "batch"},
+    },
+    do_constant_folding=True,
+    keep_initializers_as_inputs=False,
+)
+print("✅ text_encoder.onnx (CLIP-L) exported successfully")
 
 # ----------------------------
-# 2. UNet
+# 2. Text Encoder 2 (OpenCLIP-G → hidden states [1, 77, 1280] + pooled [1, 1280])
+#    C++ expects: 1 input (input_ids), 2 outputs (hidden states, pooled)
+# ----------------------------
+class OpenCLIPG_Wrapper(torch.nn.Module):
+    def __init__(self, text_encoder):
+        super().__init__()
+        self.text_encoder = text_encoder
+
+    def forward(self, input_ids):
+        out = self.text_encoder(input_ids, output_hidden_states=True)
+        # SDXL uses penultimate hidden state ([-2]), shape [batch, 77, 1280]
+        hidden = out.hidden_states[-2]
+        # Pooled text embeds from the projection head, shape [batch, 1280]
+        pooled = out.text_embeds
+        return hidden, pooled
+
+clip_g = OpenCLIPG_Wrapper(pipe.text_encoder_2).cpu().eval()
+dummy_input_ids_2 = torch.randint(0, pipe.tokenizer_2.vocab_size, (1, seq_len), dtype=torch.int64)
+
+torch.onnx.export(
+    clip_g,
+    (dummy_input_ids_2,),
+    os.path.join(OUTPUT_DIR, "text_encoder_2.onnx"),
+    opset_version=18,
+    input_names=["input_ids"],
+    output_names=["hidden_states", "text_embeds"],
+    dynamic_axes={
+        "input_ids": {0: "batch"},
+        "hidden_states": {0: "batch"},
+        "text_embeds": {0: "batch"},
+    },
+    do_constant_folding=True,
+    keep_initializers_as_inputs=False,
+)
+print("✅ text_encoder_2.onnx (OpenCLIP-G) exported successfully")
+
+# ----------------------------
+# 3. UNet
 # ----------------------------
 class UNetONNXWrapper(torch.nn.Module):
     def __init__(self, unet):
         super().__init__()
         self.unet = unet
 
-    def forward(self, sample, timestep, encoder_hidden_states, text_embeds_main, text_embeds_2, time_ids):
-        # Pass both embeddings in added_cond_kwargs if needed
-        added_cond_kwargs = {
-            "text_embeds": text_embeds_main,  # main prompt
-            "text_embeds_2": text_embeds_2,   # secondary/context
-            "time_ids": time_ids
-        }
+    def forward(self, sample, timestep, encoder_hidden_states, text_embeds, time_ids):
+        added_cond_kwargs = {"text_embeds": text_embeds, "time_ids": time_ids}
         out = self.unet(
             sample,
             timestep,
@@ -79,13 +112,11 @@ class UNetONNXWrapper(torch.nn.Module):
 
 unet_wrapper = UNetONNXWrapper(pipe.unet).cpu().eval()
 
-# Dummy inputs
 batch_size = 1
-seq_len = 77
 latent_h, latent_w = 128, 128  # SDXL latent for 1024px
-hidden_size = pipe.unet.config.cross_attention_dim
+hidden_size = pipe.unet.config.cross_attention_dim  # 2048
 pooled_text_dim = 1280
-num_time_ids = 6
+num_time_ids = 6  # [orig_h, orig_w, crop_top, crop_left, target_h, target_w]
 
 latent = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float32)
 timestep = torch.tensor([1], dtype=torch.float32)
@@ -111,10 +142,10 @@ torch.onnx.export(
     do_constant_folding=True,
     keep_initializers_as_inputs=False,
 )
-print("✅ UNet exported successfully")
+print("✅ unet.onnx exported successfully")
 
 # ----------------------------
-# 3. VAE Decoder
+# 4. VAE Decoder
 # ----------------------------
 class VAEWrapper(torch.nn.Module):
     def __init__(self, vae):
@@ -138,7 +169,7 @@ torch.onnx.export(
     do_constant_folding=True,
     keep_initializers_as_inputs=False,
 )
-print("✅ VAE decoder exported successfully")
+print("✅ vae_decoder.onnx exported successfully")
 
 # Optional: simplify VAE ONNX
 try:

@@ -4,12 +4,14 @@ void ImageGeneratorPresenter::activatePositive(ImageGeneratorView& view) const
 {
     view.positiveActive = true;
     view.negativeActive = false;
+    view.positiveCursor = static_cast<int>(view.positivePrompt.size());
 }
 
 void ImageGeneratorPresenter::activateNegative(ImageGeneratorView& view) const
 {
     view.negativeActive = true;
     view.positiveActive = false;
+    view.negativeCursor = static_cast<int>(view.negativePrompt.size());
 }
 
 void ImageGeneratorPresenter::toggleAdvanced(ImageGeneratorView& view) const

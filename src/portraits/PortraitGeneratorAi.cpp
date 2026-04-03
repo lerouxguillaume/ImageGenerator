@@ -140,6 +140,7 @@ namespace {
         Ort::MemoryInfo memory_info;
         Ort::AllocatorWithDefaultOptions allocator;
         bool dmlFailed = false;
+        bool unetExpectsFp32 = false; // queried from the model at load time
 
         ModelType model_type = ModelType::SD15;
 
@@ -229,8 +230,11 @@ namespace {
 
 #if defined(USE_DML)
         try {
-            // DML requires these two flags — without them it raises E_INVALIDARG on
-            // reshape nodes because it cannot handle dynamic memory reuse patterns.
+            // DML requires these flags to avoid E_INVALIDARG on reshape nodes.
+            // ORT_ENABLE_BASIC prevents graph-level rewrites that produce Reshape
+            // patterns DML can't execute; DisableMemPattern + ORT_SEQUENTIAL stop
+            // dynamic memory reuse patterns that also trigger the same error.
+            ctx.session_opts.SetGraphOptimizationLevel(ORT_ENABLE_BASIC);
             ctx.session_opts.DisableMemPattern();
             ctx.session_opts.SetExecutionMode(ORT_SEQUENTIAL);
             Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(ctx.session_opts, 0));
@@ -283,15 +287,27 @@ namespace {
         // simple char-by-char widening is sufficient.
         auto toWide = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
         const std::wstring wModelDir = toWide(modelDir);
+        // DML cannot execute SDXL UNet's Reshape nodes (node_view_1) at runtime.
+        // CUDA handles them fine, so only force CPU for SDXL on DML.
+#ifdef USE_DML
+        auto& unetOpts = (cfg.type == ModelType::SDXL) ? ctx.cpu_session_opts : ctx.session_opts;
+#else
+        auto& unetOpts = ctx.session_opts;
+#endif
         ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
-        ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         ctx.session_opts);
+        ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         unetOpts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
         ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
         if (cfg.type == ModelType::SDXL)
             ctx.text_encoder_2 = loadSession("text_encoder_2", (wModelDir + L"/text_encoder_2.onnx").c_str(), ctx.cpu_session_opts);
 #else
+#ifdef USE_DML
+        auto& unetOpts = (cfg.type == ModelType::SDXL) ? ctx.cpu_session_opts : ctx.session_opts;
+#else
+        auto& unetOpts = ctx.session_opts;
+#endif
         ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
-        ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         ctx.session_opts);
+        ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         unetOpts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
         ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
         if (cfg.type == ModelType::SDXL)
@@ -320,6 +336,11 @@ namespace {
             ctx.unet_in3   = ctx.unet.GetInputNameAllocated(3, ctx.allocator).get();
             ctx.unet_in4   = ctx.unet.GetInputNameAllocated(4, ctx.allocator).get();
         }
+
+        // Detect whether the exported UNet expects float32 or float16 inputs.
+        ctx.unetExpectsFp32 =
+            (ctx.unet.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetElementType()
+             == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
 
         ctx.latent_shape = {1, 4, latent_h, latent_w};
         ctx.latent_size = 1 * 4 * latent_h * latent_w;
@@ -395,9 +416,17 @@ namespace {
                                                 enc1_in, &tokens1, 1, enc1_out, 1);
         auto shape1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetShape();
         size_t elem1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetElementCount();
-        const auto* raw1 = enc1_result.front().GetTensorData<Ort::Float16_t>();
         std::vector<float> emb1(elem1);
-        for (size_t k = 0; k < elem1; ++k) emb1[k] = static_cast<float>(raw1[k]);
+        {
+            auto et = enc1_result.front().GetTensorTypeAndShapeInfo().GetElementType();
+            if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+                const auto* p = enc1_result.front().GetTensorData<Ort::Float16_t>();
+                for (size_t k = 0; k < elem1; ++k) emb1[k] = static_cast<float>(p[k]);
+            } else {
+                const auto* p = enc1_result.front().GetTensorData<float>();
+                std::copy(p, p + elem1, emb1.begin());
+            }
+        }
         const int dim1 = static_cast<int>(shape1[2]); // 768
 
         // ── Encoder 2: OpenCLIP-G → (1, 77, 1280) + pooled (1, 1280) ────────────
@@ -410,15 +439,31 @@ namespace {
                                                   enc2_in, &tokens2, 1, enc2_out, 2);
         auto shape2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetShape();
         size_t elem2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetElementCount();
-        const auto* raw2 = enc2_result[0].GetTensorData<Ort::Float16_t>();
         std::vector<float> emb2(elem2);
-        for (size_t k = 0; k < elem2; ++k) emb2[k] = static_cast<float>(raw2[k]);
+        {
+            auto et = enc2_result[0].GetTensorTypeAndShapeInfo().GetElementType();
+            if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+                const auto* p = enc2_result[0].GetTensorData<Ort::Float16_t>();
+                for (size_t k = 0; k < elem2; ++k) emb2[k] = static_cast<float>(p[k]);
+            } else {
+                const auto* p = enc2_result[0].GetTensorData<float>();
+                std::copy(p, p + elem2, emb2.begin());
+            }
+        }
         const int dim2 = static_cast<int>(shape2[2]); // 1280
 
         size_t pool_elem = enc2_result[1].GetTensorTypeAndShapeInfo().GetElementCount();
-        const auto* raw_pool = enc2_result[1].GetTensorData<Ort::Float16_t>();
         out_pooled.resize(pool_elem);
-        for (size_t k = 0; k < pool_elem; ++k) out_pooled[k] = static_cast<float>(raw_pool[k]);
+        {
+            auto et = enc2_result[1].GetTensorTypeAndShapeInfo().GetElementType();
+            if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+                const auto* p = enc2_result[1].GetTensorData<Ort::Float16_t>();
+                for (size_t k = 0; k < pool_elem; ++k) out_pooled[k] = static_cast<float>(p[k]);
+            } else {
+                const auto* p = enc2_result[1].GetTensorData<float>();
+                std::copy(p, p + pool_elem, out_pooled.begin());
+            }
+        }
 
         // ── Concatenate along embedding dim → (1, 77, dim1+dim2) ─────────────────
         const int seq_len   = 77;
@@ -517,20 +562,52 @@ namespace {
         }
         const char* out_names[] = {ctx.unet_out0.c_str()};
 
-        // Helper: add SDXL extra inputs (text_embeds + time_ids) to an input vector.
+        const bool fp32 = ctx.unetExpectsFp32;
+
+        // FP16 copies — populated only when the model expects FP16.
+        std::vector<Ort::Float16_t> latent_fp16, ts_fp16, embed_fp16;
+        if (!fp32) {
+            latent_fp16 = toFp16(latent_fp32);
+            ts_fp16     = toFp16(ts_fp32);
+            embed_fp16  = toFp16(embed_fp32);
+        }
+
+        // Helper: push a tensor for one of the core inputs (FP32 or FP16 depending on model).
+        auto pushMain = [&](std::vector<Ort::Value>& v,
+                            std::vector<float>& f32, std::vector<Ort::Float16_t>& f16,
+                            std::vector<int64_t>& shape) {
+            if (fp32)
+                v.push_back(Ort::Value::CreateTensor<float>(ctx.memory_info,
+                    f32.data(), f32.size(), shape.data(), shape.size()));
+            else
+                v.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                    f16.data(), f16.size(), shape.data(), shape.size()));
+        };
+
+        // Helper: append SDXL extra inputs (text_embeds + time_ids).
+        // For FP32 models the source vectors outlive Run(); for FP16 we convert inline.
+        std::vector<Ort::Float16_t> pool_fp16_buf, time_fp16_buf; // kept alive until Run()
         auto appendSDXLInputs = [&](std::vector<Ort::Value>& inputs) {
             if (!isXL) return;
-            auto pool_fp16 = toFp16(pooled_embed);
             std::vector<int64_t> pool_shape = {1, static_cast<int64_t>(pooled_embed.size())};
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(
-                ctx.memory_info, pool_fp16.data(), pool_fp16.size(),
-                pool_shape.data(), pool_shape.size()));
-
-            auto time_fp16 = toFp16(ctx.time_ids);
             std::vector<int64_t> time_shape = {1, static_cast<int64_t>(ctx.time_ids.size())};
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(
-                ctx.memory_info, time_fp16.data(), time_fp16.size(),
-                time_shape.data(), time_shape.size()));
+            if (fp32) {
+                inputs.push_back(Ort::Value::CreateTensor<float>(ctx.memory_info,
+                    const_cast<float*>(pooled_embed.data()), pooled_embed.size(),
+                    pool_shape.data(), pool_shape.size()));
+                inputs.push_back(Ort::Value::CreateTensor<float>(ctx.memory_info,
+                    ctx.time_ids.data(), ctx.time_ids.size(),
+                    time_shape.data(), time_shape.size()));
+            } else {
+                pool_fp16_buf = toFp16(pooled_embed);
+                inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                    pool_fp16_buf.data(), pool_fp16_buf.size(),
+                    pool_shape.data(), pool_shape.size()));
+                time_fp16_buf = toFp16(ctx.time_ids);
+                inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
+                    time_fp16_buf.data(), time_fp16_buf.size(),
+                    time_shape.data(), time_shape.size()));
+            }
         };
 
         auto decodeOutput = [&](std::vector<Ort::Value>& output) {
@@ -548,18 +625,11 @@ namespace {
             return result;
         };
 
-        // CPU fallback: unet.onnx expects float16 inputs regardless of EP.
         auto runOnCpu = [&]() {
-            auto latent_fp16_cpu = toFp16(latent_fp32);
-            auto ts_fp16_cpu     = toFp16(ts_fp32);
-            auto embed_fp16_cpu  = toFp16(embed_fp32);
             std::vector<Ort::Value> inputs;
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-                latent_fp16_cpu.data(), latent_fp16_cpu.size(), latent_shape.data(), latent_shape.size()));
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-                ts_fp16_cpu.data(), ts_fp16_cpu.size(), ts_shape.data(), ts_shape.size()));
-            inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-                embed_fp16_cpu.data(), embed_fp16_cpu.size(), embed_shape.data(), embed_shape.size()));
+            pushMain(inputs, latent_fp32, latent_fp16, latent_shape);
+            pushMain(inputs, ts_fp32,     ts_fp16,     ts_shape);
+            pushMain(inputs, embed_fp32,  embed_fp16,  embed_shape);
             appendSDXLInputs(inputs);
             auto output = ctx.cpu_unet.Run(ctx.run_opts, in_names.data(), inputs.data(), inputs.size(), out_names, 1);
             return decodeOutput(output);
@@ -568,28 +638,10 @@ namespace {
         if (ctx.dmlFailed)
             return runOnCpu();
 
-        // GPU path: the exported ONNX UNet expects float16 for all inputs.
-        // Keep latent/denoising math in float32; convert to FP16 only at the GPU boundary.
-        auto latent_fp16 = toFp16(latent_fp32);
-        auto ts_fp16     = toFp16(ts_fp32);
-        auto embed_fp16  = toFp16(embed_fp32);
-
-        // Sanity check: FP32 values that overflow FP16 become inf and will corrupt DML silently.
-        {
-            bool hasInf = false;
-            for (auto v: latent_fp16) if (!std::isfinite(static_cast<float>(v))) { hasInf = true; break; }
-            if (!hasInf)
-                for (auto v: embed_fp16) if (!std::isfinite(static_cast<float>(v))) { hasInf = true; break; }
-            if (hasInf) Logger::info("WARNING: FP16 overflow detected before GPU UNet run");
-        }
-
         std::vector<Ort::Value> gpu_inputs;
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-            latent_fp16.data(), latent_fp16.size(), latent_shape.data(), latent_shape.size()));
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-            ts_fp16.data(), ts_fp16.size(), ts_shape.data(), ts_shape.size()));
-        gpu_inputs.push_back(Ort::Value::CreateTensor<Ort::Float16_t>(ctx.memory_info,
-            embed_fp16.data(), embed_fp16.size(), embed_shape.data(), embed_shape.size()));
+        pushMain(gpu_inputs, latent_fp32, latent_fp16, latent_shape);
+        pushMain(gpu_inputs, ts_fp32,     ts_fp16,     ts_shape);
+        pushMain(gpu_inputs, embed_fp32,  embed_fp16,  embed_shape);
         appendSDXLInputs(gpu_inputs);
 
         try {

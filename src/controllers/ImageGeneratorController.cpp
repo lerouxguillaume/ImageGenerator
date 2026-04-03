@@ -38,34 +38,105 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         }
     }
 
+    // Mouse-wheel scrolling on text areas
+    if (e.type == sf::Event::MouseWheelScrolled && !view.generating) {
+        const sf::Vector2f pos = win.mapPixelToCoords({e.mouseWheelScroll.x, e.mouseWheelScroll.y});
+        const int delta = (e.mouseWheelScroll.delta > 0) ? -1 : 1;
+        if (view.positiveField.contains(pos))
+            view.positiveScrollLine = std::max(0, view.positiveScrollLine + delta);
+        else if (view.negativeField.contains(pos))
+            view.negativeScrollLine = std::max(0, view.negativeScrollLine + delta);
+    }
+
     // Text input for active field
     if (!view.generating) {
         if (e.type == sf::Event::KeyPressed) {
             std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
+            int& cursor      = view.positiveActive ? view.positiveCursor      : view.negativeCursor;
+            bool& allSel     = view.positiveActive ? view.positiveAllSelected : view.negativeAllSelected;
             const bool anyActive = view.positiveActive || view.negativeActive;
 
-            if (e.key.code == sf::Keyboard::BackSpace && anyActive && !activeField.empty()) {
-                activeField.pop_back();
-            } else if (e.key.control && e.key.code == sf::Keyboard::V && anyActive) {
+            // Helper: find cursor's visual line index
+            auto findLine = [](const std::vector<ImageGeneratorView::VisualLine>& lines, int cur) {
+                int l = static_cast<int>(lines.size()) - 1;
+                for (int i = 0; i + 1 < static_cast<int>(lines.size()); ++i)
+                    if (cur < lines[i + 1].start) { l = i; break; }
+                return l;
+            };
+
+            if (!anyActive) {
+                // nothing
+            } else if (e.key.code == sf::Keyboard::Left) {
+                allSel = false;
+                if (cursor > 0) --cursor;
+            } else if (e.key.code == sf::Keyboard::Right) {
+                allSel = false;
+                if (cursor < static_cast<int>(activeField.size())) ++cursor;
+            } else if (e.key.code == sf::Keyboard::Up) {
+                allSel = false;
+                auto& lines = view.positiveActive ? view.positiveLines : view.negativeLines;
+                if (!lines.empty()) {
+                    const int l = findLine(lines, cursor);
+                    if (l > 0) {
+                        const int col     = cursor - lines[l].start;
+                        const int prevLen = lines[l - 1].end - lines[l - 1].start;
+                        cursor = lines[l - 1].start + std::min(col, prevLen);
+                    }
+                }
+            } else if (e.key.code == sf::Keyboard::Down) {
+                allSel = false;
+                auto& lines = view.positiveActive ? view.positiveLines : view.negativeLines;
+                if (!lines.empty()) {
+                    const int l = findLine(lines, cursor);
+                    if (l + 1 < static_cast<int>(lines.size())) {
+                        const int col     = cursor - lines[l].start;
+                        const int nextLen = lines[l + 1].end - lines[l + 1].start;
+                        cursor = lines[l + 1].start + std::min(col, nextLen);
+                    }
+                }
+            } else if (e.key.code == sf::Keyboard::Home) {
+                allSel = false; cursor = 0;
+            } else if (e.key.code == sf::Keyboard::End) {
+                allSel = false; cursor = static_cast<int>(activeField.size());
+            } else if (e.key.code == sf::Keyboard::BackSpace) {
+                if (allSel) {
+                    activeField.clear(); cursor = 0; allSel = false;
+                } else if (!activeField.empty() && cursor > 0) {
+                    --cursor;
+                    activeField.erase(static_cast<size_t>(cursor), 1);
+                }
+            } else if (e.key.code == sf::Keyboard::Delete) {
+                if (allSel) {
+                    activeField.clear(); cursor = 0; allSel = false;
+                } else if (cursor < static_cast<int>(activeField.size())) {
+                    activeField.erase(static_cast<size_t>(cursor), 1);
+                }
+            } else if (e.key.control && e.key.code == sf::Keyboard::V) {
+                if (allSel) { activeField.clear(); cursor = 0; allSel = false; }
                 const std::string clip = sf::Clipboard::getString().toAnsiString();
                 for (char c : clip) {
-                    if (static_cast<unsigned char>(c) >= 32 && activeField.size() < 300)
-                        activeField += c;
+                    if (static_cast<unsigned char>(c) >= 32 && activeField.size() < 2000) {
+                        activeField.insert(static_cast<size_t>(cursor), 1, c);
+                        ++cursor;
+                    }
                 }
-            } else if (e.key.control && e.key.code == sf::Keyboard::C && anyActive) {
+            } else if (e.key.control && e.key.code == sf::Keyboard::C) {
                 sf::Clipboard::setString(activeField);
-            } else if (e.key.control && e.key.code == sf::Keyboard::A && anyActive) {
-                sf::Clipboard::setString(activeField);
-                activeField.clear();
+            } else if (e.key.control && e.key.code == sf::Keyboard::A) {
+                allSel = true;
             }
         }
         if (e.type == sf::Event::TextEntered) {
             const auto c = e.text.unicode;
             if (c >= 32 && c < 127) {
-                if (view.positiveActive && view.positivePrompt.size() < 300)
-                    view.positivePrompt += static_cast<char>(c);
-                else if (view.negativeActive && view.negativePrompt.size() < 300)
-                    view.negativePrompt += static_cast<char>(c);
+                std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
+                int& cursor  = view.positiveActive ? view.positiveCursor      : view.negativeCursor;
+                bool& allSel = view.positiveActive ? view.positiveAllSelected : view.negativeAllSelected;
+                if ((view.positiveActive || view.negativeActive) && activeField.size() < 2000) {
+                    if (allSel) { activeField.clear(); cursor = 0; allSel = false; }
+                    activeField.insert(static_cast<size_t>(cursor), 1, static_cast<char>(c));
+                    ++cursor;
+                }
             }
         }
     }
