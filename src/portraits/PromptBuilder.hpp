@@ -4,11 +4,14 @@
 #include <cmath>
 #include <cstdio>
 
+// A single prompt term with an optional A1111-style attention weight.
+// weight == 1.0 → plain text; weight != 1.0 → serialised as "(text:1.20)".
 struct PromptToken {
     std::string text;
     float weight = 1.0f;
 };
 
+// Serialise one token: omits the weight wrapper when weight is effectively 1.0.
 inline std::string formatToken(const PromptToken& token) {
     if (std::abs(token.weight - 1.0f) < 0.01f)
         return token.text;
@@ -17,12 +20,19 @@ inline std::string formatToken(const PromptToken& token) {
     return "(" + token.text + ":" + std::string(buf) + ")";
 }
 
+// Fluent builder for A1111-compatible weighted prompts.
+// Usage:
+//   PromptBuilder pb;
+//   pb.add("masterpiece", 1.3f).add("portrait");
+//   std::string prompt = pb.build(); // "masterpiece:1.30), portrait"
 class PromptBuilder {
 public:
+    // Append a term. weight defaults to 1.0 (no wrapper).
     void add(const std::string& text, float weight = 1.0f) {
         tokens.push_back({text, weight});
     }
 
+    // Serialise all tokens as a comma-separated string ready to pass to CLIP.
     std::string build() const {
         std::string result;
         for (size_t i = 0; i < tokens.size(); ++i) {
@@ -36,6 +46,9 @@ private:
     std::vector<PromptToken> tokens;
 };
 
+// Build a positive portrait prompt for a given race/gender.
+// Token order is intentional: gender anchors come first so the model commits to
+// them before reading composition and quality tags.
 inline PromptBuilder buildCharacterPrompt(const Race& race, const Gender gender) {
     PromptBuilder pb;
 
@@ -77,6 +90,8 @@ inline PromptBuilder buildCharacterPrompt(const Race& race, const Gender gender)
     return pb;
 }
 
+// Build the negative prompt to suppress opposite-gender outputs, quality issues,
+// and unwanted full-body compositions.
 inline PromptBuilder buildNegativePrompt(const Race& race, const Gender gender) {
     PromptBuilder neg;
 

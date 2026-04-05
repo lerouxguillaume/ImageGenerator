@@ -1,5 +1,8 @@
+import gc
 import os
+import json
 import torch
+import onnx
 from diffusers import StableDiffusionXLPipeline
 
 # ----------------------------
@@ -11,7 +14,12 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----------------------------
-# Load SDXL
+# Load SDXL (float32 for stable torch.onnx.export)
+# Text encoders stay float32 for accuracy.
+# UNet and VAE are exported as float32 then post-converted to float16 via
+# onnxconverter_common, which handles mixed-precision constants correctly —
+# torch.onnx.export with fp16 inputs leaves some internal constants as float32
+# (e.g. time-embedding scalars, GroupNorm eps), causing Concat type errors in ORT.
 # ----------------------------
 pipe = StableDiffusionXLPipeline.from_single_file(MODEL_FILE, torch_dtype=torch.float32)
 pipe.enable_attention_slicing()
@@ -21,6 +29,24 @@ pipe.unet.to(torch.float32).eval()
 pipe.vae.to(torch.float32).eval()
 
 seq_len = 77
+
+
+def to_fp16_onnx(path: str) -> None:
+    """Post-convert an ONNX model from float32 to float16 in-place.
+
+    Uses onnxconverter_common which handles mixed-precision graphs correctly.
+    Falls back silently if the package is not installed (model stays float32).
+    """
+    try:
+        from onnxconverter_common import float16
+        model = onnx.load(path)
+        model_fp16 = float16.convert_float_to_float16(model, keep_io_types=False)
+        onnx.save(model_fp16, path)
+        print(f"  → converted to float16")
+    except ImportError:
+        print("  ⚠ onnxconverter_common not installed — model stays float32")
+        print("    Install with: pip install onnxconverter-common")
+
 
 # ----------------------------
 # 1. Text Encoder (CLIP-L → hidden states [1, 77, 768])
@@ -93,7 +119,7 @@ torch.onnx.export(
 print("✅ text_encoder_2.onnx (OpenCLIP-G) exported successfully")
 
 # ----------------------------
-# 3. UNet
+# 3. UNet (exported as float32, post-converted to float16)
 # ----------------------------
 class UNetONNXWrapper(torch.nn.Module):
     def __init__(self, unet):
@@ -124,10 +150,11 @@ encoder_hidden_states = torch.randn(batch_size, seq_len, hidden_size, dtype=torc
 text_embeds = torch.zeros(batch_size, pooled_text_dim, dtype=torch.float32)
 time_ids = torch.zeros(batch_size, num_time_ids, dtype=torch.float32)
 
+unet_path = os.path.join(OUTPUT_DIR, "unet.onnx")
 torch.onnx.export(
     unet_wrapper,
     (latent, timestep, encoder_hidden_states, text_embeds, time_ids),
-    os.path.join(OUTPUT_DIR, "unet.onnx"),
+    unet_path,
     opset_version=18,
     input_names=["latent", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"],
     output_names=["latent_out"],
@@ -142,10 +169,10 @@ torch.onnx.export(
     do_constant_folding=True,
     keep_initializers_as_inputs=False,
 )
-print("✅ unet.onnx exported successfully")
+print("✅ unet.onnx exported successfully (float32)")
 
 # ----------------------------
-# 4. VAE Decoder
+# 4. VAE Decoder (exported as float32, post-converted to float16)
 # ----------------------------
 class VAEWrapper(torch.nn.Module):
     def __init__(self, vae):
@@ -169,15 +196,39 @@ torch.onnx.export(
     do_constant_folding=True,
     keep_initializers_as_inputs=False,
 )
-print("✅ vae_decoder.onnx exported successfully")
+print("✅ vae_decoder.onnx exported successfully (float32)")
 
-# Optional: simplify VAE ONNX
+# ----------------------------
+# Free PyTorch models before fp16 conversion to avoid OOM.
+# The SDXL UNet alone is ~5 GB as fp32 ONNX; loading it while
+# the pipe is still alive pushes RAM over the OOM killer threshold.
+# ----------------------------
+del pipe, unet_wrapper, vae_wrapper, clip_l, clip_g
+gc.collect()
+print("PyTorch models freed — starting fp16 conversion")
+
+to_fp16_onnx(unet_path)
+print("✅ unet.onnx ready")
+
+to_fp16_onnx(vae_path)
+
+# Optional: simplify VAE ONNX (run after fp16 conversion)
 try:
-    import onnx, onnxsim
+    import onnxsim
     model = onnx.load(vae_path)
     model_sim, ok = onnxsim.simplify(model)
     if ok:
         onnx.save(model_sim, vae_path)
         print("✅ vae_decoder.onnx simplified with onnxsim")
+    else:
+        print("⚠  onnxsim simplification check failed, keeping original")
 except ImportError:
     pass
+print("✅ vae_decoder.onnx ready")
+
+# ----------------------------
+# 5. model.json — tells the C++ runtime this is an SDXL model
+# ----------------------------
+with open(os.path.join(OUTPUT_DIR, "model.json"), "w") as f:
+    json.dump({"type": "sdxl"}, f)
+print("✅ model.json written")

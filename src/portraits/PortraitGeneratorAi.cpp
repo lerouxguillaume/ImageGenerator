@@ -141,6 +141,7 @@ namespace {
         Ort::AllocatorWithDefaultOptions allocator;
         bool dmlFailed = false;
         bool unetExpectsFp32 = false; // queried from the model at load time
+        bool vaeExpectsFp32  = false; // queried from the model at load time
 
         ModelType model_type = ModelType::SD15;
 
@@ -243,7 +244,7 @@ namespace {
             // VAE attention) at both load and inference time regardless of optimization
             // level or dtype. The VAE runs once per image (not per step) so the CPU
             // overhead is small relative to the UNet's 20 GPU steps.
-            Logger::info("EP: DirectML (unet=GPU, vae=CPU, text_encoder=CPU)");
+            Logger::info("EP: DirectML (unet=GPU, vae=CPU, text_encoders=CPU)");
         } catch (const Ort::Exception &e) {
             Logger::info(std::string("DirectML EP unavailable, falling back to CPU: ") + e.what());
         }
@@ -251,7 +252,6 @@ namespace {
         try {
             OrtCUDAProviderOptions cuda_options;
             ctx.session_opts.AppendExecutionProvider_CUDA(cuda_options);
-            Logger::info("EP: CUDA");
         } catch (const Ort::Exception &e) {
             Logger::info(std::string("CUDA EP unavailable, falling back to CPU: ") + e.what());
         }
@@ -282,36 +282,39 @@ namespace {
             return s;
         };
 
+#ifdef USE_DML
+        // DML: UNet on GPU (except SDXL which has unsupported Reshape nodes at runtime).
+        //      Text encoders and VAE stay on CPU — DML rejects their Reshape patterns.
+        auto& unetOpts = (cfg.type == ModelType::SDXL) ? ctx.cpu_session_opts : ctx.session_opts;
+        auto& auxOpts  = ctx.cpu_session_opts;
+#elif defined(USE_CUDA)
+        // CUDA: all models on GPU.
+        auto& unetOpts = ctx.session_opts;
+        auto& auxOpts  = ctx.session_opts;
+        Logger::info("EP: CUDA (unet=GPU, vae=GPU, text_encoders=GPU)");
+#else
+        auto& unetOpts = ctx.session_opts;
+        auto& auxOpts  = ctx.cpu_session_opts;
+#endif
+
 #ifdef _WIN32
         // ORT on Windows requires wchar_t paths. Model dir names are ASCII, so a
         // simple char-by-char widening is sufficient.
         auto toWide = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
         const std::wstring wModelDir = toWide(modelDir);
-        // DML cannot execute SDXL UNet's Reshape nodes (node_view_1) at runtime.
-        // CUDA handles them fine, so only force CPU for SDXL on DML.
-#ifdef USE_DML
-        auto& unetOpts = (cfg.type == ModelType::SDXL) ? ctx.cpu_session_opts : ctx.session_opts;
-#else
-        auto& unetOpts = ctx.session_opts;
-#endif
-        ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
+        ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), auxOpts);
         ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         unetOpts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
-        ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  auxOpts);
         if (cfg.type == ModelType::SDXL)
-            ctx.text_encoder_2 = loadSession("text_encoder_2", (wModelDir + L"/text_encoder_2.onnx").c_str(), ctx.cpu_session_opts);
+            ctx.text_encoder_2 = loadSession("text_encoder_2", (wModelDir + L"/text_encoder_2.onnx").c_str(), auxOpts);
 #else
-#ifdef USE_DML
-        auto& unetOpts = (cfg.type == ModelType::SDXL) ? ctx.cpu_session_opts : ctx.session_opts;
-#else
-        auto& unetOpts = ctx.session_opts;
-#endif
-        ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), ctx.cpu_session_opts);
+        ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), auxOpts);
         ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         unetOpts);
         ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
-        ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  auxOpts);
         if (cfg.type == ModelType::SDXL)
-            ctx.text_encoder_2 = loadSession("text_encoder_2", (modelDir + "/text_encoder_2.onnx").c_str(), ctx.cpu_session_opts);
+            ctx.text_encoder_2 = loadSession("text_encoder_2", (modelDir + "/text_encoder_2.onnx").c_str(), auxOpts);
 #endif
 
         logModelIO("text_encoder", ctx.text_encoder, ctx.allocator);
@@ -341,6 +344,23 @@ namespace {
         ctx.unetExpectsFp32 =
             (ctx.unet.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetElementType()
              == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+
+        // Detect whether the exported VAE decoder expects float32 or float16 inputs.
+        ctx.vaeExpectsFp32 =
+            (ctx.vae_decoder.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetElementType()
+             == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+
+        Logger::info("UNet input dtype : " + std::string(ctx.unetExpectsFp32 ? "float32" : "float16"));
+        Logger::info("VAE  input dtype : " + std::string(ctx.vaeExpectsFp32  ? "float32" : "float16"));
+        Logger::info("Latent shape     : [1, 4, " + std::to_string(latent_h) + ", " + std::to_string(latent_w) + "]");
+#ifdef USE_CUDA
+        Logger::info("Session EP       : text_encoder=CUDA  unet=CUDA  vae=CUDA");
+#elif defined(USE_DML)
+        Logger::info("Session EP       : text_encoder=CPU  unet=" +
+                     std::string((cfg.type == ModelType::SDXL) ? "CPU" : "DML") + "  vae=CPU");
+#else
+        Logger::info("Session EP       : CPU");
+#endif
 
         ctx.latent_shape = {1, 4, latent_h, latent_w};
         ctx.latent_size = 1 * 4 * latent_h * latent_w;
@@ -387,6 +407,14 @@ namespace {
         for (size_t k = 0; k < elem_count; ++k)
             embedding[k] = static_cast<float>(raw[k]);
 
+        {
+            float mn = 1e9f, mx = -1e9f, sum = 0.0f;
+            for (float v : embedding) { mn = std::min(mn, v); mx = std::max(mx, v); sum += v; }
+            Logger::info("  embedding stats: min=" + std::to_string(mn)
+                         + "  max=" + std::to_string(mx)
+                         + "  mean=" + std::to_string(sum / static_cast<float>(embedding.size())));
+        }
+
         out_shape = std::vector<int64_t>(shape.begin(), shape.end());
         return embedding;
     }
@@ -412,8 +440,10 @@ namespace {
             token_shape.data(), token_shape.size());
         const char* enc1_in[]  = {ctx.te_input.c_str()};
         const char* enc1_out[] = {ctx.te_output.c_str()};
+        auto tEnc1 = Clock::now();
         auto enc1_result = ctx.text_encoder.Run(Ort::RunOptions{nullptr},
                                                 enc1_in, &tokens1, 1, enc1_out, 1);
+        Logger::info("  CLIP-L run: " + fmtMs(tEnc1));
         auto shape1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetShape();
         size_t elem1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetElementCount();
         std::vector<float> emb1(elem1);
@@ -435,8 +465,10 @@ namespace {
             token_shape.data(), token_shape.size());
         const char* enc2_in[]  = {ctx.te2_input.c_str()};
         const char* enc2_out[] = {ctx.te2_output.c_str(), ctx.te2_pooled.c_str()};
+        auto tEnc2 = Clock::now();
         auto enc2_result = ctx.text_encoder_2.Run(Ort::RunOptions{nullptr},
                                                   enc2_in, &tokens2, 1, enc2_out, 2);
+        Logger::info("  OpenCLIP-G run: " + fmtMs(tEnc2));
         auto shape2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetShape();
         size_t elem2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetElementCount();
         std::vector<float> emb2(elem2);
@@ -476,9 +508,15 @@ namespace {
                       combined.begin() + s * dim_total + dim1);
         }
         out_shape = {1, seq_len, dim_total};
-        Logger::info("  SDXL embedding shape: [1, " + std::to_string(seq_len)
-                     + ", " + std::to_string(dim_total) + "]"
-                     + "  pooled: [1, " + std::to_string(pool_elem) + "]");
+        {
+            float mn = 1e9f, mx = -1e9f, sum = 0.0f;
+            for (float v : combined) { mn = std::min(mn, v); mx = std::max(mx, v); sum += v; }
+            Logger::info("  SDXL embedding [1," + std::to_string(seq_len) + "," + std::to_string(dim_total) + "]"
+                         + "  pooled:[1," + std::to_string(pool_elem) + "]"
+                         + "  min=" + std::to_string(mn)
+                         + "  max=" + std::to_string(mx)
+                         + "  mean=" + std::to_string(sum / static_cast<float>(combined.size())));
+        }
         return combined;
     }
 
@@ -663,14 +701,22 @@ namespace {
                                   const std::vector<float> &alphas_cumprod,
                                   GenerationContext &ctx) {
         int t = sigmaToTimestep(sigma, alphas_cumprod);
-
-        auto u_eps_fp16 = runUNetSingle(x_t, t, ctx.uncond_embed, ctx.uncond_embeds_pool, ctx);
-        auto c_eps_fp16 = runUNetSingle(x_t, t, ctx.text_embed,   ctx.text_embeds_pool,   ctx);
+        Logger::info("  UNet t=" + std::to_string(t) + "  (uncond)");
+        auto tUncond = Clock::now();
+        auto u_eps = runUNetSingle(x_t, t, ctx.uncond_embed, ctx.uncond_embeds_pool, ctx);
+        Logger::info("  uncond: " + fmtMs(tUncond) + "  (cond)");
+        auto tCond = Clock::now();
+        auto c_eps = runUNetSingle(x_t, t, ctx.text_embed,   ctx.text_embeds_pool,   ctx);
+        Logger::info("  cond:   " + fmtMs(tCond));
 
         std::vector<float> eps(ctx.latent_size);
-        for (int j = 0; j < ctx.latent_size; ++j)
-            eps[j] = static_cast<float>(u_eps_fp16[j])
-                     + ctx.guidance_scale * (static_cast<float>(c_eps_fp16[j]) - static_cast<float>(u_eps_fp16[j]));
+        float eps_mn = 1e9f, eps_mx = -1e9f;
+        for (int j = 0; j < ctx.latent_size; ++j) {
+            eps[j] = u_eps[j] + ctx.guidance_scale * (c_eps[j] - u_eps[j]);
+            eps_mn = std::min(eps_mn, eps[j]);
+            eps_mx = std::max(eps_mx, eps[j]);
+        }
+        Logger::info("  eps range: [" + std::to_string(eps_mn) + ", " + std::to_string(eps_mx) + "]");
         return eps;
     }
 
@@ -729,6 +775,13 @@ namespace {
             prev_denoised = denoised;
             h_prev = h;
 
+            if ((step + 1) % 5 == 0 || step == 0 || step + 1 == num_steps) {
+                float x_mn = 1e9f, x_mx = -1e9f, x_sum = 0.0f;
+                for (float v : x) { x_mn = std::min(x_mn, v); x_mx = std::max(x_mx, v); x_sum += v; }
+                Logger::info("  latent stats: min=" + std::to_string(x_mn)
+                             + "  max=" + std::to_string(x_mx)
+                             + "  mean=" + std::to_string(x_sum / static_cast<float>(ctx.latent_size)));
+            }
             Logger::info("  step done in " + fmtMs(tStep));
             if (progressStep) progressStep->fetch_add(1);
         }
@@ -750,12 +803,21 @@ namespace {
                          + "  mean: " + std::to_string(vSum / static_cast<float>(x.size())));
         }
 
-        // VAE model is exported as FP16 so inputs must match — ORT throws on type mismatch.
-        auto vae_latent_fp16 = toFp16(x);
-
-        Ort::Value vae_input = Ort::Value::CreateTensor<Ort::Float16_t>(
-            ctx.memory_info, vae_latent_fp16.data(), vae_latent_fp16.size(),
-            ctx.latent_shape.data(), ctx.latent_shape.size());
+        // Pass the correct dtype based on what the exported VAE expects.
+        std::vector<Ort::Float16_t> vae_latent_fp16;
+        std::vector<float> vae_latent_fp32;
+        Ort::Value vae_input{nullptr};
+        if (ctx.vaeExpectsFp32) {
+            vae_latent_fp32 = x;
+            vae_input = Ort::Value::CreateTensor<float>(
+                ctx.memory_info, vae_latent_fp32.data(), vae_latent_fp32.size(),
+                ctx.latent_shape.data(), ctx.latent_shape.size());
+        } else {
+            vae_latent_fp16 = toFp16(x);
+            vae_input = Ort::Value::CreateTensor<Ort::Float16_t>(
+                ctx.memory_info, vae_latent_fp16.data(), vae_latent_fp16.size(),
+                ctx.latent_shape.data(), ctx.latent_shape.size());
+        }
 
         const char *vae_in_names[] = {ctx.vae_in.c_str()};
         const char *vae_out_names[] = {ctx.vae_out.c_str()};
@@ -784,6 +846,14 @@ namespace {
         } else {
             const auto *raw = vae_tensor.GetTensorData<float>();
             std::copy(raw, raw + elem_count, img_float.begin());
+        }
+
+        {
+            float mn = 1e9f, mx = -1e9f, sum = 0.0f;
+            for (float v : img_float) { mn = std::min(mn, v); mx = std::max(mx, v); sum += v; }
+            Logger::info("VAE output stats: min=" + std::to_string(mn)
+                         + "  max=" + std::to_string(mx)
+                         + "  mean=" + std::to_string(sum / static_cast<float>(elem_count)));
         }
 
         return latentToImage(img_float.data(), img_w, img_h);

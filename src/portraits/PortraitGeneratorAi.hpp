@@ -4,19 +4,35 @@
 
 #include "../enum/enums.hpp"
 
+// Parameters shared by all generation entry points.
 struct GenerationParams {
-    int   numSteps      = 20;
-    float guidanceScale = 8.0f;
-    int   numImages     = 1;
+    int   numSteps      = 20;   // DPM++ 2M Karras denoising steps (more = better quality, slower)
+    float guidanceScale = 8.0f; // CFG scale: how strongly the prompt steers the output (7–12 typical)
+    int   numImages     = 1;    // Number of images to generate sequentially in one pipeline run
 };
 
+// Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).
+// All methods run synchronously on the calling thread; launch in a std::thread for non-blocking use.
+// Execution provider (CPU / CUDA / DML) is selected at compile time via USE_CUDA / USE_DML defines.
 class PortraitGeneratorAi {
 public:
+    // Generate a character portrait for the given race/gender combination.
+    // Builds the prompt automatically from PromptBuilder and saves to assets/generated/.
+    // progressStep: if non-null, incremented after each denoising step (for progress bars).
     static void generatePortrait(const Race race,
                                  const Gender gender,
                                  const GenerationParams& params,
                                  std::atomic<int>* progressStep = nullptr);
 
+    // Generate an image from an explicit prompt pair.
+    // outputPath: destination .png file (parent directory must exist or be creatable).
+    // modelDir:   directory containing text_encoder.onnx, unet.onnx, vae_decoder.onnx,
+    //             and optionally text_encoder_2.onnx (SDXL) plus model.json.
+    // progressStep: incremented after each denoising step.
+    // currentImage: set to the 1-based index of the image currently being generated.
+    // cancelToken:  set to true from another thread to abort; the pipeline checks it
+    //               before each step and also calls OrtRunOptions::SetTerminate() to
+    //               abort any in-flight ORT Run() call immediately.
     static void generateFromPrompt(const std::string& prompt,
                                    const std::string& negativePrompt,
                                    const std::string& outputPath,

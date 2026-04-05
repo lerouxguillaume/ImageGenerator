@@ -11,3 +11,4 @@
 /models/*/*.onnx
 /models/*/*.data
 /image-generation-windows.zip
+/image-generation-windows-cuda.zip
