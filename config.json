@@ -1,0 +1,42 @@
+{
+    "modelBaseDir": "models",
+    "outputDir": "assets/generated",
+
+    "defaultNumSteps": 25,
+    "defaultGuidanceScale": 7.0,
+    "defaultPositivePrompt": "masterpiece, best quality, highly detailed, portrait, upper body, solo, cinematic lighting",
+    "defaultNegativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature",
+
+    "modelConfigs": {
+        "anything-v5": {
+            "numSteps": 28,
+            "guidanceScale": 7.0,
+            "positivePrompt": "masterpiece, best quality, highly detailed, anime style, 1girl, beautiful face, fantasy character, portrait, upper body, solo, cinematic lighting",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, photorealistic"
+        },
+        "dreamshaper_8": {
+            "numSteps": 25,
+            "guidanceScale": 7.5,
+            "positivePrompt": "masterpiece, best quality, highly detailed, fantasy portrait, upper body, solo, dramatic lighting, rich colours, painterly style, intricate details",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, flat colours, amateur"
+        },
+        "novelaiDiffusionV2_novelaiV2": {
+            "numSteps": 28,
+            "guidanceScale": 6.5,
+            "positivePrompt": "masterpiece, best quality, highly detailed, anime, 1girl, beautiful face, fantasy character, portrait, upper body, solo, soft lighting",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, western cartoon"
+        },
+        "perfectdeliberate_v5SD15": {
+            "numSteps": 30,
+            "guidanceScale": 8.5,
+            "positivePrompt": "RAW photo, masterpiece, best quality, highly detailed, 8k uhd, portrait, upper body, solo, sharp focus, natural skin texture, cinematic lighting",
+            "negativePrompt": "cartoon, anime, illustration, painting, drawing, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, oversaturated, plastic skin"
+        },
+        "toonyou_beta6": {
+            "numSteps": 25,
+            "guidanceScale": 7.0,
+            "positivePrompt": "masterpiece, best quality, toon style, cartoon, 1girl, beautiful face, fantasy character, portrait, upper body, solo, vibrant colours, clean lines",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, deformed, mutation, ugly, blurry, artifacts, watermark, signature, realistic, photorealistic, 3d render"
+        }
+    }
+}
