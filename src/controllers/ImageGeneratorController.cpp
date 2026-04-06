@@ -5,14 +5,67 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
+#include <future>
+#include <string>
 #include <thread>
+
+// ── Folder browser ───────────────────────────────────────────────────────────
+
+// Opens a native folder-picker dialog (zenity) and returns the chosen path,
+// or an empty string if the user cancelled. Blocks until the dialog closes.
+static std::string browseForFolder(const std::string& startPath) {
+    std::string cmd = "zenity --file-selection --directory --title='Select folder'";
+    if (!startPath.empty())
+        cmd += " --filename='" + startPath + "/'";
+    cmd += " 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return {};
+    char buf[4096] = {};
+    std::string result;
+    while (fgets(buf, sizeof(buf), pipe))
+        result += buf;
+    pclose(pipe);
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+        result.pop_back();
+    return result;
+}
+
+// ── Settings helpers ──────────────────────────────────────────────────────────
+
+void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
+    view.settingsModelDir         = config.modelBaseDir;
+    view.settingsOutputDir        = config.outputDir;
+    view.settingsModelDirCursor   = static_cast<int>(config.modelBaseDir.size());
+    view.settingsOutputDirCursor  = static_cast<int>(config.outputDir.size());
+    view.settingsModelDirActive   = true;
+    view.settingsOutputDirActive  = false;
+    view.showSettings             = true;
+}
+
+void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
+    config.modelBaseDir = view.settingsModelDir;
+    config.outputDir    = view.settingsOutputDir;
+    config.save();
+    view.showSettings = false;
+    // Trigger a model rescan with the new base directory.
+    view.availableModels.clear();
+    view.selectedModelIdx = 0;
+    modelsDirty = true;
+}
+
+// ── Event handling ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
                                             ImageGeneratorView& view, AppScreen& appScreen) {
     if (e.type == sf::Event::Closed) win.close();
-    if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Escape)
+
+    // Escape: close settings modal if open, else navigate to menu.
+    if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Escape) {
+        if (view.showSettings) { view.showSettings = false; return; }
         appScreen = AppScreen::MENU;
+    }
 
     if (e.type == sf::Event::MouseButtonPressed && e.mouseButton.button == sf::Mouse::Left)
         handleClick(win.mapPixelToCoords({e.mouseButton.x, e.mouseButton.y}), win, view, appScreen);
@@ -48,8 +101,95 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             view.negativeScrollLine = std::max(0, view.negativeScrollLine + delta);
     }
 
+    // Settings modal keyboard input
+    if (view.showSettings) {
+        std::string& activeField = view.settingsModelDirActive
+                                    ? view.settingsModelDir
+                                    : view.settingsOutputDir;
+        int& cursor = view.settingsModelDirActive
+                       ? view.settingsModelDirCursor
+                       : view.settingsOutputDirCursor;
+
+        if (e.type == sf::Event::KeyPressed) {
+            if (e.key.code == sf::Keyboard::Tab) {
+                view.settingsModelDirActive  = !view.settingsModelDirActive;
+                view.settingsOutputDirActive = !view.settingsOutputDirActive;
+            } else if (e.key.code == sf::Keyboard::Enter) {
+                saveSettings(view);
+            } else if (e.key.code == sf::Keyboard::Left && cursor > 0) {
+                --cursor;
+            } else if (e.key.code == sf::Keyboard::Right
+                       && cursor < static_cast<int>(activeField.size())) {
+                ++cursor;
+            } else if (e.key.code == sf::Keyboard::Home) {
+                cursor = 0;
+            } else if (e.key.code == sf::Keyboard::End) {
+                cursor = static_cast<int>(activeField.size());
+            } else if (e.key.code == sf::Keyboard::BackSpace && cursor > 0) {
+                activeField.erase(static_cast<size_t>(cursor - 1), 1);
+                --cursor;
+            } else if (e.key.code == sf::Keyboard::Delete
+                       && cursor < static_cast<int>(activeField.size())) {
+                activeField.erase(static_cast<size_t>(cursor), 1);
+            }
+        }
+        if (e.type == sf::Event::TextEntered) {
+            const auto c = e.text.unicode;
+            // Accept printable ASCII; paths use /, \, :, space, etc. — all < 127.
+            if (c >= 32 && c < 127) {
+                activeField.insert(static_cast<size_t>(cursor), 1, static_cast<char>(c));
+                ++cursor;
+            }
+        }
+        return; // block all other input while settings is open
+    }
+
     // Text input for active field
     if (!view.generating) {
+        // Seed field keyboard handling
+        if (view.seedInputActive) {
+            if (e.type == sf::Event::KeyPressed) {
+                auto& s = view.seedInput;
+                auto& c = view.seedInputCursor;
+                if (e.key.code == sf::Keyboard::Left  && c > 0) { --c; }
+                else if (e.key.code == sf::Keyboard::Right && c < static_cast<int>(s.size())) { ++c; }
+                else if (e.key.code == sf::Keyboard::Home) { c = 0; }
+                else if (e.key.code == sf::Keyboard::End)  { c = static_cast<int>(s.size()); }
+                else if (e.key.code == sf::Keyboard::BackSpace && c > 0) { s.erase(static_cast<size_t>(--c), 1); }
+                else if (e.key.code == sf::Keyboard::Delete && c < static_cast<int>(s.size())) { s.erase(static_cast<size_t>(c), 1); }
+                else if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Tab) {
+                    view.seedInputActive = false;
+                } else if (e.key.control && e.key.code == sf::Keyboard::C) {
+                    sf::Clipboard::setString(s);
+                } else if (e.key.control && e.key.code == sf::Keyboard::V) {
+                    const std::string clip = sf::Clipboard::getString().toAnsiString();
+                    for (std::size_t i = 0; i < clip.size() && s.size() < 20; ++i) {
+                        const char ch = clip[i];
+                        const bool isDigit = (ch >= '0' && ch <= '9');
+                        const bool isMinus = (ch == '-' && c == 0 && s.empty());
+                        if (isDigit || isMinus) {
+                            s.insert(static_cast<size_t>(c), 1, ch);
+                            ++c;
+                        }
+                    }
+                } else if (e.key.control && e.key.code == sf::Keyboard::A) {
+                    // Select all: move cursor to end (no visual selection, but prepares for overwrite)
+                    c = static_cast<int>(s.size());
+                }
+            }
+            if (e.type == sf::Event::TextEntered) {
+                const auto ch = e.text.unicode;
+                // Allow digits and a leading minus sign
+                const bool isDigit = (ch >= '0' && ch <= '9');
+                const bool isMinus = (ch == '-' && view.seedInputCursor == 0 && view.seedInput.empty());
+                if ((isDigit || isMinus) && view.seedInput.size() < 20) {
+                    view.seedInput.insert(static_cast<size_t>(view.seedInputCursor), 1, static_cast<char>(ch));
+                    ++view.seedInputCursor;
+                }
+            }
+            return; // don't forward to prompt fields
+        }
+
         if (e.type == sf::Event::KeyPressed) {
             std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
             int& cursor      = view.positiveActive ? view.positiveCursor      : view.negativeCursor;
@@ -143,16 +283,35 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 }
 
 void ImageGeneratorController::update(ImageGeneratorView& view) {
-    // Scan models/ subdirectories once on first update
-    if (view.availableModels.empty()) {
-        for (const auto& entry : std::filesystem::directory_iterator("models")) {
+    // Apply async browse result when zenity finishes.
+    if (browseFuture.valid() &&
+        browseFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const std::string picked = browseFuture.get();
+        if (!picked.empty()) {
+            if (browsingForModel) {
+                view.settingsModelDir       = picked;
+                view.settingsModelDirCursor = static_cast<int>(picked.size());
+            } else {
+                view.settingsOutputDir       = picked;
+                view.settingsOutputDirCursor = static_cast<int>(picked.size());
+            }
+        }
+    }
+
+    // Scan modelBaseDir for subdirectories containing unet.onnx.
+    // Runs on first update and whenever modelsDirty is set (e.g. after settings save).
+    if (modelsDirty) {
+        view.availableModels.clear();
+        std::error_code ec;
+        for (const auto& entry :
+             std::filesystem::directory_iterator(config.modelBaseDir, ec)) {
             if (!entry.is_directory()) continue;
-            const auto dir = entry.path();
-            if (std::filesystem::exists(dir / "unet.onnx"))
-                view.availableModels.push_back(dir.string());
+            if (std::filesystem::exists(entry.path() / "unet.onnx"))
+                view.availableModels.push_back(entry.path().string());
         }
         std::sort(view.availableModels.begin(), view.availableModels.end());
         view.selectedModelIdx = 0;
+        modelsDirty = false;
     }
 
     if (view.generating && view.generationDone.load()) {
@@ -174,12 +333,46 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
 
 void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
                                             ImageGeneratorView& view, AppScreen& appScreen) {
+    // Settings modal intercepts all clicks while open.
+    if (view.showSettings) {
+        if (view.settingsBtnSave.contains(pos))   { saveSettings(view); return; }
+        if (view.settingsBtnCancel.contains(pos))  { view.showSettings = false; return; }
+        if (view.settingsBtnBrowseModel.contains(pos)) {
+            browsingForModel = true;
+            const std::string start = view.settingsModelDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, start);
+            return;
+        }
+        if (view.settingsBtnBrowseOutput.contains(pos)) {
+            browsingForModel = false;
+            const std::string start = view.settingsOutputDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, start);
+            return;
+        }
+        if (view.settingsModelDirField.contains(pos)) {
+            view.settingsModelDirActive  = true;
+            view.settingsOutputDirActive = false;
+            return;
+        }
+        if (view.settingsOutputDirField.contains(pos)) {
+            view.settingsModelDirActive  = false;
+            view.settingsOutputDirActive = true;
+            return;
+        }
+        return; // absorb clicks outside modal controls
+    }
+
     if (view.generating) {
         if (view.btnCancelGenerate.contains(pos)) {
-            ++view.generationId;          // invalidate the thread's epoch
-            view.cancelToken.store(true); // signal ORT watcher to abort
-            view.generating = false;      // UI responds immediately
+            ++view.generationId;
+            view.cancelToken.store(true);
+            view.generating = false;
         }
+        return;
+    }
+
+    if (view.btnSettings.contains(pos)) {
+        openSettings(view);
         return;
     }
 
@@ -190,11 +383,20 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
 
     if (view.positiveField.contains(pos)) {
         presenter.activatePositive(view);
+        view.seedInputActive = false;
         return;
     }
 
     if (view.negativeField.contains(pos)) {
         presenter.activateNegative(view);
+        view.seedInputActive = false;
+        return;
+    }
+
+    if (view.showAdvancedParams && view.seedField.contains(pos)) {
+        view.positiveActive  = false;
+        view.negativeActive  = false;
+        view.seedInputActive = true;
         return;
     }
 
@@ -242,7 +444,7 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
 
     if (view.btnGenerate.contains(pos)) {
         const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        view.lastImagePath = "assets/generated/img_" + std::to_string(now) + ".png";
+        view.lastImagePath = config.outputDir + "/img_" + std::to_string(now) + ".png";
 
         presenter.beginGeneration(view);
 
@@ -252,6 +454,7 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         const std::string negPrompt   = view.negativePrompt;
         const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
         GenerationParams params = view.generationParams;
+        params.seed = view.seedInput.empty() ? -1 : std::stoll(view.seedInput);
         const auto [rw, rh] = ImageGeneratorView::kResolutions[view.selectedResolutionIdx];
         params.width  = rw;
         params.height = rh;

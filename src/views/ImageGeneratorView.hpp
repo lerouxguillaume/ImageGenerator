@@ -35,6 +35,11 @@ public:
     GenerationParams generationParams;
     bool showAdvancedParams = false; // Whether the steps/CFG/count sliders are visible
 
+    // ── Seed input (advanced section) ─────────────────────────────────────────
+    std::string seedInput;          // Raw text; empty → seed = -1 (random)
+    int  seedInputCursor = 0;
+    bool seedInputActive = false;
+
     // ── Generation state (shared with background thread via atomics) ──────────
     bool              generating    = false;     // Set on the UI thread; guards against double-starts
     std::atomic<bool> generationDone{false};     // Set by the pipeline thread when finished
@@ -83,12 +88,30 @@ public:
     sf::FloatRect stepsSliderTrack;
     sf::FloatRect cfgSliderTrack;
     sf::FloatRect imagesSliderTrack;
+    sf::FloatRect seedField;
     DraggingSlider draggingSlider = DraggingSlider::None; // Which slider (if any) is being dragged
+
+    // ── Settings modal ────────────────────────────────────────────────────────
+    bool        showSettings             = false;
+    std::string settingsModelDir;          // Editable copy while the modal is open
+    std::string settingsOutputDir;
+    int         settingsModelDirCursor   = 0;
+    int         settingsOutputDirCursor  = 0;
+    bool        settingsModelDirActive   = true;
+    bool        settingsOutputDirActive  = false;
+
+    // Hit rects for the settings button and modal controls
+    sf::FloatRect btnSettings;
+    sf::FloatRect settingsModelDirField;
+    sf::FloatRect settingsOutputDirField;
+    sf::FloatRect settingsBtnBrowseModel;
+    sf::FloatRect settingsBtnBrowseOutput;
+    sf::FloatRect settingsBtnSave;
+    sf::FloatRect settingsBtnCancel;
 
     void render(sf::RenderWindow& win) override;
 
 private:
-    // Draw a multi-line editable text field with cursor, scroll, and selection highlight.
     void drawPromptField(sf::RenderWindow& win,
                          const sf::FloatRect& field,
                          const std::string& text,
@@ -97,11 +120,18 @@ private:
                          std::vector<VisualLine>& outLines,
                          int& scrollLine);
 
-    // Draw a labelled horizontal slider. normalised is in [0, 1].
     void drawSlider(sf::RenderWindow& win,
                     const sf::FloatRect& track, float normalised,
                     const std::string& label, const std::string& valueStr);
 
-    // Draw the semi-transparent overlay shown while a generation is in progress.
     void drawGeneratingOverlay(sf::RenderWindow& win);
+
+    // Single-line editable text field (no word-wrap) used inside the settings modal.
+    void drawSingleLineField(sf::RenderWindow& win,
+                             const sf::FloatRect& field,
+                             const std::string& text,
+                             int cursor, bool active);
+
+    // Settings modal overlay.
+    void drawSettingsModal(sf::RenderWindow& win);
 };

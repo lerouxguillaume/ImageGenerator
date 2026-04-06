@@ -1,126 +1,159 @@
-from diffusers import StableDiffusionPipeline
-import torch
+"""
+Export Stable Diffusion 1.5 models to ONNX for use with ONNX Runtime.
+
+Usage:
+    python export_onnx_models.py <model.safetensors> [--name MODEL_NAME]
+
+Outputs (under models/<MODEL_NAME>/):
+    text_encoder.onnx   — CLIP-L with clip-skip-2, fp16
+    unet.onnx           — UNet, fp16, dynamic H/W
+    vae_decoder.onnx    — VAE decoder, fp16, dynamic H/W
+"""
+import argparse
 import os
+import sys
+import time
 
-# ----------------------------
-# Paths
-# ----------------------------
-MODEL_NAME = "novelaiDiffusionV2_novelaiV2"
-MODEL_FILE = f"./{MODEL_NAME}.safetensors"
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", MODEL_NAME)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+import torch
+from diffusers import StableDiffusionPipeline
 
-# ----------------------------
-# Load Stable Diffusion
-# ----------------------------
-pipe = StableDiffusionPipeline.from_single_file(MODEL_FILE, torch_dtype=torch.float16)
-pipe.enable_attention_slicing()
+from export_common import (
+    VAEDecoderWrapper,
+    check_dependencies,
+    check_model_file,
+    export_step,
+    fix_fp32_constants,
+    free,
+    onnx_export,
+    patch_clip_for_tracing,
+    simplify_with_onnxsim,
+    write_model_json,
+)
 
-# ----------------------------
-# 1. Text Encoder (Clip Skip 2)
-# ----------------------------
+
+# ── Model wrappers ────────────────────────────────────────────────────────────
+
 class CLIPTextEncoderClipSkip2(torch.nn.Module):
+    """CLIP-L text encoder with clip-skip-2 (penultimate hidden state).
+    Matches the NovelAI / A1111 style: returns the second-to-last hidden state
+    passed through the final layer norm."""
     def __init__(self, text_encoder):
         super().__init__()
         self.text_encoder = text_encoder
+
     def forward(self, input_ids):
         out = self.text_encoder(input_ids, output_hidden_states=True)
         hidden = out.hidden_states[-2]
-        hidden = self.text_encoder.text_model.final_layer_norm(hidden)
-        return hidden
+        return self.text_encoder.text_model.final_layer_norm(hidden)
 
-clip_encoder = CLIPTextEncoderClipSkip2(pipe.text_encoder).eval()
-dummy_input_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
 
-torch.onnx.export(
-    clip_encoder,
-    dummy_input_ids,
-    f"{OUTPUT_DIR}/text_encoder.onnx",
-    opset_version=18,
-    input_names=["input_ids"],
-    output_names=["text_embeds"],
-    dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
-    do_constant_folding=True,
-    keep_initializers_as_inputs=False,  # ensures single file
-)
-print("✅ text_encoder.onnx exported as single file")
-
-# ----------------------------
-# 2. UNet (FP16)
-# ----------------------------
 class UNetWrapper(torch.nn.Module):
     def __init__(self, unet):
         super().__init__()
         self.unet = unet
+
     def forward(self, latent, timestep, encoder_hidden_states):
-        return self.unet(latent, timestep, encoder_hidden_states=encoder_hidden_states).sample
+        return self.unet(latent, timestep,
+                         encoder_hidden_states=encoder_hidden_states).sample
 
-pipe.unet.to(torch.float16)
-unet_wrapper = UNetWrapper(pipe.unet).eval()
 
-latent = torch.randn(1, 4, 64, 64, dtype=torch.float16)
-timestep = torch.tensor([1], dtype=torch.float16)
-text_embeds = torch.randn(1, 77, 768, dtype=torch.float16)
+# ── Export pipeline ───────────────────────────────────────────────────────────
 
-torch.onnx.export(
-    unet_wrapper,
-    (latent, timestep, text_embeds),
-    f"{OUTPUT_DIR}/unet.onnx",
-    opset_version=18,
-    input_names=["latent", "timestep", "encoder_hidden_states"],
-    output_names=["latent_out"],
-    dynamic_axes={
-        "latent": {0: "batch"},
-        "timestep": {0: "batch"},
-        "encoder_hidden_states": {0: "batch"},
-        "latent_out": {0: "batch"},
-    },
-    do_constant_folding=True,
-    keep_initializers_as_inputs=False,  # single file
-)
-print("✅ unet.onnx exported as single file")
+def export_sd15(model_file: str, output_dir: str) -> None:
+    check_dependencies(
+        required=["torch", "diffusers", "transformers", "onnx"],
+        optional=["onnxsim"],
+    )
+    check_model_file(model_file)
+    os.makedirs(output_dir, exist_ok=True)
+    patch_clip_for_tracing()
 
-# ----------------------------
-# 3. VAE Decoder (FP32)
-# ----------------------------
-class VAEWrapper(torch.nn.Module):
-    def __init__(self, vae):
-        super().__init__()
-        self.vae = vae
-    def forward(self, latent):
-        return self.vae.decode(latent / self.vae.config.scaling_factor).sample
+    t_total = time.time()
+    print("Loading SD 1.5 pipeline ...")
+    pipe = StableDiffusionPipeline.from_single_file(model_file, torch_dtype=torch.float16)
+    pipe.enable_attention_slicing()
 
-pipe.vae.to(torch.float16)
-vae_wrapper = VAEWrapper(pipe.vae).eval()
+    # 1. Text encoder ─────────────────────────────────────────────────────────
+    with export_step("1/3  Text encoder"):
+        clip = CLIPTextEncoderClipSkip2(pipe.text_encoder).eval()
+        dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
+        onnx_export(
+            clip, dummy_ids,
+            os.path.join(output_dir, "text_encoder.onnx"),
+            input_names=["input_ids"],
+            output_names=["text_embeds"],
+            dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
+        )
+        free(clip, pipe.text_encoder, pipe.tokenizer)
+        pipe.text_encoder = None
 
-dummy_latent_vae = torch.randn(1, 4, 64, 64, dtype=torch.float16)
+    # 2. UNet ─────────────────────────────────────────────────────────────────
+    with export_step("2/3  UNet"):
+        pipe.unet.to(torch.float16)
+        unet = UNetWrapper(pipe.unet).eval()
+        dummy_latent   = torch.randn(1, 4, 64, 64, dtype=torch.float16)
+        dummy_timestep = torch.tensor([1], dtype=torch.float16)
+        dummy_embeds   = torch.randn(1, 77, 768, dtype=torch.float16)
+        onnx_export(
+            unet, (dummy_latent, dummy_timestep, dummy_embeds),
+            os.path.join(output_dir, "unet.onnx"),
+            input_names=["latent", "timestep", "encoder_hidden_states"],
+            output_names=["latent_out"],
+            dynamic_axes={
+                "latent":                {0: "batch", 2: "height", 3: "width"},
+                "timestep":              {0: "batch"},
+                "encoder_hidden_states": {0: "batch"},
+                "latent_out":            {0: "batch", 2: "height", 3: "width"},
+            },
+        )
+        free(unet, pipe.unet)
+        pipe.unet = None
 
-vae_path = f"{OUTPUT_DIR}/vae_decoder.onnx"
-torch.onnx.export(
-    vae_wrapper,
-    (dummy_latent_vae,),
-    vae_path,
-    opset_version=18,
-    input_names=["latent"],
-    output_names=["image"],
-    # No dynamic_axes: fully static graph so constant folding can bake Reshape
-    # shape tensors as constants — required for DirectML which rejects runtime-
-    # computed shapes in Reshape nodes (E_INVALIDARG on node_view_2).
-    do_constant_folding=True,
-    keep_initializers_as_inputs=False,
-)
-print("✅ vae_decoder.onnx exported as single file")
+    # 3. VAE decoder ──────────────────────────────────────────────────────────
+    with export_step("3/3  VAE decoder"):
+        pipe.vae.to(torch.float16)
+        vae = VAEDecoderWrapper(pipe.vae).eval()
+        dummy_latent_vae = torch.randn(1, 4, 64, 64, dtype=torch.float16)
+        vae_path = os.path.join(output_dir, "vae_decoder.onnx")
+        onnx_export(
+            vae, (dummy_latent_vae,), vae_path,
+            input_names=["latent"],
+            output_names=["image"],
+            # Dynamic H/W: VAE loads with CPU session opts (never DML), so the
+            # static-shape DML restriction does not apply.
+            dynamic_axes={
+                "latent": {0: "batch", 2: "height", 3: "width"},
+                "image":  {0: "batch", 2: "height", 3: "width"},
+            },
+        )
+        simplify_with_onnxsim(vae_path)
+        free(vae, pipe.vae, pipe)
 
-# Optional: further simplify with onnxsim (pip install onnxsim) to eliminate
-# any remaining dynamic shape computations DML can't handle.
-try:
-    import onnx, onnxsim
-    model = onnx.load(vae_path)
-    model_sim, ok = onnxsim.simplify(model)
-    if ok:
-        onnx.save(model_sim, vae_path)
-        print("✅ vae_decoder.onnx simplified with onnxsim")
-    else:
-        print("⚠️  onnxsim simplification check failed, keeping original")
-except ImportError:
-    pass  # onnxsim not installed, skip
+    write_model_json(output_dir, "sd15")
+    print(f"\n✅ All models exported to {output_dir}  "
+          f"(total: {time.time() - t_total:.0f}s)")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export SD 1.5 to ONNX")
+    parser.add_argument("model_file", help="Path to the .safetensors checkpoint")
+    parser.add_argument("--name", help="Output directory name (default: checkpoint stem)")
+    parser.add_argument("--output-dir", help="Override output directory path")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    name = args.name or os.path.splitext(os.path.basename(args.model_file))[0]
+    out  = args.output_dir or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "models", name)
+    try:
+        export_sd15(args.model_file, out)
+    except (FileNotFoundError, ImportError) as e:
+        print(f"\n❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        sys.exit(1)

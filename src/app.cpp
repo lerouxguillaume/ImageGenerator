@@ -1,12 +1,20 @@
 #include "app.hpp"
 
+#include "config/AppConfig.hpp"
 #include "enum/constants.hpp"
 #include "managers/Logger.hpp"
+#include "ui/Logo.hpp"
 
-App::App() : win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close) {
+App::App()
+    : config(AppConfig::load("config.json"))
+    , win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close)
+    , imageGenController(config)
+{
     Logger::info("app constructor");
     win.setFramerateLimit(60);
 
+    const sf::Image icon = Logo::makeIconImage(128);
+    win.setIcon(128, 128, icon.getPixelsPtr());
 }
 
 void App::run() {

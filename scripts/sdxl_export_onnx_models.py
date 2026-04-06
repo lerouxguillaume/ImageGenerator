@@ -1,256 +1,216 @@
-import gc
+"""
+Export Stable Diffusion XL models to ONNX for use with ONNX Runtime.
+
+Usage:
+    python sdxl_export_onnx_models.py <model.safetensors> [--name MODEL_NAME]
+
+Outputs (under models/<MODEL_NAME>/):
+    text_encoder.onnx   — CLIP-L penultimate hidden states, fp32
+    text_encoder_2.onnx — OpenCLIP-G hidden states + pooled embeds, fp32
+    unet.onnx           — UNet, fp16, dynamic H/W
+    vae_decoder.onnx    — VAE decoder, fp16, dynamic H/W
+    model.json          — {"type": "sdxl"} for C++ runtime detection
+
+Notes on dtype strategy:
+    Text encoders are exported as fp32 for accuracy.
+    UNet and VAE are loaded as fp32 then cast to fp16 before export to avoid
+    creating a 10 GB fp32 ONNX intermediate.  fix_fp32_constants() is called
+    afterwards to cast the few remaining scalar constants the tracer emits as
+    fp32 (e.g. time-embedding scalars, GroupNorm eps) — these cause Concat
+    type errors in ORT if left as fp32 in an otherwise fp16 graph.
+"""
+import argparse
 import os
-import json
-import numpy as np
+import sys
+import time
+
 import torch
-import onnx
 from diffusers import StableDiffusionXLPipeline
 
-# ----------------------------
-# Paths
-# ----------------------------
-MODEL_NAME = "ilustmix_v111"
-MODEL_FILE = f"./{MODEL_NAME}.safetensors"
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", MODEL_NAME)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+from export_common import (
+    VAEDecoderWrapper,
+    check_dependencies,
+    check_model_file,
+    export_step,
+    fix_fp32_constants,
+    free,
+    onnx_export,
+    patch_clip_for_tracing,
+    simplify_with_onnxsim,
+    write_model_json,
+)
 
-# ----------------------------
-# Load SDXL.
-# Text encoders stay float32 for accuracy.
-# UNet and VAE are loaded as float32 then converted to float16 in PyTorch
-# before export — this avoids creating a 10 GB fp32 ONNX intermediate that
-# would require ~15 GB RAM to post-convert with onnxconverter_common.
-# After the fp16 export, to_fp16_onnx() is still run to fix the small number
-# of fp32 scalar constants that torch.onnx.export leaves in the graph
-# (e.g. time-embedding scalars, GroupNorm eps) — these cause Concat type
-# errors in ORT if left as fp32 in an otherwise fp16 graph.
-# ----------------------------
-pipe = StableDiffusionXLPipeline.from_single_file(MODEL_FILE, torch_dtype=torch.float32)
-pipe.enable_attention_slicing()
-pipe.text_encoder.to(torch.float32).eval()
-pipe.text_encoder_2.to(torch.float32).eval()
-pipe.unet.to(torch.float32).eval()
-pipe.vae.to(torch.float32).eval()
-
-seq_len = 77
+SEQ_LEN = 77
 
 
-def fix_fp32_constants(path: str) -> None:
-    """Convert any remaining float32 constants to float16, running in a subprocess.
+# ── Model wrappers ────────────────────────────────────────────────────────────
 
-    Loading a large ONNX proto in the main process doubles peak RAM (protobuf
-    expands to ~2× the file size in memory). Running in a subprocess gives the
-    loader a clean heap so the main process heap is unaffected.
-    """
-    import subprocess, sys, textwrap
-    script = textwrap.dedent(f"""
-        import onnx, numpy as np
-        from onnx import numpy_helper, TensorProto
-        path = {repr(path)}
-        model = onnx.load(path)
-        changed = 0
-        for init in model.graph.initializer:
-            if init.data_type == TensorProto.FLOAT:
-                arr = numpy_helper.to_array(init).astype(np.float16)
-                init.CopyFrom(numpy_helper.from_array(arr, init.name))
-                changed += 1
-        for node in model.graph.node:
-            if node.op_type == "Constant":
-                for attr in node.attribute:
-                    if attr.HasField("t") and attr.t.data_type == TensorProto.FLOAT:
-                        arr = numpy_helper.to_array(attr.t).astype(np.float16)
-                        attr.t.CopyFrom(numpy_helper.from_array(arr))
-                        changed += 1
-        onnx.save(model, path)
-        print(f"  → fixed {{changed}} fp32 constant(s) to float16")
-    """)
-    subprocess.run([sys.executable, "-c", script], check=True)
-
-
-# ----------------------------
-# 1. Text Encoder (CLIP-L → hidden states [1, 77, 768])
-#    C++ expects: 1 input (input_ids), 1 output (hidden states)
-# ----------------------------
 class CLIPL_Wrapper(torch.nn.Module):
+    """CLIP-L: returns penultimate hidden state [batch, 77, 768]."""
     def __init__(self, text_encoder):
         super().__init__()
         self.text_encoder = text_encoder
 
     def forward(self, input_ids):
         out = self.text_encoder(input_ids, output_hidden_states=True)
-        # SDXL uses penultimate hidden state ([-2]), shape [batch, 77, 768]
         return out.hidden_states[-2]
 
-clip_l = CLIPL_Wrapper(pipe.text_encoder).cpu().eval()
-dummy_input_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, seq_len), dtype=torch.int64)
 
-torch.onnx.export(
-    clip_l,
-    (dummy_input_ids,),
-    os.path.join(OUTPUT_DIR, "text_encoder.onnx"),
-    opset_version=18,
-    input_names=["input_ids"],
-    output_names=["hidden_states"],
-    dynamic_axes={
-        "input_ids": {0: "batch"},
-        "hidden_states": {0: "batch"},
-    },
-    do_constant_folding=True,
-    keep_initializers_as_inputs=False,
-)
-print("✅ text_encoder.onnx (CLIP-L) exported successfully")
-del clip_l, pipe.text_encoder, pipe.tokenizer
-gc.collect()
-
-# ----------------------------
-# 2. Text Encoder 2 (OpenCLIP-G → hidden states [1, 77, 1280] + pooled [1, 1280])
-#    C++ expects: 1 input (input_ids), 2 outputs (hidden states, pooled)
-# ----------------------------
 class OpenCLIPG_Wrapper(torch.nn.Module):
+    """OpenCLIP-G: returns penultimate hidden state [batch, 77, 1280]
+    and pooled text embeds [batch, 1280]."""
     def __init__(self, text_encoder):
         super().__init__()
         self.text_encoder = text_encoder
 
     def forward(self, input_ids):
         out = self.text_encoder(input_ids, output_hidden_states=True)
-        # SDXL uses penultimate hidden state ([-2]), shape [batch, 77, 1280]
-        hidden = out.hidden_states[-2]
-        # Pooled text embeds from the projection head, shape [batch, 1280]
-        pooled = out.text_embeds
-        return hidden, pooled
+        return out.hidden_states[-2], out.text_embeds
 
-clip_g = OpenCLIPG_Wrapper(pipe.text_encoder_2).cpu().eval()
-dummy_input_ids_2 = torch.randint(0, pipe.tokenizer_2.vocab_size, (1, seq_len), dtype=torch.int64)
 
-torch.onnx.export(
-    clip_g,
-    (dummy_input_ids_2,),
-    os.path.join(OUTPUT_DIR, "text_encoder_2.onnx"),
-    opset_version=18,
-    input_names=["input_ids"],
-    output_names=["hidden_states", "text_embeds"],
-    dynamic_axes={
-        "input_ids": {0: "batch"},
-        "hidden_states": {0: "batch"},
-        "text_embeds": {0: "batch"},
-    },
-    do_constant_folding=True,
-    keep_initializers_as_inputs=False,
-)
-print("✅ text_encoder_2.onnx (OpenCLIP-G) exported successfully")
-del clip_g, pipe.text_encoder_2, pipe.tokenizer_2
-gc.collect()
-
-# ----------------------------
-# 3. UNet (exported directly as float16 to avoid a 10 GB fp32 intermediate)
-#    to_fp16_onnx() is called afterwards to fix the few remaining fp32 scalar
-#    constants emitted by the tracer — a cheap operation on an already-fp16 file.
-# ----------------------------
-class UNetONNXWrapper(torch.nn.Module):
+class UNetWrapper(torch.nn.Module):
+    """SDXL UNet with 5 inputs: latent, timestep, encoder_hidden_states,
+    text_embeds (pooled), time_ids."""
     def __init__(self, unet):
         super().__init__()
         self.unet = unet
 
     def forward(self, sample, timestep, encoder_hidden_states, text_embeds, time_ids):
-        added_cond_kwargs = {"text_embeds": text_embeds, "time_ids": time_ids}
-        out = self.unet(
-            sample,
-            timestep,
+        return self.unet(
+            sample, timestep,
             encoder_hidden_states=encoder_hidden_states,
-            added_cond_kwargs=added_cond_kwargs,
+            added_cond_kwargs={"text_embeds": text_embeds, "time_ids": time_ids},
+        ).sample
+
+
+# ── Export pipeline ───────────────────────────────────────────────────────────
+
+def export_sdxl(model_file: str, output_dir: str) -> None:
+    check_dependencies(
+        required=["torch", "diffusers", "transformers", "onnx"],
+        optional=["onnxsim"],
+    )
+    check_model_file(model_file)
+    os.makedirs(output_dir, exist_ok=True)
+    patch_clip_for_tracing()
+
+    t_total = time.time()
+    print("Loading SDXL pipeline (fp32) ...")
+    # Load as fp32 — UNet and VAE are cast to fp16 individually before export
+    # to avoid a 10 GB fp32 ONNX intermediate.
+    pipe = StableDiffusionXLPipeline.from_single_file(model_file, torch_dtype=torch.float32)
+    pipe.enable_attention_slicing()
+
+    hidden_dim      = pipe.unet.config.cross_attention_dim  # 2048
+    pooled_dim      = 1280
+    latent_h, latent_w = 128, 128  # SDXL latent for 1024 px
+
+    # 1. CLIP-L text encoder ──────────────────────────────────────────────────
+    with export_step("1/4  Text encoder (CLIP-L)"):
+        clip_l = CLIPL_Wrapper(pipe.text_encoder).cpu().eval()
+        dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, SEQ_LEN), dtype=torch.int64)
+        onnx_export(
+            clip_l, (dummy_ids,),
+            os.path.join(output_dir, "text_encoder.onnx"),
+            input_names=["input_ids"],
+            output_names=["hidden_states"],
+            dynamic_axes={"input_ids": {0: "batch"}, "hidden_states": {0: "batch"}},
         )
-        return out.sample
+        free(clip_l, pipe.text_encoder, pipe.tokenizer)
+        pipe.text_encoder = None
 
-pipe.unet.to(torch.float16)
-unet_wrapper = UNetONNXWrapper(pipe.unet).cpu().eval()
+    # 2. OpenCLIP-G text encoder ──────────────────────────────────────────────
+    with export_step("2/4  Text encoder 2 (OpenCLIP-G)"):
+        clip_g = OpenCLIPG_Wrapper(pipe.text_encoder_2).cpu().eval()
+        dummy_ids_2 = torch.randint(0, pipe.tokenizer_2.vocab_size, (1, SEQ_LEN), dtype=torch.int64)
+        onnx_export(
+            clip_g, (dummy_ids_2,),
+            os.path.join(output_dir, "text_encoder_2.onnx"),
+            input_names=["input_ids"],
+            output_names=["hidden_states", "text_embeds"],
+            dynamic_axes={
+                "input_ids":     {0: "batch"},
+                "hidden_states": {0: "batch"},
+                "text_embeds":   {0: "batch"},
+            },
+        )
+        free(clip_g, pipe.text_encoder_2, pipe.tokenizer_2)
+        pipe.text_encoder_2 = None
 
-batch_size = 1
-latent_h, latent_w = 128, 128  # SDXL latent for 1024px
-hidden_size = pipe.unet.config.cross_attention_dim  # 2048
-pooled_text_dim = 1280
-num_time_ids = 6  # [orig_h, orig_w, crop_top, crop_left, target_h, target_w]
+    # 3. UNet ─────────────────────────────────────────────────────────────────
+    with export_step("3/4  UNet"):
+        pipe.unet.to(torch.float16)
+        unet = UNetWrapper(pipe.unet).cpu().eval()
+        dummy_latent   = torch.randn(1, 4, latent_h, latent_w, dtype=torch.float16)
+        dummy_timestep = torch.tensor([1], dtype=torch.float16)
+        dummy_embeds   = torch.randn(1, SEQ_LEN, hidden_dim, dtype=torch.float16)
+        dummy_pooled   = torch.zeros(1, pooled_dim, dtype=torch.float16)
+        dummy_time_ids = torch.zeros(1, 6, dtype=torch.float16)
+        unet_path = os.path.join(output_dir, "unet.onnx")
+        onnx_export(
+            unet, (dummy_latent, dummy_timestep, dummy_embeds, dummy_pooled, dummy_time_ids),
+            unet_path,
+            input_names=["latent", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"],
+            output_names=["latent_out"],
+            dynamic_axes={
+                "latent":                {0: "batch", 2: "height", 3: "width"},
+                "timestep":              {0: "batch"},
+                "encoder_hidden_states": {0: "batch"},
+                "text_embeds":           {0: "batch"},
+                "time_ids":              {0: "batch"},
+                "latent_out":            {0: "batch", 2: "height", 3: "width"},
+            },
+            do_constant_folding=False,  # must be False for fp16 UNet — see module docstring
+        )
+        fix_fp32_constants(unet_path)
+        free(unet, pipe.unet)
+        pipe.unet = None
 
-latent = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float16)
-timestep = torch.tensor([1], dtype=torch.float16)
-encoder_hidden_states = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float16)
-text_embeds = torch.zeros(batch_size, pooled_text_dim, dtype=torch.float16)
-time_ids = torch.zeros(batch_size, num_time_ids, dtype=torch.float16)
+    # 4. VAE decoder ──────────────────────────────────────────────────────────
+    with export_step("4/4  VAE decoder"):
+        pipe.vae.to(torch.float16)
+        vae = VAEDecoderWrapper(pipe.vae).cpu().eval()
+        dummy_latent_vae = torch.randn(1, 4, latent_h, latent_w, dtype=torch.float16)
+        vae_path = os.path.join(output_dir, "vae_decoder.onnx")
+        onnx_export(
+            vae, (dummy_latent_vae,), vae_path,
+            input_names=["latent"],
+            output_names=["image"],
+            dynamic_axes={
+                "latent": {0: "batch", 2: "height", 3: "width"},
+                "image":  {0: "batch", 2: "height", 3: "width"},
+            },
+            do_constant_folding=False,
+        )
+        fix_fp32_constants(vae_path)
+        simplify_with_onnxsim(vae_path)
+        free(vae, pipe.vae, pipe)
 
-unet_path = os.path.join(OUTPUT_DIR, "unet.onnx")
-torch.onnx.export(
-    unet_wrapper,
-    (latent, timestep, encoder_hidden_states, text_embeds, time_ids),
-    unet_path,
-    opset_version=18,
-    input_names=["latent", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"],
-    output_names=["latent_out"],
-    dynamic_axes={
-        "latent": {0: "batch", 2: "height", 3: "width"},
-        "timestep": {0: "batch"},
-        "encoder_hidden_states": {0: "batch"},
-        "text_embeds": {0: "batch"},
-        "time_ids": {0: "batch"},
-        "latent_out": {0: "batch", 2: "height", 3: "width"},
-    },
-    do_constant_folding=False,
-    keep_initializers_as_inputs=False,
-)
-print("✅ unet.onnx exported successfully (float16)")
-del unet_wrapper, pipe.unet
-gc.collect()
+    write_model_json(output_dir, "sdxl")
+    print(f"\n✅ All models exported to {output_dir}  "
+          f"(total: {time.time() - t_total:.0f}s)")
 
-fix_fp32_constants(unet_path)
-print("✅ unet.onnx ready")
 
-# ----------------------------
-# 4. VAE Decoder (exported directly as float16, same rationale as UNet)
-# ----------------------------
-class VAEWrapper(torch.nn.Module):
-    def __init__(self, vae):
-        super().__init__()
-        self.vae = vae
+# ── Entry point ───────────────────────────────────────────────────────────────
 
-    def forward(self, latent):
-        return self.vae.decode(latent / self.vae.config.scaling_factor).sample
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export SDXL to ONNX")
+    parser.add_argument("model_file", help="Path to the .safetensors checkpoint")
+    parser.add_argument("--name", help="Output directory name (default: checkpoint stem)")
+    parser.add_argument("--output-dir", help="Override output directory path")
+    return parser.parse_args()
 
-pipe.vae.to(torch.float16)
-vae_wrapper = VAEWrapper(pipe.vae).cpu().eval()
-dummy_latent_vae = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float16)
 
-vae_path = os.path.join(OUTPUT_DIR, "vae_decoder.onnx")
-torch.onnx.export(
-    vae_wrapper,
-    (dummy_latent_vae,),
-    vae_path,
-    opset_version=18,
-    input_names=["latent"],
-    output_names=["image"],
-    do_constant_folding=False,
-    keep_initializers_as_inputs=False,
-)
-print("✅ vae_decoder.onnx exported successfully (float16)")
-del vae_wrapper, pipe.vae, pipe
-gc.collect()
-
-fix_fp32_constants(vae_path)
-
-# Optional: simplify VAE ONNX (run after fp16 fixup)
-try:
-    import onnxsim
-    model = onnx.load(vae_path)
-    model_sim, ok = onnxsim.simplify(model)
-    if ok:
-        onnx.save(model_sim, vae_path)
-        print("✅ vae_decoder.onnx simplified with onnxsim")
-    else:
-        print("⚠  onnxsim simplification check failed, keeping original")
-except ImportError:
-    pass
-print("✅ vae_decoder.onnx ready")
-
-# ----------------------------
-# 5. model.json — tells the C++ runtime this is an SDXL model
-# ----------------------------
-with open(os.path.join(OUTPUT_DIR, "model.json"), "w") as f:
-    json.dump({"type": "sdxl"}, f)
-print("✅ model.json written")
+if __name__ == "__main__":
+    args = parse_args()
+    name = args.name or os.path.splitext(os.path.basename(args.model_file))[0]
+    out  = args.output_dir or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "models", name)
+    try:
+        export_sdxl(args.model_file, out)
+    except (FileNotFoundError, ImportError) as e:
+        print(f"\n❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        sys.exit(1)

@@ -70,10 +70,12 @@ static std::vector<VisualLine> computeLines(
 void ImageGeneratorView::render(sf::RenderWindow& win) {
     float y = static_cast<float>(PAD) * 2.f;
 
-    // Back button + title
+    // Back button + title + settings button
     btnBack = {LEFT_X, y, 80.f, 28.f};
     drawButton(win, btnBack, "< Back", Col::Panel2, Col::Muted, false, 12, font);
     drawTextC(win, font, "Image Generator", Col::GoldLt, cx, y + 5.f, 18, true);
+    btnSettings = {WIN_W - LEFT_X - 80.f, y, 80.f, 28.f};
+    drawButton(win, btnSettings, "Settings", Col::Panel2, Col::Muted, false, 12, font);
     y += 44.f;
 
     // Model selector
@@ -157,6 +159,15 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
         drawSlider(win, imagesSliderTrack, imagesNorm,
                    "Images", std::to_string(generationParams.numImages));
         y += 44.f;
+
+        // Seed input
+        drawText(win, font, "Seed:", Col::Muted, LEFT_X, y + 6.f, 12);
+        drawText(win, font, "(empty = random)", Col::Border, LEFT_X + 44.f, y + 6.f, 11);
+        constexpr float seedFieldW = 180.f;
+        constexpr float seedFieldH = 24.f;
+        seedField = {LEFT_X + sliderWidth - seedFieldW, y, seedFieldW, seedFieldH};
+        drawSingleLineField(win, seedField, seedInput, seedInputCursor, seedInputActive);
+        y += 34.f;
     }
 
     // Generate button
@@ -178,6 +189,9 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
 
     if (generating)
         drawGeneratingOverlay(win);
+
+    if (showSettings)
+        drawSettingsModal(win);
 }
 
 void ImageGeneratorView::drawPromptField(
@@ -301,4 +315,87 @@ void ImageGeneratorView::drawGeneratingOverlay(sf::RenderWindow& win) {
 
     btnCancelGenerate = {cx - 55.f, modalBox.top + modalHeight - 34.f, 110.f, 26.f};
     drawButton(win, btnCancelGenerate, "Cancel", Col::Panel2, Col::RedLt, false, 12, font);
+}
+
+void ImageGeneratorView::drawSingleLineField(sf::RenderWindow& win,
+                                              const sf::FloatRect& field,
+                                              const std::string& text,
+                                              int cursor, bool active) {
+    drawRect(win, field, Col::Panel, active ? Col::GoldLt : Col::Border, 1.f);
+
+    constexpr float     padX     = 6.f;
+    constexpr unsigned  fontSize = 13;
+    const float         textY    = field.top + (field.height - static_cast<float>(fontSize)) / 2.f - 1.f;
+    const float         maxW     = field.width - padX * 2.f;
+
+    // Compute pixel offset of cursor so it stays visible as text grows.
+    sf::Text measure;
+    measure.setFont(font);
+    measure.setCharacterSize(fontSize);
+    measure.setString(text.substr(0, static_cast<size_t>(cursor)));
+    const float cursorPx  = measure.getLocalBounds().width;
+    const float scrollX   = std::max(0.f, cursorPx - maxW);
+
+    sf::Text textObj;
+    textObj.setFont(font);
+    textObj.setCharacterSize(fontSize);
+    textObj.setFillColor(Col::Text);
+    textObj.setString(text);
+    textObj.setPosition(field.left + padX - scrollX, textY);
+    win.draw(textObj);
+
+    if (active) {
+        sf::RectangleShape cur({1.f, static_cast<float>(fontSize) + 3.f});
+        cur.setFillColor(Col::GoldLt);
+        cur.setPosition(field.left + padX + cursorPx - scrollX, textY);
+        win.draw(cur);
+    }
+}
+
+void ImageGeneratorView::drawSettingsModal(sf::RenderWindow& win) {
+    // Dim the background
+    sf::RectangleShape overlay({static_cast<float>(WIN_W), static_cast<float>(WIN_H)});
+    overlay.setFillColor(Col::Overlay);
+    win.draw(overlay);
+
+    // Modal panel
+    constexpr float boxW = 560.f, boxH = 234.f;
+    const float boxX = (WIN_W - boxW) / 2.f;
+    const float boxY = (WIN_H - boxH) / 2.f;
+    drawRect(win, {boxX, boxY, boxW, boxH}, Col::Panel2, Col::BorderHi, 2.f);
+    drawTextC(win, font, "Settings", Col::GoldLt, WIN_W / 2.f, boxY + 14.f, 15, true);
+
+    constexpr float padX    = 20.f;
+    constexpr float labelW  = 140.f;
+    constexpr float browseW = 38.f;
+    constexpr float browseGap = 4.f;
+    constexpr float fieldW  = 318.f;   // 360 - browseW - browseGap
+    constexpr float fieldH  = 26.f;
+    const float     fieldX  = boxX + padX + labelW;
+
+    // Row 1: model directory
+    float rowY = boxY + 52.f;
+    drawText(win, font, "Model directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    settingsModelDirField = {fieldX, rowY, fieldW, fieldH};
+    drawSingleLineField(win, settingsModelDirField, settingsModelDir,
+                        settingsModelDirCursor, settingsModelDirActive);
+    settingsBtnBrowseModel = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
+    drawButton(win, settingsBtnBrowseModel, "...", Col::Panel2, Col::Muted, false, 12, font);
+
+    // Row 2: output directory
+    rowY += 48.f;
+    drawText(win, font, "Output directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    settingsOutputDirField = {fieldX, rowY, fieldW, fieldH};
+    drawSingleLineField(win, settingsOutputDirField, settingsOutputDir,
+                        settingsOutputDirCursor, settingsOutputDirActive);
+    settingsBtnBrowseOutput = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
+    drawButton(win, settingsBtnBrowseOutput, "...", Col::Panel2, Col::Muted, false, 12, font);
+
+    // Buttons
+    constexpr float btnW = 100.f, btnH = 28.f;
+    const float btnY = boxY + boxH - btnH - 16.f;
+    settingsBtnCancel = {fieldX + fieldW - btnW * 2.f - 8.f, btnY, btnW, btnH};
+    settingsBtnSave   = {fieldX + fieldW - btnW,              btnY, btnW, btnH};
+    drawButton(win, settingsBtnCancel, "Cancel", Col::Panel2, Col::Muted,  false, 12, font);
+    drawButton(win, settingsBtnSave,   "Save",   Col::Panel,  Col::GoldLt, false, 12, font);
 }
