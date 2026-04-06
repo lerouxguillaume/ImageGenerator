@@ -81,8 +81,9 @@ public:
     sf::FloatRect btnBack;
     sf::FloatRect btnAdvanced;
     sf::FloatRect btnCancelGenerate;
-    sf::FloatRect btnModelPrev;
-    sf::FloatRect btnModelNext;
+    sf::FloatRect btnModelDropdown;
+    std::vector<sf::FloatRect> modelDropdownItems; // one per availableModels entry
+    bool          showModelDropdown = false;
     sf::FloatRect btnResolutionPrev;
     sf::FloatRect btnResolutionNext;
     sf::FloatRect stepsSliderTrack;

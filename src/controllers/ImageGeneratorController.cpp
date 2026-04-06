@@ -13,8 +13,59 @@
 
 // ── Folder browser ───────────────────────────────────────────────────────────
 
-// Opens a native folder-picker dialog (zenity) and returns the chosen path,
-// or an empty string if the user cancelled. Blocks until the dialog closes.
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shlobj.h>
+
+// Callback that pre-selects the initial folder in the dialog.
+static int CALLBACK browseCb(HWND hwnd, UINT msg, LPARAM, LPARAM data) {
+    if (msg == BFFM_INITIALIZED && data)
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
+    return 0;
+}
+
+// Opens the native Windows folder-picker dialog.
+// Runs on a background thread — CoInitialize is called per-thread.
+static std::string browseForFolder(const std::string& startPath) {
+    CoInitialize(nullptr);
+
+    // Convert startPath (UTF-8) to wide string for the callback.
+    std::wstring wStart;
+    if (!startPath.empty()) {
+        int n = MultiByteToWideChar(CP_UTF8, 0, startPath.c_str(), -1, nullptr, 0);
+        wStart.resize(n - 1);
+        MultiByteToWideChar(CP_UTF8, 0, startPath.c_str(), -1, &wStart[0], n);
+    }
+
+    BROWSEINFOW bi  = {};
+    bi.ulFlags      = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    bi.lpszTitle    = L"Select folder";
+    bi.lpfn         = browseCb;
+    bi.lParam       = wStart.empty() ? 0 : reinterpret_cast<LPARAM>(wStart.c_str());
+
+    std::string result;
+    PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+    if (pidl) {
+        wchar_t path[MAX_PATH] = {};
+        if (SHGetPathFromIDListW(pidl, path)) {
+            int len = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
+            if (len > 1) {
+                result.resize(len - 1);
+                WideCharToMultiByte(CP_UTF8, 0, path, -1, &result[0], len, nullptr, nullptr);
+            }
+        }
+        CoTaskMemFree(pidl);
+    }
+
+    CoUninitialize();
+    return result;
+}
+
+#else
+
+// Opens a folder-picker dialog via zenity (Linux/macOS).
 static std::string browseForFolder(const std::string& startPath) {
     std::string cmd = "zenity --file-selection --directory --title='Select folder'";
     if (!startPath.empty())
@@ -31,6 +82,8 @@ static std::string browseForFolder(const std::string& startPath) {
         result.pop_back();
     return result;
 }
+
+#endif
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -61,9 +114,10 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
                                             ImageGeneratorView& view, AppScreen& appScreen) {
     if (e.type == sf::Event::Closed) win.close();
 
-    // Escape: close settings modal if open, else navigate to menu.
+    // Escape: close dropdowns/modals in order, or navigate to menu.
     if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Escape) {
-        if (view.showSettings) { view.showSettings = false; return; }
+        if (view.showSettings)     { view.showSettings = false;     return; }
+        if (view.showModelDropdown){ view.showModelDropdown = false; return; }
         appScreen = AppScreen::MENU;
     }
 
@@ -371,6 +425,24 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         return;
     }
 
+    // Model dropdown must be checked before all other hit rects because the
+    // open list renders on top and may overlap elements further down the page.
+    if (view.btnModelDropdown.contains(pos)) {
+        view.showModelDropdown = !view.showModelDropdown;
+        return;
+    }
+    if (view.showModelDropdown) {
+        for (int i = 0; i < static_cast<int>(view.modelDropdownItems.size()); ++i) {
+            if (view.modelDropdownItems[static_cast<size_t>(i)].contains(pos)) {
+                view.selectedModelIdx  = i;
+                view.showModelDropdown = false;
+                return;
+            }
+        }
+        view.showModelDropdown = false; // click outside closes it
+        return;
+    }
+
     if (view.btnSettings.contains(pos)) {
         openSettings(view);
         return;
@@ -403,18 +475,6 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
     if (view.btnAdvanced.contains(pos)) {
         presenter.toggleAdvanced(view);
         return;
-    }
-
-    if (!view.availableModels.empty()) {
-        if (view.btnModelPrev.contains(pos)) {
-            view.selectedModelIdx = (view.selectedModelIdx - 1 + static_cast<int>(view.availableModels.size()))
-                                    % static_cast<int>(view.availableModels.size());
-            return;
-        }
-        if (view.btnModelNext.contains(pos)) {
-            view.selectedModelIdx = (view.selectedModelIdx + 1) % static_cast<int>(view.availableModels.size());
-            return;
-        }
     }
 
     if (view.btnResolutionPrev.contains(pos)) {

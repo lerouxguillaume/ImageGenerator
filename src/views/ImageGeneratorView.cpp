@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 
 using namespace Helpers;
 
@@ -78,20 +79,16 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     drawButton(win, btnSettings, "Settings", Col::Panel2, Col::Muted, false, 12, font);
     y += 44.f;
 
-    // Model selector
+    // Model selector (dropdown)
     {
-        constexpr float arrowW = 24.f;
-        constexpr float arrowH = 22.f;
-        const std::string modelName = availableModels.empty()
+        const std::string displayName = availableModels.empty()
             ? "(no models found)"
-            : availableModels[selectedModelIdx];
+            : std::filesystem::path(availableModels[selectedModelIdx]).filename().string();
+        const std::string label = displayName + (showModelDropdown ? "  ^" : "  v");
         drawText(win, font, "Model:", Col::Muted, LEFT_X, y + 4.f, 12);
-        const float arrowX = LEFT_X + 60.f;
-        btnModelPrev = {arrowX, y, arrowW, arrowH};
-        drawButton(win, btnModelPrev, "<", Col::Panel2, Col::Muted, false, 12, font);
-        drawText(win, font, modelName, Col::Text, arrowX + arrowW + 8.f, y + 4.f, 12);
-        btnModelNext = {arrowX + arrowW + 8.f + 200.f, y, arrowW, arrowH};
-        drawButton(win, btnModelNext, ">", Col::Panel2, Col::Muted, false, 12, font);
+        btnModelDropdown = {LEFT_X + 60.f, y, 300.f, 22.f};
+        drawButton(win, btnModelDropdown, label, Col::Panel2,
+                   showModelDropdown ? Col::GoldLt : Col::Text, false, 12, font);
     }
     y += 28.f;
 
@@ -185,6 +182,33 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
                         imgSize / static_cast<float>(texSize.y));
         sprite.setPosition(imgX, y);
         win.draw(sprite);
+    }
+
+    // Model dropdown list (drawn on top of all other UI)
+    if (showModelDropdown && !availableModels.empty()) {
+        constexpr float itemH   = 22.f;
+        constexpr float listPad = 2.f;
+        const float listX = btnModelDropdown.left;
+        const float listW = btnModelDropdown.width;
+        const float listY = btnModelDropdown.top + btnModelDropdown.height + 2.f;
+        const int   count = static_cast<int>(availableModels.size());
+        const float listH = listPad * 2.f + itemH * static_cast<float>(count);
+
+        drawRect(win, {listX, listY, listW, listH}, Col::Panel2, Col::BorderHi, 1.f);
+
+        modelDropdownItems.resize(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            const float itemY = listY + listPad + static_cast<float>(i) * itemH;
+            modelDropdownItems[static_cast<size_t>(i)] = {listX, itemY, listW, itemH};
+            const bool selected = (i == selectedModelIdx);
+            if (selected)
+                drawRect(win, modelDropdownItems[static_cast<size_t>(i)], Col::Panel);
+            const std::string name =
+                std::filesystem::path(availableModels[static_cast<size_t>(i)]).filename().string();
+            drawText(win, font, name,
+                     selected ? Col::GoldLt : Col::Text,
+                     listX + 6.f, itemY + 4.f, 12);
+        }
     }
 
     if (generating)
