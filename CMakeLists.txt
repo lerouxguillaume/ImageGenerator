@@ -135,6 +135,14 @@ if(WIN32)
     target_link_libraries(image_generator shell32 ole32)
 endif()
 
+# Copy default config.json next to the binary only when none exists there yet,
+# so user-edited configs are never overwritten by a rebuild.
+add_custom_command(TARGET image_generator POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC="${CMAKE_SOURCE_DIR}/config.json"
+        -DDST="$<TARGET_FILE_DIR:image_generator>/config.json"
+        -P "${CMAKE_SOURCE_DIR}/cmake/copy_default_config.cmake")
+
 # Copy portrait models (ONNX + tokenizer files) next to the binary
 add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
