@@ -108,14 +108,32 @@ inline PromptBuilder buildNegativePrompt(const Race& race, const Gender gender) 
     neg.add("worst quality",     1.3f);
     neg.add("low quality",       1.2f);
     neg.add("blurry",            1.2f);
-    neg.add("bad anatomy",       1.3f);
-    neg.add("deformed",          1.3f);
-    neg.add("extra limbs",       1.2f);
-    neg.add("poorly drawn face", 1.2f);
-    neg.add("ugly",              1.1f);
     neg.add("artifacts",         1.1f);
+    neg.add("ugly",              1.1f);
+    neg.add("poorly drawn face", 1.2f);
 
-    // Anti-fullbody
+    // Anatomy — hands and arms are the most common failure mode
+    neg.add("bad anatomy",            1.4f);
+    neg.add("bad hands",              1.4f);
+    neg.add("extra fingers",          1.4f);
+    neg.add("missing fingers",        1.3f);
+    neg.add("fused fingers",          1.3f);
+    neg.add("too many fingers",       1.3f);
+    neg.add("mutated hands",          1.3f);
+    neg.add("poorly drawn hands",     1.3f);
+    neg.add("extra arms",             1.3f);
+    neg.add("missing arms",           1.3f);
+    neg.add("extra limbs",            1.3f);
+    neg.add("missing limbs",          1.2f);
+    neg.add("malformed limbs",        1.3f);
+    neg.add("disconnected limbs",     1.2f);
+    neg.add("floating limbs",         1.2f);
+    neg.add("deformed",               1.3f);
+    neg.add("mutation",               1.2f);
+    neg.add("gross proportions",      1.2f);
+    neg.add("long neck",              1.1f);
+
+    // Anti-fullbody (reduces chance of showing hands at all)
     neg.add("full body",       1.2f);
     neg.add("full-body shot",  1.1f);
 

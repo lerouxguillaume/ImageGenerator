@@ -25,9 +25,14 @@ private:
     // Persist edits from the view fields back to config and close the modal.
     void saveSettings(ImageGeneratorView& view);
 
+    // Apply the active model's defaults (falling back to global config defaults).
+    void applyModelDefaults(ImageGeneratorView& view);
+
     AppConfig               config;
     ImageGeneratorPresenter presenter;
-    bool                    modelsDirty = true; // triggers model rescan in update()
+    bool                    modelsDirty      = true;  // triggers model rescan in update()
+    bool                    viewInitialized  = false; // apply config defaults on first update()
+    int                     lastModelIdx     = -1;    // detect model selection changes
 
     // Async folder browser (zenity runs on a thread; result polled in update())
     std::future<std::string> browseFuture;

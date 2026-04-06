@@ -1,12 +1,43 @@
 #pragma once
+#include <map>
 #include <string>
+
+// Per-model overrides. Any field left at its zero value falls back to the
+// corresponding global default in AppConfig.
+struct ModelDefaults {
+    std::string positivePrompt;       // empty  → use global default
+    std::string negativePrompt;       // empty  → use global default
+    int         numSteps      = 0;    // 0      → use global default
+    float       guidanceScale = 0.f;  // 0      → use global default
+};
 
 // Persisted application settings. Saved to / loaded from config.json in the
 // working directory. All paths are relative to the working directory unless
 // the user enters an absolute path.
 struct AppConfig {
-    std::string modelBaseDir = "models";          // Root directory scanned for model subdirectories
+    std::string modelBaseDir = "models";           // Root directory scanned for model subdirectories
     std::string outputDir    = "assets/generated"; // Directory where generated images are written
+
+    // Generation defaults — applied when the image generator screen first opens.
+    // Edit config.json to change them permanently; the sliders/fields stay editable per-session.
+    std::string defaultPositivePrompt =
+        "masterpiece, best quality, highly detailed, 1girl, beautiful face, "
+        "fantasy character, portrait, upper body, solo, cinematic lighting";
+
+    std::string defaultNegativePrompt =
+        "worst quality, low quality, bad anatomy, bad hands, extra fingers, "
+        "missing fingers, fused fingers, too many fingers, mutated hands, "
+        "poorly drawn hands, extra arms, missing arms, extra limbs, "
+        "malformed limbs, disconnected limbs, floating limbs, deformed, "
+        "mutation, gross proportions, long neck, ugly, blurry, artifacts, "
+        "watermark, signature";
+
+    int   defaultNumSteps      = 25;
+    float defaultGuidanceScale = 7.0f;
+
+    // Per-model overrides, keyed by model folder name (e.g. "anything_v5").
+    // Missing fields fall back to the global defaults above.
+    std::map<std::string, ModelDefaults> modelConfigs;
 
     // Load from configPath. Returns defaults silently if the file is absent or malformed.
     static AppConfig load(const std::string& configPath = "config.json");

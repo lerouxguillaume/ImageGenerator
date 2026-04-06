@@ -85,6 +85,34 @@ static std::string browseForFolder(const std::string& startPath) {
 
 #endif
 
+// ── Model defaults ────────────────────────────────────────────────────────────
+
+void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
+    // Resolve per-model overrides, falling back to global config defaults.
+    const ModelDefaults* md = nullptr;
+    if (!view.availableModels.empty()) {
+        const std::string name = std::filesystem::path(
+            view.availableModels[static_cast<size_t>(view.selectedModelIdx)]).filename().string();
+        const auto it = config.modelConfigs.find(name);
+        if (it != config.modelConfigs.end())
+            md = &it->second;
+    }
+
+    view.positivePrompt = (md && !md->positivePrompt.empty())
+        ? md->positivePrompt : config.defaultPositivePrompt;
+    view.positiveCursor = static_cast<int>(view.positivePrompt.size());
+
+    view.negativePrompt = (md && !md->negativePrompt.empty())
+        ? md->negativePrompt : config.defaultNegativePrompt;
+    view.negativeCursor = static_cast<int>(view.negativePrompt.size());
+
+    view.generationParams.numSteps = (md && md->numSteps > 0)
+        ? md->numSteps : config.defaultNumSteps;
+
+    view.generationParams.guidanceScale = (md && md->guidanceScale > 0.f)
+        ? md->guidanceScale : config.defaultGuidanceScale;
+}
+
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
 void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
@@ -337,6 +365,13 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 }
 
 void ImageGeneratorController::update(ImageGeneratorView& view) {
+    // Apply defaults on first open, and whenever the selected model changes.
+    if (!viewInitialized || view.selectedModelIdx != lastModelIdx) {
+        applyModelDefaults(view);
+        lastModelIdx    = view.selectedModelIdx;
+        viewInitialized = true;
+    }
+
     // Apply async browse result when zenity finishes.
     if (browseFuture.valid() &&
         browseFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
