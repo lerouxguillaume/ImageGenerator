@@ -41,7 +41,30 @@ file(GLOB_RECURSE SOURCES
         "src/*.h"
 )
 
-add_executable(image_generator ${SOURCES})
+# Embed the application icon.
+# Generate all icon assets first with:  python scripts/generate_icon.py
+if(WIN32)
+    # Embeds icon into the .exe via windres.
+    list(APPEND SOURCES resources/app.rc)
+    set_source_files_properties(resources/app.rc PROPERTIES
+        COMPILE_FLAGS "--include-dir \"${CMAKE_SOURCE_DIR}/assets\"")
+elseif(APPLE)
+    # Bundle the .icns and declare it as the app icon.
+    set(MACOSX_BUNDLE_ICON_FILE icon.icns)
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/icon.icns" PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources)
+    list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/assets/icon.icns")
+endif()
+
+if(APPLE)
+    add_executable(image_generator MACOSX_BUNDLE ${SOURCES})
+    set_target_properties(image_generator PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME      "GuildMaster"
+        MACOSX_BUNDLE_GUI_IDENTIFIER   "com.guildmaster.app"
+        MACOSX_BUNDLE_ICON_FILE        "icon.icns")
+else()
+    add_executable(image_generator ${SOURCES})
+endif()
 
 if(USE_CUDA)
     target_compile_definitions(image_generator PRIVATE USE_CUDA)
@@ -105,6 +128,12 @@ target_link_libraries(image_generator
     ${ONNXRUNTIME_LIB}
     ${OpenCV_LIBS}
 )
+
+if(WIN32)
+    # shell32: SHBrowseForFolder / SHGetPathFromIDList
+    # ole32:   CoInitialize / CoUninitialize / CoTaskMemFree
+    target_link_libraries(image_generator shell32 ole32)
+endif()
 
 # Copy portrait models (ONNX + tokenizer files) next to the binary
 add_custom_command(TARGET image_generator POST_BUILD

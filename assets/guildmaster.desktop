@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GuildMaster
+Comment=AI-powered fantasy guild manager
+Exec=/home/guillaume/Documents/image_generator/scripts/image_generator
+Icon=/home/guillaume/Documents/image_generator/scripts/assets/icon.png
+Categories=Game;
+Terminal=false

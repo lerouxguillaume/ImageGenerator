@@ -1,0 +1,4 @@
+// Windows resource file — embeds the application icon into the .exe.
+// windres is invoked by CMake with --include-dir pointing to assets/,
+// so "icon.ico" resolves to assets/icon.ico at build time.
+1 ICON "icon.ico"
