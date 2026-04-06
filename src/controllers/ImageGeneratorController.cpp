@@ -215,6 +215,16 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         }
     }
 
+    if (view.btnResolutionPrev.contains(pos)) {
+        view.selectedResolutionIdx = (view.selectedResolutionIdx - 1 + ImageGeneratorView::kNumResolutions)
+                                     % ImageGeneratorView::kNumResolutions;
+        return;
+    }
+    if (view.btnResolutionNext.contains(pos)) {
+        view.selectedResolutionIdx = (view.selectedResolutionIdx + 1) % ImageGeneratorView::kNumResolutions;
+        return;
+    }
+
     if (view.showAdvancedParams) {
         if (view.stepsSliderTrack.contains(pos)) {
             view.draggingSlider = DraggingSlider::Steps;
@@ -241,7 +251,10 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         const std::string prompt      = view.positivePrompt;
         const std::string negPrompt   = view.negativePrompt;
         const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
-        const GenerationParams params = view.generationParams;
+        GenerationParams params = view.generationParams;
+        const auto [rw, rh] = ImageGeneratorView::kResolutions[view.selectedResolutionIdx];
+        params.width  = rw;
+        params.height = rh;
         const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
         std::atomic<bool>* done       = &view.generationDone;
         std::atomic<int>*  step       = &view.generationStep;

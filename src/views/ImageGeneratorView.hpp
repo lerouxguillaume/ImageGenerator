@@ -56,6 +56,18 @@ public:
     std::vector<std::string> availableModels; // Populated at screen init from the models/ directory
     int selectedModelIdx = 0;
 
+    // ── Resolution selection ──────────────────────────────────────────────────
+    // Common SD resolutions (width, height). Index 0 is the default (512×512).
+    // The user can cycle through these; the selected dimensions are injected into
+    // GenerationParams.width/height before launching the pipeline.
+    static constexpr std::pair<int,int> kResolutions[] = {
+        {512,  512},
+        {768,  768},
+        {1024, 1024},
+    };
+    static constexpr int kNumResolutions = 3;
+    int selectedResolutionIdx = 0;
+
     // ── Hit rects (written during render, read by controller) ─────────────────
     // Laid out by render(); the controller checks mouse positions against these.
     sf::FloatRect positiveField;
@@ -66,6 +78,8 @@ public:
     sf::FloatRect btnCancelGenerate;
     sf::FloatRect btnModelPrev;
     sf::FloatRect btnModelNext;
+    sf::FloatRect btnResolutionPrev;
+    sf::FloatRect btnResolutionNext;
     sf::FloatRect stepsSliderTrack;
     sf::FloatRect cfgSliderTrack;
     sf::FloatRect imagesSliderTrack;

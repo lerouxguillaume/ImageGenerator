@@ -876,7 +876,9 @@ namespace {
         Logger::info("Output base: " + outputPath);
         std::filesystem::create_directories("assets/generated");
 
-        const ModelConfig cfg = loadModelConfig(modelDir);
+        ModelConfig cfg = loadModelConfig(modelDir);
+        if (params.width  > 0) cfg.image_w = params.width;
+        if (params.height > 0) cfg.image_h = params.height;
         const int num_steps  = params.numSteps;
         const int num_images = params.numImages;
 

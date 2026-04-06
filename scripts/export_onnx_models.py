@@ -5,7 +5,7 @@ import os
 # ----------------------------
 # Paths
 # ----------------------------
-MODEL_NAME = "babes_3"
+MODEL_NAME = "novelaiDiffusionV2_novelaiV2"
 MODEL_FILE = f"./{MODEL_NAME}.safetensors"
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", MODEL_NAME)
 os.makedirs(OUTPUT_DIR, exist_ok=True)

@@ -1,6 +1,7 @@
 import gc
 import os
 import json
+import numpy as np
 import torch
 import onnx
 from diffusers import StableDiffusionXLPipeline
@@ -14,12 +15,15 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----------------------------
-# Load SDXL (float32 for stable torch.onnx.export)
+# Load SDXL.
 # Text encoders stay float32 for accuracy.
-# UNet and VAE are exported as float32 then post-converted to float16 via
-# onnxconverter_common, which handles mixed-precision constants correctly —
-# torch.onnx.export with fp16 inputs leaves some internal constants as float32
-# (e.g. time-embedding scalars, GroupNorm eps), causing Concat type errors in ORT.
+# UNet and VAE are loaded as float32 then converted to float16 in PyTorch
+# before export — this avoids creating a 10 GB fp32 ONNX intermediate that
+# would require ~15 GB RAM to post-convert with onnxconverter_common.
+# After the fp16 export, to_fp16_onnx() is still run to fix the small number
+# of fp32 scalar constants that torch.onnx.export leaves in the graph
+# (e.g. time-embedding scalars, GroupNorm eps) — these cause Concat type
+# errors in ORT if left as fp32 in an otherwise fp16 graph.
 # ----------------------------
 pipe = StableDiffusionXLPipeline.from_single_file(MODEL_FILE, torch_dtype=torch.float32)
 pipe.enable_attention_slicing()
@@ -31,21 +35,36 @@ pipe.vae.to(torch.float32).eval()
 seq_len = 77
 
 
-def to_fp16_onnx(path: str) -> None:
-    """Post-convert an ONNX model from float32 to float16 in-place.
+def fix_fp32_constants(path: str) -> None:
+    """Convert any remaining float32 constants to float16, running in a subprocess.
 
-    Uses onnxconverter_common which handles mixed-precision graphs correctly.
-    Falls back silently if the package is not installed (model stays float32).
+    Loading a large ONNX proto in the main process doubles peak RAM (protobuf
+    expands to ~2× the file size in memory). Running in a subprocess gives the
+    loader a clean heap so the main process heap is unaffected.
     """
-    try:
-        from onnxconverter_common import float16
+    import subprocess, sys, textwrap
+    script = textwrap.dedent(f"""
+        import onnx, numpy as np
+        from onnx import numpy_helper, TensorProto
+        path = {repr(path)}
         model = onnx.load(path)
-        model_fp16 = float16.convert_float_to_float16(model, keep_io_types=False)
-        onnx.save(model_fp16, path)
-        print(f"  → converted to float16")
-    except ImportError:
-        print("  ⚠ onnxconverter_common not installed — model stays float32")
-        print("    Install with: pip install onnxconverter-common")
+        changed = 0
+        for init in model.graph.initializer:
+            if init.data_type == TensorProto.FLOAT:
+                arr = numpy_helper.to_array(init).astype(np.float16)
+                init.CopyFrom(numpy_helper.from_array(arr, init.name))
+                changed += 1
+        for node in model.graph.node:
+            if node.op_type == "Constant":
+                for attr in node.attribute:
+                    if attr.HasField("t") and attr.t.data_type == TensorProto.FLOAT:
+                        arr = numpy_helper.to_array(attr.t).astype(np.float16)
+                        attr.t.CopyFrom(numpy_helper.from_array(arr))
+                        changed += 1
+        onnx.save(model, path)
+        print(f"  → fixed {{changed}} fp32 constant(s) to float16")
+    """)
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 # ----------------------------
@@ -80,6 +99,8 @@ torch.onnx.export(
     keep_initializers_as_inputs=False,
 )
 print("✅ text_encoder.onnx (CLIP-L) exported successfully")
+del clip_l, pipe.text_encoder, pipe.tokenizer
+gc.collect()
 
 # ----------------------------
 # 2. Text Encoder 2 (OpenCLIP-G → hidden states [1, 77, 1280] + pooled [1, 1280])
@@ -117,9 +138,13 @@ torch.onnx.export(
     keep_initializers_as_inputs=False,
 )
 print("✅ text_encoder_2.onnx (OpenCLIP-G) exported successfully")
+del clip_g, pipe.text_encoder_2, pipe.tokenizer_2
+gc.collect()
 
 # ----------------------------
-# 3. UNet (exported as float32, post-converted to float16)
+# 3. UNet (exported directly as float16 to avoid a 10 GB fp32 intermediate)
+#    to_fp16_onnx() is called afterwards to fix the few remaining fp32 scalar
+#    constants emitted by the tracer — a cheap operation on an already-fp16 file.
 # ----------------------------
 class UNetONNXWrapper(torch.nn.Module):
     def __init__(self, unet):
@@ -136,6 +161,7 @@ class UNetONNXWrapper(torch.nn.Module):
         )
         return out.sample
 
+pipe.unet.to(torch.float16)
 unet_wrapper = UNetONNXWrapper(pipe.unet).cpu().eval()
 
 batch_size = 1
@@ -144,11 +170,11 @@ hidden_size = pipe.unet.config.cross_attention_dim  # 2048
 pooled_text_dim = 1280
 num_time_ids = 6  # [orig_h, orig_w, crop_top, crop_left, target_h, target_w]
 
-latent = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float32)
-timestep = torch.tensor([1], dtype=torch.float32)
-encoder_hidden_states = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float32)
-text_embeds = torch.zeros(batch_size, pooled_text_dim, dtype=torch.float32)
-time_ids = torch.zeros(batch_size, num_time_ids, dtype=torch.float32)
+latent = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float16)
+timestep = torch.tensor([1], dtype=torch.float16)
+encoder_hidden_states = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float16)
+text_embeds = torch.zeros(batch_size, pooled_text_dim, dtype=torch.float16)
+time_ids = torch.zeros(batch_size, num_time_ids, dtype=torch.float16)
 
 unet_path = os.path.join(OUTPUT_DIR, "unet.onnx")
 torch.onnx.export(
@@ -166,13 +192,18 @@ torch.onnx.export(
         "time_ids": {0: "batch"},
         "latent_out": {0: "batch", 2: "height", 3: "width"},
     },
-    do_constant_folding=True,
+    do_constant_folding=False,
     keep_initializers_as_inputs=False,
 )
-print("✅ unet.onnx exported successfully (float32)")
+print("✅ unet.onnx exported successfully (float16)")
+del unet_wrapper, pipe.unet
+gc.collect()
+
+fix_fp32_constants(unet_path)
+print("✅ unet.onnx ready")
 
 # ----------------------------
-# 4. VAE Decoder (exported as float32, post-converted to float16)
+# 4. VAE Decoder (exported directly as float16, same rationale as UNet)
 # ----------------------------
 class VAEWrapper(torch.nn.Module):
     def __init__(self, vae):
@@ -182,8 +213,9 @@ class VAEWrapper(torch.nn.Module):
     def forward(self, latent):
         return self.vae.decode(latent / self.vae.config.scaling_factor).sample
 
+pipe.vae.to(torch.float16)
 vae_wrapper = VAEWrapper(pipe.vae).cpu().eval()
-dummy_latent_vae = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float32)
+dummy_latent_vae = torch.randn(batch_size, 4, latent_h, latent_w, dtype=torch.float16)
 
 vae_path = os.path.join(OUTPUT_DIR, "vae_decoder.onnx")
 torch.onnx.export(
@@ -193,26 +225,16 @@ torch.onnx.export(
     opset_version=18,
     input_names=["latent"],
     output_names=["image"],
-    do_constant_folding=True,
+    do_constant_folding=False,
     keep_initializers_as_inputs=False,
 )
-print("✅ vae_decoder.onnx exported successfully (float32)")
-
-# ----------------------------
-# Free PyTorch models before fp16 conversion to avoid OOM.
-# The SDXL UNet alone is ~5 GB as fp32 ONNX; loading it while
-# the pipe is still alive pushes RAM over the OOM killer threshold.
-# ----------------------------
-del pipe, unet_wrapper, vae_wrapper, clip_l, clip_g
+print("✅ vae_decoder.onnx exported successfully (float16)")
+del vae_wrapper, pipe.vae, pipe
 gc.collect()
-print("PyTorch models freed — starting fp16 conversion")
 
-to_fp16_onnx(unet_path)
-print("✅ unet.onnx ready")
+fix_fp32_constants(vae_path)
 
-to_fp16_onnx(vae_path)
-
-# Optional: simplify VAE ONNX (run after fp16 conversion)
+# Optional: simplify VAE ONNX (run after fp16 fixup)
 try:
     import onnxsim
     model = onnx.load(vae_path)

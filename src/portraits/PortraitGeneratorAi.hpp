@@ -9,6 +9,8 @@ struct GenerationParams {
     int   numSteps      = 20;   // DPM++ 2M Karras denoising steps (more = better quality, slower)
     float guidanceScale = 8.0f; // CFG scale: how strongly the prompt steers the output (7–12 typical)
     int   numImages     = 1;    // Number of images to generate sequentially in one pipeline run
+    int   width         = 0;    // Output width in pixels; 0 = use model default (512 for SD1.5, 1024 for SDXL)
+    int   height        = 0;    // Output height in pixels; 0 = use model default
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).
@@ -18,7 +20,7 @@ class PortraitGeneratorAi {
 public:
     // Generate a character portrait for the given race/gender combination.
     // Builds the prompt automatically from PromptBuilder and saves to assets/generated/.
-    // progressStep: if non-null, incremented after each denoising step (for progress bars).
+    // progressStep: if non-null, incremented after each denoising step (for progress bars).Exporting the SDX
     static void generatePortrait(const Race race,
                                  const Gender gender,
                                  const GenerationParams& params,
