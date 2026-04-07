@@ -113,27 +113,54 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
         ? md->guidanceScale : config.defaultGuidanceScale;
 }
 
+// ── LLM async load ────────────────────────────────────────────────────────────
+
+void ImageGeneratorController::startLlmLoad(const std::string& modelDir) {
+    llmLoadFuture = std::async(std::launch::async,
+        [modelDir]() -> std::unique_ptr<IPromptEnhancer> {
+            return PromptEnhancerFactory::create(true, modelDir);
+        });
+}
+
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
 void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
-    view.settingsModelDir         = config.modelBaseDir;
-    view.settingsOutputDir        = config.outputDir;
-    view.settingsModelDirCursor   = static_cast<int>(config.modelBaseDir.size());
-    view.settingsOutputDirCursor  = static_cast<int>(config.outputDir.size());
-    view.settingsModelDirActive   = true;
-    view.settingsOutputDirActive  = false;
-    view.showSettings             = true;
+    view.settingsModelDir             = config.modelBaseDir;
+    view.settingsOutputDir            = config.outputDir;
+    view.settingsLlmModelDir          = config.promptEnhancer.modelDir;
+    view.settingsModelDirCursor       = static_cast<int>(config.modelBaseDir.size());
+    view.settingsOutputDirCursor      = static_cast<int>(config.outputDir.size());
+    view.settingsLlmModelDirCursor    = static_cast<int>(config.promptEnhancer.modelDir.size());
+    view.settingsModelDirActive       = true;
+    view.settingsOutputDirActive      = false;
+    view.settingsLlmModelDirActive    = false;
+    view.showSettings                 = true;
 }
 
 void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     config.modelBaseDir = view.settingsModelDir;
     config.outputDir    = view.settingsOutputDir;
+
+    const std::string newLlmDir = view.settingsLlmModelDir;
+    const bool llmDirChanged    = (newLlmDir != config.promptEnhancer.modelDir);
+    config.promptEnhancer.modelDir = newLlmDir;
+    config.promptEnhancer.enabled  = !newLlmDir.empty();
     config.save();
+
     view.showSettings = false;
+
     // Trigger a model rescan with the new base directory.
     view.availableModels.clear();
     view.selectedModelIdx = 0;
     modelsDirty = true;
+
+    // Reload the LLM if its directory changed.
+    if (llmDirChanged) {
+        enhancer = std::make_unique<NullPromptEnhancer>();
+        view.promptEnhancerAvailable = false;
+        if (!newLlmDir.empty())
+            startLlmLoad(newLlmDir);
+    }
 }
 
 // ── Event handling ────────────────────────────────────────────────────────────
@@ -185,17 +212,29 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 
     // Settings modal keyboard input
     if (view.showSettings) {
-        std::string& activeField = view.settingsModelDirActive
-                                    ? view.settingsModelDir
-                                    : view.settingsOutputDir;
-        int& cursor = view.settingsModelDirActive
-                       ? view.settingsModelDirCursor
-                       : view.settingsOutputDirCursor;
+        std::string& activeField = view.settingsLlmModelDirActive ? view.settingsLlmModelDir
+                                 : view.settingsModelDirActive    ? view.settingsModelDir
+                                                                  : view.settingsOutputDir;
+        int& cursor = view.settingsLlmModelDirActive ? view.settingsLlmModelDirCursor
+                    : view.settingsModelDirActive     ? view.settingsModelDirCursor
+                                                      : view.settingsOutputDirCursor;
 
         if (e.type == sf::Event::KeyPressed) {
             if (e.key.code == sf::Keyboard::Tab) {
-                view.settingsModelDirActive  = !view.settingsModelDirActive;
-                view.settingsOutputDirActive = !view.settingsOutputDirActive;
+                // Cycle: ModelDir → OutputDir → LlmDir → ModelDir
+                if (view.settingsModelDirActive) {
+                    view.settingsModelDirActive    = false;
+                    view.settingsOutputDirActive   = true;
+                    view.settingsLlmModelDirActive = false;
+                } else if (view.settingsOutputDirActive) {
+                    view.settingsModelDirActive    = false;
+                    view.settingsOutputDirActive   = false;
+                    view.settingsLlmModelDirActive = true;
+                } else {
+                    view.settingsModelDirActive    = true;
+                    view.settingsOutputDirActive   = false;
+                    view.settingsLlmModelDirActive = false;
+                }
             } else if (e.key.code == sf::Keyboard::Enter) {
                 saveSettings(view);
             } else if (e.key.code == sf::Keyboard::Left && cursor > 0) {
@@ -372,17 +411,29 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         viewInitialized = true;
     }
 
+    // Poll async LLM load; swap in the real enhancer when ready.
+    if (llmLoadFuture.valid()) {
+        view.llmLoading = true;
+        if (llmLoadFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            enhancer = llmLoadFuture.get();
+            view.llmLoading = false;
+        }
+    }
+
     // Apply async browse result when zenity finishes.
     if (browseFuture.valid() &&
         browseFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::string picked = browseFuture.get();
         if (!picked.empty()) {
-            if (browsingForModel) {
+            if (browseTarget == BrowseTarget::ModelDir) {
                 view.settingsModelDir       = picked;
                 view.settingsModelDirCursor = static_cast<int>(picked.size());
-            } else {
+            } else if (browseTarget == BrowseTarget::OutputDir) {
                 view.settingsOutputDir       = picked;
                 view.settingsOutputDirCursor = static_cast<int>(picked.size());
+            } else {
+                view.settingsLlmModelDir       = picked;
+                view.settingsLlmModelDirCursor = static_cast<int>(picked.size());
             }
         }
     }
@@ -403,8 +454,8 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         modelsDirty = false;
     }
 
-    // Sync enhancer availability flag to the view.
-    view.promptEnhancerAvailable = enhancer->isAvailable();
+    // Sync enhancer availability — not available while the model is still loading.
+    view.promptEnhancerAvailable = !view.llmLoading && enhancer->isAvailable();
 
     // Collect enhancement result when the background thread finishes.
     if (view.enhancing && view.enhanceDone.load()) {
@@ -442,25 +493,36 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         if (view.settingsBtnSave.contains(pos))   { saveSettings(view); return; }
         if (view.settingsBtnCancel.contains(pos))  { view.showSettings = false; return; }
         if (view.settingsBtnBrowseModel.contains(pos)) {
-            browsingForModel = true;
-            const std::string start = view.settingsModelDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, start);
+            browseTarget = BrowseTarget::ModelDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsModelDir);
             return;
         }
         if (view.settingsBtnBrowseOutput.contains(pos)) {
-            browsingForModel = false;
-            const std::string start = view.settingsOutputDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, start);
+            browseTarget = BrowseTarget::OutputDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsOutputDir);
+            return;
+        }
+        if (view.settingsBtnBrowseLlm.contains(pos)) {
+            browseTarget = BrowseTarget::LlmDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsLlmModelDir);
             return;
         }
         if (view.settingsModelDirField.contains(pos)) {
-            view.settingsModelDirActive  = true;
-            view.settingsOutputDirActive = false;
+            view.settingsModelDirActive    = true;
+            view.settingsOutputDirActive   = false;
+            view.settingsLlmModelDirActive = false;
             return;
         }
         if (view.settingsOutputDirField.contains(pos)) {
-            view.settingsModelDirActive  = false;
-            view.settingsOutputDirActive = true;
+            view.settingsModelDirActive    = false;
+            view.settingsOutputDirActive   = true;
+            view.settingsLlmModelDirActive = false;
+            return;
+        }
+        if (view.settingsLlmModelDirField.contains(pos)) {
+            view.settingsModelDirActive    = false;
+            view.settingsOutputDirActive   = false;
+            view.settingsLlmModelDirActive = true;
             return;
         }
         return; // absorb clicks outside modal controls

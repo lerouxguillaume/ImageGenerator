@@ -61,8 +61,10 @@ struct GenerationContext {
     std::vector<int64_t> latent_shape;   // [1, 4, H/8, W/8]
     int                  latent_size = 0;
 
-    float           guidance_scale = 8.0f;
-    Ort::RunOptions run_opts;             // shared across UNet steps; can be terminated
+    float           guidance_scale     = 8.0f;
+    float           neg_guidance_scale = 8.0f; // independent negative-prompt CFG scale
+    float           cfg_rescale        = 0.0f; // 0 = off; 0.7 typical for rescaling
+    Ort::RunOptions run_opts;                   // shared across UNet steps; can be terminated
 
     GenerationContext()
         : env(ORT_LOGGING_LEVEL_WARNING, "LocalAI")

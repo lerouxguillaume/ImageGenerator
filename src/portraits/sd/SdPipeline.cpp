@@ -115,8 +115,12 @@ void runPipeline(const std::string& prompt,
     Logger::info("Prompt: " + prompt);
     Logger::info("Neg:    " + neg_prompt);
 
-    auto ctx          = loadModels(cfg, modelDir);
-    ctx.guidance_scale = params.guidanceScale;
+    auto ctx               = loadModels(cfg, modelDir);
+    ctx.guidance_scale     = params.guidanceScale;
+    ctx.neg_guidance_scale = (params.negativeGuidanceScale > 0.0f)
+                               ? params.negativeGuidanceScale
+                               : params.guidanceScale;  // 0 → same as guidance_scale (standard CFG)
+    ctx.cfg_rescale        = params.cfgRescale;
 
     auto tEncode = Clock::now();
     // vocab/merges live in the base model dir (parent of the specific model subdir).

@@ -140,13 +140,39 @@ std::vector<float> runUNetCFG(const std::vector<float>& x_t,
     auto c_eps   = runUNetSingle(x_t, t, ctx.text_embed,   ctx.text_embeds_pool,   ctx);
     Logger::info("  cond:   " + fmtMs(tCond));
 
+    // CFG blend — optionally use a separate scale for the negative direction.
+    // Standard:  eps = u + scale * (c - u)
+    // Split:     eps = u * (1 - neg_scale) + pos_scale * c
+    // When neg_scale == guidance_scale the two forms are identical.
     std::vector<float> eps(ctx.latent_size);
-    float eps_mn = 1e9f, eps_mx = -1e9f;
-    for (int j = 0; j < ctx.latent_size; ++j) {
-        eps[j]  = u_eps[j] + ctx.guidance_scale * (c_eps[j] - u_eps[j]);
-        eps_mn  = std::min(eps_mn, eps[j]);
-        eps_mx  = std::max(eps_mx, eps[j]);
+    for (int j = 0; j < ctx.latent_size; ++j)
+        eps[j] = u_eps[j] * (1.0f - ctx.neg_guidance_scale)
+               + ctx.guidance_scale * c_eps[j];
+
+    // CFG rescale (Lin et al. 2023): prevents oversaturation at high guidance scales.
+    // Rescales the blended eps so its std matches the conditional eps, then blends
+    // back with the original by cfg_rescale factor.
+    if (ctx.cfg_rescale > 0.0f) {
+        auto stddev = [](const std::vector<float>& v) {
+            float mean = 0.0f;
+            for (float x : v) mean += x;
+            mean /= static_cast<float>(v.size());
+            float var = 0.0f;
+            for (float x : v) { float d = x - mean; var += d * d; }
+            return std::sqrt(var / static_cast<float>(v.size()));
+        };
+        const float std_c   = stddev(c_eps);
+        const float std_eps = stddev(eps);
+        if (std_eps > 0.0f && std_c > 0.0f) {
+            const float phi = std_c / std_eps;
+            const float r   = ctx.cfg_rescale;
+            for (int j = 0; j < ctx.latent_size; ++j)
+                eps[j] = (r * phi + (1.0f - r)) * eps[j];
+        }
     }
+
+    float eps_mn = 1e9f, eps_mx = -1e9f;
+    for (float v : eps) { eps_mn = std::min(eps_mn, v); eps_mx = std::max(eps_mx, v); }
     Logger::info("  eps range: [" + std::to_string(eps_mn) + ", " + std::to_string(eps_mx) + "]");
     return eps;
 }

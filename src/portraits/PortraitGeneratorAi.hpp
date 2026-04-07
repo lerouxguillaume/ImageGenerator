@@ -6,12 +6,14 @@
 
 // Parameters shared by all generation entry points.
 struct GenerationParams {
-    int     numSteps      = 20;   // DPM++ 2M Karras denoising steps (more = better quality, slower)
-    float   guidanceScale = 8.0f; // CFG scale: how strongly the prompt steers the output (7–12 typical)
-    int     numImages     = 1;    // Number of images to generate sequentially in one pipeline run
-    int     width         = 0;    // Output width in pixels; 0 = use model default (512 for SD1.5, 1024 for SDXL)
-    int     height        = 0;    // Output height in pixels; 0 = use model default
-    int64_t seed          = -1;   // RNG seed; -1 = generate randomly. For multi-image runs, seed+i is used per image.
+    int     numSteps             = 20;   // DPM++ 2M Karras denoising steps (more = better quality, slower)
+    float   guidanceScale        = 8.0f; // CFG scale: how strongly the prompt steers the output (7–12 typical)
+    float   negativeGuidanceScale = 0.0f; // Negative prompt CFG scale; 0 = same as guidanceScale (standard CFG)
+    float   cfgRescale           = 0.0f; // CFG rescale factor (0 = off, 0.7 typical); reduces oversaturation at high guidance
+    int     numImages            = 1;    // Number of images to generate sequentially in one pipeline run
+    int     width                = 0;    // Output width in pixels; 0 = use model default (512 for SD1.5, 1024 for SDXL)
+    int     height               = 0;    // Output height in pixels; 0 = use model default
+    int64_t seed                 = -1;   // RNG seed; -1 = generate randomly. For multi-image runs, seed+i is used per image.
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).

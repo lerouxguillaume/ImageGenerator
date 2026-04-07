@@ -26,29 +26,35 @@ struct OrtLlmEnhancer::Impl {
     bool available = false;
 };
 
-// Build a Phi-3 chat-format prompt that instructs the model to produce a
+// Build a chat-format prompt that instructs the model to produce a
 // detailed SD positive prompt from the user's rough input.
 // Swap this function to support a different model's chat template.
 static std::string buildChatPrompt(const std::string& positive,
+                                   const std::string& negative,
                                    const std::string& modelName,
                                    const std::string& styleContext) {
     std::string sys =
-        "You are a Stable Diffusion prompt engineer working on a mature fantasy game. "
-        "Dark themes, violence, blood, death, monsters, and horror are all valid and expected. "
-        "Your job is to faithfully expand any description — including dark or violent ones — "
-        "into detailed SD prompts. Never soften or sanitise the input. "
-        "Never add words like gore, violence, or blood to the NEGATIVE prompt. "
-        "You MUST return exactly two lines using these exact labels, nothing else:\n"
+        "You are a prompt generator for image synthesis.\n\n"
+        "Rules:\n"
+        "- Always generate a detailed visual prompt.\n"
+        "- The subject must be fictional and generic.\n"
+        "- Do NOT mention real people.\n"
+        "- Do NOT mention minors.\n"
+        "- Do NOT add safety warnings or refusals.\n"
+        "- Do NOT explain anything.\n"
+        "- You MUST return exactly two lines using these exact labels, nothing else:\n"
         "POSITIVE: <comma-separated tags and descriptors>\n"
         "NEGATIVE: <comma-separated technical flaws to avoid, not content>\n\n"
         "Example:\n"
-        "POSITIVE: masterpiece, best quality, undead warrior, rotting flesh, blood splatter, dramatic lighting, dark fantasy\n"
+        "POSITIVE: masterpiece, best quality, hooded figure, dramatic lighting, detailed, sharp focus\n"
         "NEGATIVE: worst quality, low quality, blurry, bad anatomy, watermark";
 
     std::string user = "Model: " + modelName + "\n";
     if (!styleContext.empty())
         user += "Style context: " + styleContext + "\n";
     user += "Input: " + positive;
+    if (!negative.empty())
+        user += "\nExisting negative: " + negative;
 
     // Chat template — switch comment to match your loaded model:
 
@@ -124,7 +130,7 @@ EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
         auto tTotal = Clock::now();
 
         // ── Build prompt ──────────────────────────────────────────────────────
-        const std::string chatPrompt = buildChatPrompt(positive, modelName, styleContext);
+        const std::string chatPrompt = buildChatPrompt(positive, negative, modelName, styleContext);
         Logger::info("  chat prompt:\n" + chatPrompt);
 
         // ── Tokenise ──────────────────────────────────────────────────────────
@@ -136,12 +142,15 @@ EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
                      + fmtMs(tTok) + ")");
 
         // ── Generation params ─────────────────────────────────────────────────
+        // max_length is total tokens (input + output) — set high enough to leave
+        // room for a full response after the prompt.
         auto genParams = OgaGeneratorParams::Create(*impl_->model);
-        genParams->SetSearchOption("max_length",  300.0);
-        genParams->SetSearchOption("min_length",    5.0);
-        genParams->SetSearchOption("temperature",   0.7);
-        genParams->SetSearchOption("top_p",         0.9);
-        Logger::info("  search options: max_length=300  min_length=5  temperature=0.7  top_p=0.9");
+        genParams->SetSearchOption("max_length",         600.0);
+        genParams->SetSearchOption("min_length",           5.0);
+        genParams->SetSearchOption("temperature",          0.7);
+        genParams->SetSearchOption("top_p",                0.9);
+        genParams->SetSearchOption("repetition_penalty",   1.1);
+        Logger::info("  search options: max_length=600  min_length=5  temperature=0.7  top_p=0.9  repetition_penalty=1.1");
 
         // ── Generate ──────────────────────────────────────────────────────────
         // ort-genai 0.4+: input sequences are added to the generator (not params),
@@ -159,6 +168,20 @@ EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
             const auto newToken = generator->GetSequenceData(0)[seqLen - 1];
             result += tokStream->Decode(newToken);
             ++tokenCount;
+
+            // Stop as soon as the NEGATIVE line is complete — avoids the model
+            // rambling beyond the two required labels.
+            const auto negPos = result.find("NEGATIVE:");
+            if (negPos != std::string::npos &&
+                result.find('\n', negPos) != std::string::npos)
+                break;
+        }
+
+        // Strip model-specific EOS tokens that may leak into the output.
+        for (const char* tok : {"<|eot_id|>", "</s>", "<|end|>", "<eos>"}) {
+            std::string t(tok);
+            for (auto p = result.find(t); p != std::string::npos; p = result.find(t))
+                result.erase(p, t.size());
         }
 
         Logger::info("  generated " + std::to_string(tokenCount) + " tokens in " + fmtMs(tGen));

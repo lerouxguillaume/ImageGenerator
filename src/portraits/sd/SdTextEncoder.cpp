@@ -19,14 +19,118 @@ static std::vector<float> tensorToFloat(Ort::Value& tensor) {
     return out;
 }
 
+// ── Weighted prompt helpers ───────────────────────────────────────────────────
+
+struct WeightedSegment { std::string text; float weight = 1.0f; };
+
+// Parse A1111-style weighted prompt into flat segments.
+// "(dark knight:1.4), warrior" → [{"dark knight", 1.4}, {", warrior", 1.0}]
+// Bare "(text)" without a colon gets a default 1.1 boost (A1111 convention).
+static std::vector<WeightedSegment> parseWeightedPrompt(const std::string& prompt) {
+    std::vector<WeightedSegment> segs;
+    std::string plain;
+
+    for (size_t i = 0; i < prompt.size(); ) {
+        if (prompt[i] != '(') { plain += prompt[i++]; continue; }
+
+        if (!plain.empty()) { segs.push_back({plain, 1.0f}); plain.clear(); }
+
+        // Find matching ')'
+        int    depth = 1;
+        size_t j     = i + 1;
+        while (j < prompt.size() && depth > 0) {
+            if      (prompt[j] == '(') ++depth;
+            else if (prompt[j] == ')') --depth;
+            ++j;
+        }
+
+        std::string inner = prompt.substr(i + 1, j - i - 2);
+        float weight = 1.1f;
+
+        auto colon = inner.rfind(':');
+        if (colon != std::string::npos) {
+            try {
+                float w = std::stof(inner.substr(colon + 1));
+                weight  = w;
+                inner   = inner.substr(0, colon);
+            } catch (...) {}
+        }
+        segs.push_back({inner, weight});
+        i = j;
+    }
+    if (!plain.empty()) segs.push_back({plain, 1.0f});
+    return segs;
+}
+
+static bool anyWeighted(const std::vector<WeightedSegment>& segs) {
+    for (const auto& s : segs)
+        if (std::abs(s.weight - 1.0f) >= 1e-4f) return true;
+    return false;
+}
+
+static std::string stripToPlain(const std::vector<WeightedSegment>& segs) {
+    std::string result;
+    for (const auto& s : segs) result += s.text;
+    return result;
+}
+
+// Count content tokens (BOS at [0], stop at first EOS=49407).
+static int countContentTokens(ClipTokenizer& tokenizer, const std::string& text) {
+    constexpr int64_t EOS = 49407;
+    auto ids = tokenizer.encode(text);
+    int n = 0;
+    for (size_t k = 1; k < ids.size(); ++k) {
+        if (ids[k] == EOS) break;
+        ++n;
+    }
+    return n;
+}
+
+// Build per-token weight vector [seq_len=77].
+// Position 0 (BOS) and trailing EOS/pad positions stay at 1.0.
+static std::vector<float> buildTokenWeights(
+    const std::vector<WeightedSegment>& segs,
+    ClipTokenizer& tokenizer,
+    int seq_len = 77)
+{
+    std::vector<float> weights(seq_len, 1.0f);
+    int pos = 1;  // skip BOS at position 0
+    for (const auto& seg : segs) {
+        if (pos >= seq_len - 1) break;
+        int n = countContentTokens(tokenizer, seg.text);
+        for (int t = 0; t < n && pos < seq_len - 1; ++t, ++pos)
+            weights[pos] = seg.weight;
+    }
+    return weights;
+}
+
+// Scale hidden states in-place: embedding[seq * dim + d] *= weight[seq].
+static void applyTokenWeights(std::vector<float>& embedding,
+                               const std::vector<float>& weights,
+                               int seq_len, int dim) {
+    int weighted_count = 0;
+    for (int s = 0; s < seq_len; ++s) {
+        if (std::abs(weights[s] - 1.0f) < 1e-4f) continue;
+        ++weighted_count;
+        for (int d = 0; d < dim; ++d)
+            embedding[s * dim + d] *= weights[s];
+    }
+    Logger::info("  token weights applied to " + std::to_string(weighted_count) + " position(s)");
+}
+
 // ── SD 1.5 single-encoder ─────────────────────────────────────────────────────
 
 std::vector<float> encodeText(const std::string& prompt,
                               ClipTokenizer& tokenizer,
                               GenerationContext& ctx,
                               std::vector<int64_t>& out_shape) {
-    auto token_ids = tokenizer.encode(prompt);
+    auto segs     = parseWeightedPrompt(prompt);
+    bool weighted = anyWeighted(segs);
+    const std::string plain = weighted ? stripToPlain(segs) : prompt;
+
+    auto token_ids = tokenizer.encode(plain);
     Logger::info("encodeText: " + std::to_string(token_ids.size()) + " tokens"
+                 + (weighted ? "  [weighted]" : "")
                  + "  prompt=\"" + prompt.substr(0, 80) + (prompt.size() > 80 ? "..." : "") + "\"");
 
     auto tEnc = Clock::now();
@@ -43,12 +147,16 @@ std::vector<float> encodeText(const std::string& prompt,
 
     auto shape_info = te_out.front().GetTensorTypeAndShapeInfo();
     auto shape      = shape_info.GetShape();
-    std::string shape_str = "[";
-    for (size_t k = 0; k < shape.size(); ++k)
-        shape_str += std::to_string(shape[k]) + (k + 1 < shape.size() ? ", " : "]");
-    Logger::info("  embedding shape: " + shape_str);
+    out_shape       = std::vector<int64_t>(shape.begin(), shape.end());
 
     auto embedding = tensorToFloat(te_out.front());
+    const int dim  = static_cast<int>(out_shape[2]);
+
+    if (weighted) {
+        auto token_weights = buildTokenWeights(segs, tokenizer);
+        applyTokenWeights(embedding, token_weights, 77, dim);
+    }
+
     {
         float mn = 1e9f, mx = -1e9f, sum = 0.0f;
         for (float v : embedding) { mn = std::min(mn, v); mx = std::max(mx, v); sum += v; }
@@ -57,7 +165,6 @@ std::vector<float> encodeText(const std::string& prompt,
                      + "  mean=" + std::to_string(sum / static_cast<float>(embedding.size())));
     }
 
-    out_shape = std::vector<int64_t>(shape.begin(), shape.end());
     return embedding;
 }
 
@@ -68,9 +175,19 @@ std::vector<float> encodeTextSDXL(const std::string& prompt,
                                   GenerationContext& ctx,
                                   std::vector<int64_t>& out_shape,
                                   std::vector<float>& out_pooled) {
-    auto token_ids = tokenizer.encode(prompt);
+    auto segs     = parseWeightedPrompt(prompt);
+    bool weighted = anyWeighted(segs);
+    const std::string plain = weighted ? stripToPlain(segs) : prompt;
+
+    auto token_ids = tokenizer.encode(plain);
     Logger::info("encodeTextSDXL: " + std::to_string(token_ids.size()) + " tokens"
+                 + (weighted ? "  [weighted]" : "")
                  + "  prompt=\"" + prompt.substr(0, 80) + (prompt.size() > 80 ? "..." : "") + "\"");
+
+    // Precompute per-token weights once; applied to both encoders below.
+    std::vector<float> token_weights;
+    if (weighted)
+        token_weights = buildTokenWeights(segs, tokenizer);
 
     std::vector<int64_t> token_shape = {1, 77};
 
@@ -103,6 +220,14 @@ std::vector<float> encodeTextSDXL(const std::string& prompt,
     const int dim2 = static_cast<int>(shape2[2]); // 1280
 
     out_pooled = tensorToFloat(enc2_result[1]);
+
+    // Apply weights to both encoder outputs before concatenation.
+    if (weighted) {
+        Logger::info("  applying weights: CLIP-L");
+        applyTokenWeights(emb1, token_weights, 77, dim1);
+        Logger::info("  applying weights: OpenCLIP-G");
+        applyTokenWeights(emb2, token_weights, 77, dim2);
+    }
 
     // ── Concatenate along embedding dim → (1, 77, dim1+dim2) ─────────────────
     const int seq_len   = 77;

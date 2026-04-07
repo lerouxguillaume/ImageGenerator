@@ -140,7 +140,7 @@ def fix_fp32_constants(path: str) -> None:
     Raises RuntimeError with subprocess stderr on failure.
     """
     script = textwrap.dedent(f"""
-        import onnx, numpy as np
+        import onnx, numpy as np, os
         from onnx import numpy_helper, TensorProto
         path = {repr(path)}
         model = onnx.load(path)
@@ -157,7 +157,22 @@ def fix_fp32_constants(path: str) -> None:
                         arr = numpy_helper.to_array(attr.t).astype(np.float16)
                         attr.t.CopyFrom(numpy_helper.from_array(arr))
                         changed += 1
-        onnx.save(model, path)
+        try:
+            onnx.save(model, path)
+        except Exception:
+            # Model exceeds protobuf's 2 GB limit — save weights as external data.
+            # ORT loads external-data models transparently from the same directory.
+            data_location = os.path.basename(path) + ".data"
+            data_full_path = os.path.join(os.path.dirname(os.path.abspath(path)), data_location)
+            if os.path.exists(data_full_path):
+                os.remove(data_full_path)
+            onnx.save_model(
+                model, path,
+                save_as_external_data=True,
+                location=data_location,
+                all_tensors_to_one_file=True,
+                convert_attribute=True,
+            )
         print(f"  → fixed {{changed}} fp32 constant(s) → float16")
     """)
     result = subprocess.run(

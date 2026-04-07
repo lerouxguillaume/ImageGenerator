@@ -130,7 +130,11 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     btnAdvanced = {LEFT_X, y, 100.f, 22.f};
     drawButton(win, btnAdvanced, toggleLabel, Col::Panel, Col::Muted, false, 11, font);
 
-    if (promptEnhancerAvailable) {
+    if (llmLoading) {
+        btnEnhance = {};
+        drawButton(win, {LEFT_X + FIELD_W - 130.f, y, 130.f, 22.f},
+                   "LLM loading...", Col::Panel, Col::Muted, false, 11, font);
+    } else if (promptEnhancerAvailable) {
         const std::string enhLabel = enhancing ? "Enhancing..." : "Enhance prompts";
         const sf::Color   enhCol   = enhancing ? Col::Muted : Col::GoldLt;
         btnEnhance = {LEFT_X + FIELD_W - 130.f, y, 130.f, 22.f};
@@ -390,19 +394,19 @@ void ImageGeneratorView::drawSettingsModal(sf::RenderWindow& win) {
     win.draw(overlay);
 
     // Modal panel
-    constexpr float boxW = 560.f, boxH = 234.f;
+    constexpr float boxW = 560.f, boxH = 282.f;
     const float boxX = (WIN_W - boxW) / 2.f;
     const float boxY = (WIN_H - boxH) / 2.f;
     drawRect(win, {boxX, boxY, boxW, boxH}, Col::Panel2, Col::BorderHi, 2.f);
     drawTextC(win, font, "Settings", Col::GoldLt, WIN_W / 2.f, boxY + 14.f, 15, true);
 
-    constexpr float padX    = 20.f;
-    constexpr float labelW  = 140.f;
-    constexpr float browseW = 38.f;
+    constexpr float padX      = 20.f;
+    constexpr float labelW    = 140.f;
+    constexpr float browseW   = 38.f;
     constexpr float browseGap = 4.f;
-    constexpr float fieldW  = 318.f;   // 360 - browseW - browseGap
-    constexpr float fieldH  = 26.f;
-    const float     fieldX  = boxX + padX + labelW;
+    constexpr float fieldW    = 318.f;   // 360 - browseW - browseGap
+    constexpr float fieldH    = 26.f;
+    const float     fieldX    = boxX + padX + labelW;
 
     // Row 1: model directory
     float rowY = boxY + 52.f;
@@ -421,6 +425,17 @@ void ImageGeneratorView::drawSettingsModal(sf::RenderWindow& win) {
                         settingsOutputDirCursor, settingsOutputDirActive);
     settingsBtnBrowseOutput = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
     drawButton(win, settingsBtnBrowseOutput, "...", Col::Panel2, Col::Muted, false, 12, font);
+
+    // Row 3: LLM model directory
+    rowY += 48.f;
+    drawText(win, font, "LLM model dir:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    settingsLlmModelDirField = {fieldX, rowY, fieldW, fieldH};
+    drawSingleLineField(win, settingsLlmModelDirField, settingsLlmModelDir,
+                        settingsLlmModelDirCursor, settingsLlmModelDirActive);
+    settingsBtnBrowseLlm = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
+    drawButton(win, settingsBtnBrowseLlm, "...", Col::Panel2, Col::Muted, false, 12, font);
+    if (llmLoading)
+        drawText(win, font, "Loading...", Col::Muted, fieldX, rowY + fieldH + 2.f, 10);
 
     // Buttons
     constexpr float btnW = 100.f, btnH = 28.f;

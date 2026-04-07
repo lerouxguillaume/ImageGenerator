@@ -55,6 +55,7 @@ public:
 
     // ── Prompt enhancement ────────────────────────────────────────────────────
     bool              promptEnhancerAvailable = false; // set by controller after loading
+    bool              llmLoading    = false;            // set while the LLM model is loading async
     bool              enhancing     = false;            // set on UI thread while running
     std::atomic<bool> enhanceDone{false};               // set by enhancer thread when done
     std::string       enhancedPositive;                 // written by enhancer thread, read after enhanceDone
@@ -101,20 +102,25 @@ public:
     DraggingSlider draggingSlider = DraggingSlider::None; // Which slider (if any) is being dragged
 
     // ── Settings modal ────────────────────────────────────────────────────────
-    bool        showSettings             = false;
-    std::string settingsModelDir;          // Editable copy while the modal is open
+    bool        showSettings              = false;
+    std::string settingsModelDir;           // Editable copy while the modal is open
     std::string settingsOutputDir;
-    int         settingsModelDirCursor   = 0;
-    int         settingsOutputDirCursor  = 0;
-    bool        settingsModelDirActive   = true;
-    bool        settingsOutputDirActive  = false;
+    std::string settingsLlmModelDir;        // Path to the ort-genai LLM model directory
+    int         settingsModelDirCursor    = 0;
+    int         settingsOutputDirCursor   = 0;
+    int         settingsLlmModelDirCursor = 0;
+    bool        settingsModelDirActive    = true;
+    bool        settingsOutputDirActive   = false;
+    bool        settingsLlmModelDirActive = false;
 
     // Hit rects for the settings button and modal controls
     sf::FloatRect btnSettings;
     sf::FloatRect settingsModelDirField;
     sf::FloatRect settingsOutputDirField;
+    sf::FloatRect settingsLlmModelDirField;
     sf::FloatRect settingsBtnBrowseModel;
     sf::FloatRect settingsBtnBrowseOutput;
+    sf::FloatRect settingsBtnBrowseLlm;
     sf::FloatRect settingsBtnSave;
     sf::FloatRect settingsBtnCancel;
 

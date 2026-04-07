@@ -13,9 +13,12 @@ class ImageGeneratorController {
 public:
     explicit ImageGeneratorController(AppConfig cfg)
         : config(std::move(cfg))
-        , enhancer(PromptEnhancerFactory::create(config.promptEnhancer.enabled,
-                                                  config.promptEnhancer.modelDir))
-    {}
+        , enhancer(std::make_unique<NullPromptEnhancer>())
+    {
+        // Start async LLM load immediately if a model dir is configured.
+        if (!config.promptEnhancer.modelDir.empty())
+            startLlmLoad(config.promptEnhancer.modelDir);
+    }
 
     void handleEvent(const sf::Event& event, sf::RenderWindow& win,
                      ImageGeneratorView& screen, AppScreen& appScreen);
@@ -35,6 +38,9 @@ private:
     // Apply the active model's defaults (falling back to global config defaults).
     void applyModelDefaults(ImageGeneratorView& view);
 
+    // Launch a non-blocking LLM load; the enhancer is swapped in once ready.
+    void startLlmLoad(const std::string& modelDir);
+
     AppConfig                        config;
     ImageGeneratorPresenter          presenter;
     std::unique_ptr<IPromptEnhancer> enhancer;
@@ -42,7 +48,11 @@ private:
     bool                             viewInitialized = false;
     int                              lastModelIdx    = -1;
 
-    // Async folder browser (zenity runs on a thread; result polled in update())
+    // Async LLM model load (polled in update()).
+    std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;
+
+    // Async folder browser (zenity/Windows dialog runs on a thread; result polled in update()).
+    enum class BrowseTarget { ModelDir, OutputDir, LlmDir };
     std::future<std::string> browseFuture;
-    bool                     browsingForModel = true; // which field receives the result
+    BrowseTarget             browseTarget = BrowseTarget::ModelDir;
 };
