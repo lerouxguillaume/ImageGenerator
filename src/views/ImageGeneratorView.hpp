@@ -53,6 +53,14 @@ public:
     // to discard stale completion signals from a previous run.
     std::atomic<int> generationId{0};
 
+    // ── Prompt enhancement ────────────────────────────────────────────────────
+    bool              promptEnhancerAvailable = false; // set by controller after loading
+    bool              enhancing     = false;            // set on UI thread while running
+    std::atomic<bool> enhanceDone{false};               // set by enhancer thread when done
+    std::string       enhancedPositive;                 // written by enhancer thread, read after enhanceDone
+    std::string       enhancedNegative;
+    sf::FloatRect     btnEnhance;
+
     // ── Result display ────────────────────────────────────────────────────────
     sf::Texture resultTexture;
     bool        resultLoaded = false; // True once resultTexture holds a valid image

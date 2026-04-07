@@ -25,8 +25,14 @@ AppConfig AppConfig::load(const std::string& configPath) {
                 md.negativePrompt = val.value("negativePrompt", "");
                 md.numSteps       = val.value("numSteps",       0);
                 md.guidanceScale  = val.value("guidanceScale",  0.f);
+                md.llmHint        = val.value("llmHint",        "");
                 cfg.modelConfigs[key] = md;
             }
+        }
+        if (j.contains("promptEnhancer")) {
+            const auto& pe      = j["promptEnhancer"];
+            cfg.promptEnhancer.enabled  = pe.value("enabled",  false);
+            cfg.promptEnhancer.modelDir = pe.value("modelDir", std::string{});
         }
         Logger::info("Config loaded: modelBaseDir=" + cfg.modelBaseDir
                      + "  outputDir=" + cfg.outputDir);
@@ -52,9 +58,12 @@ void AppConfig::save(const std::string& configPath) const {
             if (!md.negativePrompt.empty()) entry["negativePrompt"] = md.negativePrompt;
             if (md.numSteps > 0)            entry["numSteps"]       = md.numSteps;
             if (md.guidanceScale > 0.f)     entry["guidanceScale"]  = md.guidanceScale;
+            if (!md.llmHint.empty())        entry["llmHint"]        = md.llmHint;
             mcj[key] = entry;
         }
         j["modelConfigs"] = mcj;
+        j["promptEnhancer"]["enabled"]  = promptEnhancer.enabled;
+        j["promptEnhancer"]["modelDir"] = promptEnhancer.modelDir;
         std::ofstream f(configPath);
         f << j.dump(4);
         Logger::info("Config saved to " + configPath);

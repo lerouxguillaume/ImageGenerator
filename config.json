@@ -4,39 +4,56 @@
 
     "defaultNumSteps": 25,
     "defaultGuidanceScale": 7.0,
-    "defaultPositivePrompt": "masterpiece, best quality, highly detailed, portrait, upper body, solo, cinematic lighting",
+    "defaultPositivePrompt": "masterpiece, best quality, highly detailed, portrait, upper body, solo, looking at viewer, cinematic lighting",
     "defaultNegativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature",
+
+    "promptEnhancer": {
+        "enabled": true,
+        "modelDir": "models/llama32-onnx"
+    },
 
     "modelConfigs": {
         "anything-v5": {
             "numSteps": 28,
             "guidanceScale": 7.0,
-            "positivePrompt": "masterpiece, best quality, highly detailed, anime style, 1girl, beautiful face, fantasy character, portrait, upper body, solo, cinematic lighting",
-            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, photorealistic"
+            "llmHint": "high-quality anime illustration, vibrant colours, detailed line art, manga-inspired, studio quality",
+            "positivePrompt": "masterpiece, best quality, highly detailed, anime style, 1girl, beautiful face, fantasy character, portrait, upper body, solo, looking at viewer, cinematic lighting",
+            "negativePrompt": "worst quality, low quality, lowres, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, photorealistic"
         },
         "dreamshaper_8": {
             "numSteps": 25,
             "guidanceScale": 7.5,
-            "positivePrompt": "masterpiece, best quality, highly detailed, fantasy portrait, upper body, solo, dramatic lighting, rich colours, painterly style, intricate details",
-            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, flat colours, amateur"
+            "llmHint": "painterly digital art, fantasy concept art, dramatic lighting, rich textures, semi-realistic, detailed environments",
+            "positivePrompt": "masterpiece, best quality, highly detailed, digital art, concept art, fantasy portrait, 1girl, upper body, solo, looking at viewer, dramatic lighting, rich colours, painterly style, intricate details",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, flat colours, amateur, photograph"
         },
         "novelaiDiffusionV2_novelaiV2": {
             "numSteps": 28,
             "guidanceScale": 6.5,
-            "positivePrompt": "masterpiece, best quality, highly detailed, anime, 1girl, beautiful face, fantasy character, portrait, upper body, solo, soft lighting",
-            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, western cartoon"
+            "llmHint": "NovelAI anime aesthetic, soft pastel tones, clean linework, very aesthetic, absurdres quality, gentle lighting",
+            "positivePrompt": "very aesthetic, absurdres, best quality, highly detailed, anime, 1girl, beautiful face, fantasy character, portrait, upper body, solo, looking at viewer, soft lighting",
+            "negativePrompt": "lowres, worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, 3d, realistic, western cartoon"
         },
         "perfectdeliberate_v5SD15": {
             "numSteps": 30,
-            "guidanceScale": 8.5,
-            "positivePrompt": "RAW photo, masterpiece, best quality, highly detailed, 8k uhd, portrait, upper body, solo, sharp focus, natural skin texture, cinematic lighting",
+            "guidanceScale": 8.0,
+            "llmHint": "photorealistic portrait photography, sharp focus, natural skin texture, DSLR quality, cinematic depth of field, professional lighting",
+            "positivePrompt": "RAW photo, masterpiece, best quality, highly detailed, 8k uhd, portrait, upper body, solo, looking at viewer, sharp focus, depth of field, bokeh, natural skin texture, cinematic lighting",
             "negativePrompt": "cartoon, anime, illustration, painting, drawing, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, oversaturated, plastic skin"
         },
         "toonyou_beta6": {
+            "numSteps": 20,
+            "guidanceScale": 7.0,
+            "llmHint": "cel-shaded cartoon anime style, clean outlines, vibrant flat colours, smooth shading, stylised proportions",
+            "positivePrompt": "masterpiece, best quality, anime cartoon style, 1girl, beautiful face, fantasy character, portrait, upper body, solo, looking at viewer, vibrant colours, clean lines, soft shading",
+            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, deformed, mutation, ugly, blurry, artifacts, watermark, signature, realistic, photorealistic, 3d render, western cartoon"
+        },
+        "hassakuSD15_v13": {
             "numSteps": 25,
             "guidanceScale": 7.0,
-            "positivePrompt": "masterpiece, best quality, toon style, cartoon, 1girl, beautiful face, fantasy character, portrait, upper body, solo, vibrant colours, clean lines",
-            "negativePrompt": "worst quality, low quality, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, deformed, mutation, ugly, blurry, artifacts, watermark, signature, realistic, photorealistic, 3d render"
+            "llmHint": "Hassaku anime style, soft diffuse lighting, delicate features, expressive eyes, AbyssOrangeMix aesthetic, pastel tones",
+            "positivePrompt": "masterpiece, best quality, highly detailed, anime style, 1girl, beautiful face, fantasy character, portrait, upper body, solo, looking at viewer, soft lighting, delicate features, expressive eyes",
+            "negativePrompt": "worst quality, low quality, lowres, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, extra arms, missing arms, extra limbs, malformed limbs, disconnected limbs, floating limbs, deformed, mutation, gross proportions, long neck, ugly, blurry, artifacts, watermark, signature, text, 3d, realistic, photorealistic, western cartoon"
         }
     }
 }

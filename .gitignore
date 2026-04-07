@@ -12,3 +12,5 @@
 /models/*/*.data
 /image-generation-windows.zip
 /image-generation-windows-cuda.zip
+/image-generation-windows-cuda-genai.zip
+/models_local/

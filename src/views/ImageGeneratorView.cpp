@@ -125,10 +125,17 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
                     negativeActive, negativeAllSelected, Col::Muted, negativeLines, negativeScrollLine);
     y += FIELD_H + static_cast<float>(PAD) * 2.f;
 
-    // Advanced toggle
+    // Advanced toggle + optional Enhance button on the same row
     const std::string toggleLabel = showAdvancedParams ? "v Advanced" : "> Advanced";
     btnAdvanced = {LEFT_X, y, 100.f, 22.f};
     drawButton(win, btnAdvanced, toggleLabel, Col::Panel, Col::Muted, false, 11, font);
+
+    if (promptEnhancerAvailable) {
+        const std::string enhLabel = enhancing ? "Enhancing..." : "Enhance prompts";
+        const sf::Color   enhCol   = enhancing ? Col::Muted : Col::GoldLt;
+        btnEnhance = {LEFT_X + FIELD_W - 130.f, y, 130.f, 22.f};
+        drawButton(win, btnEnhance, enhLabel, Col::Panel, enhCol, false, 11, font);
+    }
     y += 30.f;
 
     if (showAdvancedParams) {

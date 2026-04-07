@@ -403,6 +403,21 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         modelsDirty = false;
     }
 
+    // Sync enhancer availability flag to the view.
+    view.promptEnhancerAvailable = enhancer->isAvailable();
+
+    // Collect enhancement result when the background thread finishes.
+    if (view.enhancing && view.enhanceDone.load()) {
+        view.positivePrompt = view.enhancedPositive;
+        view.positiveCursor = static_cast<int>(view.positivePrompt.size());
+        view.negativePrompt = view.enhancedNegative;
+        view.negativeCursor = static_cast<int>(view.negativePrompt.size());
+        view.positiveScrollLine = 0;
+        view.negativeScrollLine = 0;
+        view.enhancing = false;
+        view.enhanceDone.store(false);
+    }
+
     if (view.generating && view.generationDone.load()) {
         presenter.finishGeneration(view);
         // For multi-image runs the last image has an _N suffix; single image has no suffix.
@@ -451,8 +466,8 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         return; // absorb clicks outside modal controls
     }
 
-    if (view.generating) {
-        if (view.btnCancelGenerate.contains(pos)) {
+    if (view.generating || view.enhancing) {
+        if (!view.enhancing && view.btnCancelGenerate.contains(pos)) {
             ++view.generationId;
             view.cancelToken.store(true);
             view.generating = false;
@@ -509,6 +524,41 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
 
     if (view.btnAdvanced.contains(pos)) {
         presenter.toggleAdvanced(view);
+        return;
+    }
+
+    if (view.promptEnhancerAvailable && view.btnEnhance.contains(pos)
+        && !view.enhancing && !view.generating) {
+        view.enhancing = true;
+        view.enhanceDone.store(false);
+
+        const std::string posCapture  = view.positivePrompt;
+        const std::string negCapture  = view.negativePrompt;
+        const std::string modelName   = view.availableModels.empty() ? std::string{}
+            : std::filesystem::path(view.availableModels[
+                static_cast<size_t>(view.selectedModelIdx)]).filename().string();
+
+        // Build style context: prefer explicit llmHint, fall back to the
+        // model's default positive prompt as a style example.
+        std::string styleContext;
+        const auto it = config.modelConfigs.find(modelName);
+        if (it != config.modelConfigs.end()) {
+            styleContext = !it->second.llmHint.empty()
+                ? it->second.llmHint
+                : it->second.positivePrompt;
+        }
+
+        std::atomic<bool>* done   = &view.enhanceDone;
+        std::string*       outPos = &view.enhancedPositive;
+        std::string*       outNeg = &view.enhancedNegative;
+        IPromptEnhancer*   enh   = enhancer.get();
+
+        std::thread([posCapture, negCapture, modelName, styleContext, done, outPos, outNeg, enh]() {
+            auto result = enh->enhance(posCapture, negCapture, modelName, styleContext);
+            *outPos = result.positive;
+            *outNeg = result.negative;
+            done->store(true);
+        }).detach();
         return;
     }
 

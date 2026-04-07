@@ -1,14 +1,21 @@
 #pragma once
 #include <future>
+#include <memory>
 #include <SFML/Graphics.hpp>
 #include "../config/AppConfig.hpp"
+#include "../llm/IPromptEnhancer.hpp"
+#include "../llm/PromptEnhancerFactory.hpp"
 #include "../presenters/ImageGeneratorPresenter.hpp"
 #include "../views/ImageGeneratorView.hpp"
 #include "MenuController.hpp"
 
 class ImageGeneratorController {
 public:
-    explicit ImageGeneratorController(AppConfig cfg) : config(std::move(cfg)) {}
+    explicit ImageGeneratorController(AppConfig cfg)
+        : config(std::move(cfg))
+        , enhancer(PromptEnhancerFactory::create(config.promptEnhancer.enabled,
+                                                  config.promptEnhancer.modelDir))
+    {}
 
     void handleEvent(const sf::Event& event, sf::RenderWindow& win,
                      ImageGeneratorView& screen, AppScreen& appScreen);
@@ -28,11 +35,12 @@ private:
     // Apply the active model's defaults (falling back to global config defaults).
     void applyModelDefaults(ImageGeneratorView& view);
 
-    AppConfig               config;
-    ImageGeneratorPresenter presenter;
-    bool                    modelsDirty      = true;  // triggers model rescan in update()
-    bool                    viewInitialized  = false; // apply config defaults on first update()
-    int                     lastModelIdx     = -1;    // detect model selection changes
+    AppConfig                        config;
+    ImageGeneratorPresenter          presenter;
+    std::unique_ptr<IPromptEnhancer> enhancer;
+    bool                             modelsDirty     = true;
+    bool                             viewInitialized = false;
+    int                              lastModelIdx    = -1;
 
     // Async folder browser (zenity runs on a thread; result polled in update())
     std::future<std::string> browseFuture;
