@@ -203,18 +203,36 @@ GenerationContext loadModels(const ModelConfig&            cfg,
             Logger::info("  Reading " + std::filesystem::path(path).filename().string() + "...");
             auto bytes = readFileBytes(path);
             auto idx   = parseTensorIndex(bytes);
-            int  total = 0;
+            int total  = 0;
+
             for (const auto& lo : loras) {
-                Logger::info("  Applying LoRA: " + lo.path + "  scale=" + std::to_string(lo.scale));
+                Logger::info("Applying LoRA: " + lo.path + "  scale=" + std::to_string(lo.scale));
                 try {
                     auto loraMap = loadSafetensors(lo.path);
                     Logger::info("  LoRA tensors loaded: " + std::to_string(loraMap.size()) + " key(s)");
+
+                    // Log which keys exist in the model
+                    int matched = 0;
+                    for (const auto& [key, _] : loraMap) {
+                        if (idx.find(key) != idx.end()) {
+                            Logger::info("    Matched key: " + key);
+                            matched++;
+                        } else {
+                            Logger::info("    Key not matched: " + key);
+                        }
+                    }
+                    Logger::info("  LoRA keys matching model: " + std::to_string(matched) + "/" + std::to_string(loraMap.size()));
+
+                    // Apply LoRA directly to the model bytes we read
                     const int n = applyLoraToBytes(bytes, idx, loraMap, lo.scale);
-                    total += n;
+                    total += n; // accumulate patched layers
+                    Logger::info("  Total layers patched for this LoRA: " + std::to_string(n));
+
                 } catch (const std::exception& e) {
                     Logger::info("  LoRA '" + lo.path + "' skipped: " + std::string(e.what()));
                 }
             }
+
             Logger::info("  Total LoRA patches for this model: " + std::to_string(total));
             return bytes;
         };

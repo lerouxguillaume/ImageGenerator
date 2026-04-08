@@ -59,9 +59,20 @@ static inline uint16_t floatToFp16(float f) {
     return static_cast<uint16_t>((sign << 15) | (exp5 << 10) | (mant10 & 0x3FFu));
 }
 
+// ── BF16 → F32 ───────────────────────────────────────────────────────────────
+// BF16 shares the same exponent layout as F32; conversion is a zero-extend:
+// the 16-bit BF16 value occupies the upper 16 bits of the 32-bit float.
+
+static inline float bf16ToFloat(uint16_t b) {
+    const uint32_t bits = static_cast<uint32_t>(b) << 16;
+    float result;
+    std::memcpy(&result, &bits, 4);
+    return result;
+}
+
 // ── Safetensors loader ────────────────────────────────────────────────────────
-// Loads a .safetensors file and returns all F32/F16 tensors as float32.
-// BF16 and integer tensors are silently skipped (not used in LoRA files).
+// Loads a .safetensors file and returns all F32/F16/BF16 tensors as float32.
+// Integer tensors are silently skipped (not used in LoRA files).
 // Throws std::runtime_error on I/O or format errors.
 
 inline SafetensorsMap loadSafetensors(const std::string& path) {
@@ -84,14 +95,15 @@ inline SafetensorsMap loadSafetensors(const std::string& path) {
         if (name == "__metadata__") continue;
 
         const std::string dtypeStr = info["dtype"].get<std::string>();
-        const bool isF32 = (dtypeStr == "F32");
-        const bool isF16 = (dtypeStr == "F16");
-        if (!isF32 && !isF16) continue;  // BF16, int types — not expected in LoRA files
+        const bool isF32  = (dtypeStr == "F32");
+        const bool isF16  = (dtypeStr == "F16");
+        const bool isBF16 = (dtypeStr == "BF16");
+        if (!isF32 && !isF16 && !isBF16) continue;  // int types — not in LoRA files
 
         const auto offsets   = info["data_offsets"].get<std::vector<uint64_t>>();
         const size_t begin   = dataOffset + static_cast<size_t>(offsets[0]);
         const size_t byteLen = static_cast<size_t>(offsets[1] - offsets[0]);
-        const size_t elemSz  = isF32 ? 4u : 2u;
+        const size_t elemSz  = isF32 ? 4u : 2u;  // F16 and BF16 are both 2 bytes
         const size_t numElems = byteLen / elemSz;
 
         std::vector<uint8_t> raw(byteLen);
@@ -104,10 +116,14 @@ inline SafetensorsMap loadSafetensors(const std::string& path) {
 
         if (isF32) {
             std::memcpy(t.data.data(), raw.data(), byteLen);
-        } else {
+        } else if (isF16) {
             const auto* src = reinterpret_cast<const uint16_t*>(raw.data());
             for (size_t i = 0; i < numElems; ++i)
                 t.data[i] = fp16ToFloat(src[i]);
+        } else {  // BF16
+            const auto* src = reinterpret_cast<const uint16_t*>(raw.data());
+            for (size_t i = 0; i < numElems; ++i)
+                t.data[i] = bf16ToFloat(src[i]);
         }
         result[name] = std::move(t);
     }

@@ -52,7 +52,9 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
     const size_t   total = onnxBytes.size();
 
     OnnxTensorIndex result;
-    int extCount = 0;
+    int extCount   = 0;
+    int graphCount = 0;
+    int initCount  = 0;  // all initializers seen (inline + external)
 
     // Scan ModelProto for field 7 (graph).
     size_t pos = 0;
@@ -62,23 +64,17 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
         const int      wireType = static_cast<int>(tag & 7u);
 
         if (fieldNum != 7 || wireType != 2) { skipField(data, pos, total, wireType); continue; }
+        ++graphCount;
 
         const uint64_t graphLen = readVarint(data, pos, total);
         const size_t   graphEnd = pos + static_cast<size_t>(graphLen);
 
-        // Scan GraphProto for field 6 (initializer, repeated).
-        while (pos < graphEnd) {
-            const uint64_t gtag      = readVarint(data, pos, graphEnd);
-            const int      gFieldNum = static_cast<int>(gtag >> 3);
-            const int      gWireType = static_cast<int>(gtag & 7u);
-
-            if (gFieldNum != 6 || gWireType != 2) { skipField(data, pos, graphEnd, gWireType); continue; }
-
-            const uint64_t tpLen = readVarint(data, pos, graphEnd);
-            const size_t   tpEnd = pos + static_cast<size_t>(tpLen);
-
-            // Parse TensorProto fields.
-            std::string          name;
+        // Parse one TensorProto sub-message (initializer or Constant value).
+        // Reads from [pos, tpEnd), populates the result map, updates counters.
+        // 'nameHint': for Constant nodes the name comes from NodeProto.output[0]
+        // rather than TensorProto.name (which is typically empty there).
+        auto parseTensorProto = [&](size_t tpEnd, const std::string& nameHint) {
+            std::string          name = nameHint;
             std::vector<int64_t> shape;
             int32_t              dtype      = 0;
             size_t               rdOffset   = 0;
@@ -92,10 +88,9 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                 const int      tWireType = static_cast<int>(ttag & 7u);
 
                 if (tFieldNum == 1 && tWireType == 0) {
-                    // dims — repeated varint, one tag+value pair per dimension.
                     shape.push_back(static_cast<int64_t>(readVarint(data, pos, tpEnd)));
                 } else if (tFieldNum == 1 && tWireType == 2) {
-                    // dims — packed encoding (proto3 may use this).
+                    // packed dims
                     const uint64_t packLen = readVarint(data, pos, tpEnd);
                     const size_t   packEnd = pos + static_cast<size_t>(packLen);
                     while (pos < packEnd)
@@ -105,8 +100,10 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                 } else if (tFieldNum == 4 && tWireType == 0) {
                     if (readVarint(data, pos, tpEnd) == 2u) hasExtData = true;  // EXTERNAL
                 } else if (tFieldNum == 8 && tWireType == 2) {
+                    // TensorProto.name — prefer the nameHint if already set
                     const uint64_t nLen = readVarint(data, pos, tpEnd);
-                    name = std::string(reinterpret_cast<const char*>(data + pos), nLen);
+                    if (name.empty())
+                        name = std::string(reinterpret_cast<const char*>(data + pos), nLen);
                     pos += static_cast<size_t>(nLen);
                 } else if (tFieldNum == 9 && tWireType == 2) {
                     const uint64_t rdLen = readVarint(data, pos, tpEnd);
@@ -120,21 +117,163 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
             }
             pos = tpEnd;
 
+            ++initCount;
             if (hasExtData) {
                 ++extCount;
             } else if (hasRawData && !name.empty()) {
-                // Normalise name: dots → underscores (matches kohya LoRA key format).
                 std::string norm = name;
                 for (char& c : norm) if (c == '.') c = '_';
                 result[norm] = { rdOffset, rdLength, shape, dtype };
+            }
+        };
+
+        // Diagnostic: count which field numbers appear in the GraphProto.
+        // Helps diagnose why 0 initialisers are found.
+        {
+            size_t dpos = pos;
+            std::map<int,int> fieldCounts;
+            while (dpos < graphEnd) {
+                const uint64_t dtag = readVarint(data, dpos, graphEnd);
+                const int df = static_cast<int>(dtag >> 3);
+                const int dw = static_cast<int>(dtag & 7u);
+                fieldCounts[df]++;
+                skipField(data, dpos, graphEnd, dw);
+                if (fieldCounts.size() + fieldCounts[df] > 50) break;  // stop after 50 distinct+repeated
+            }
+            std::string fc;
+            for (const auto& [f, c] : fieldCounts)
+                fc += "f" + std::to_string(f) + "x" + std::to_string(c) + " ";
+            Logger::info("ONNX graph fields (first 50): " + fc);
+        }
+
+        // Scan GraphProto for:
+        //   field 6 (initializer, repeated TensorProto) — standard initializers
+        //   field 1 (node,        repeated NodeProto)   — Constant ops (some exporters
+        //       skip initializers and embed all weights as Constant nodes instead)
+        while (pos < graphEnd) {
+            const uint64_t gtag      = readVarint(data, pos, graphEnd);
+            const int      gFieldNum = static_cast<int>(gtag >> 3);
+            const int      gWireType = static_cast<int>(gtag & 7u);
+
+            if (gWireType != 2) { skipField(data, pos, graphEnd, gWireType); continue; }
+
+            const uint64_t blockLen = readVarint(data, pos, graphEnd);
+            const size_t   blockEnd = pos + static_cast<size_t>(blockLen);
+
+            if (gFieldNum == 6) {
+                // ── Standard initializer ──────────────────────────────────────
+                parseTensorProto(blockEnd, "");
+
+            } else if (gFieldNum == 1) {
+                // ── NodeProto ─────────────────────────────────────────────────
+                // Parse just enough to detect op_type == "Constant".
+                // NodeProto fields:
+                //   1 = input (repeated string)   2 = output (repeated string)
+                //   3 = name (string)             4 = op_type (string)
+                //   5 = attribute (repeated AttributeProto)
+                std::string opType;
+                std::string outputName;  // first output = name of the produced value
+
+                size_t nodeScan = pos;
+                while (nodeScan < blockEnd) {
+                    const uint64_t ntag      = readVarint(data, nodeScan, blockEnd);
+                    const int      nFieldNum = static_cast<int>(ntag >> 3);
+                    const int      nWireType = static_cast<int>(ntag & 7u);
+                    if (nWireType != 2) { skipField(data, nodeScan, blockEnd, nWireType); continue; }
+
+                    const uint64_t nfLen  = readVarint(data, nodeScan, blockEnd);
+                    const size_t   nfEnd  = nodeScan + static_cast<size_t>(nfLen);
+                    if (nFieldNum == 2 && outputName.empty()) {
+                        outputName = std::string(
+                            reinterpret_cast<const char*>(data + nodeScan), nfLen);
+                    } else if (nFieldNum == 4) {
+                        opType = std::string(
+                            reinterpret_cast<const char*>(data + nodeScan), nfLen);
+                    }
+                    nodeScan = nfEnd;
+                }
+
+                if (opType == "Constant") {
+                    // Second pass over the NodeProto to find the "value" attribute.
+                    // AttributeProto fields:
+                    //   1 = name (string)   4 = type (varint)   5 = t (TensorProto)
+                    while (pos < blockEnd) {
+                        const uint64_t ntag2      = readVarint(data, pos, blockEnd);
+                        const int      nf2        = static_cast<int>(ntag2 >> 3);
+                        const int      nw2        = static_cast<int>(ntag2 & 7u);
+                        if (nw2 != 2) { skipField(data, pos, blockEnd, nw2); continue; }
+
+                        const uint64_t afLen = readVarint(data, pos, blockEnd);
+                        const size_t   afEnd = pos + static_cast<size_t>(afLen);
+
+                        if (nf2 == 5) {
+                            // AttributeProto — scan for name=="value" and field 5 (t)
+                            std::string attrName;
+                            size_t attrScan = pos;
+                            while (attrScan < afEnd) {
+                                const uint64_t atag = readVarint(data, attrScan, afEnd);
+                                const int      af   = static_cast<int>(atag >> 3);
+                                const int      aw   = static_cast<int>(atag & 7u);
+                                if (aw == 2) {
+                                    const uint64_t avLen = readVarint(data, attrScan, afEnd);
+                                    if (af == 1) {  // AttributeProto.name
+                                        attrName = std::string(
+                                            reinterpret_cast<const char*>(data + attrScan), avLen);
+                                    }
+                                    attrScan += static_cast<size_t>(avLen);
+                                } else {
+                                    skipField(data, attrScan, afEnd, aw);
+                                }
+                            }
+                            if (attrName == "value") {
+                                // Re-scan the same AttributeProto for field 5 (t = TensorProto).
+                                attrScan = pos;
+                                while (attrScan < afEnd) {
+                                    const uint64_t atag = readVarint(data, attrScan, afEnd);
+                                    const int      af   = static_cast<int>(atag >> 3);
+                                    const int      aw   = static_cast<int>(atag & 7u);
+                                    if (aw == 2) {
+                                        const uint64_t avLen = readVarint(data, attrScan, afEnd);
+                                        const size_t   avEnd = attrScan + static_cast<size_t>(avLen);
+                                        if (af == 5) {  // AttributeProto.t (TensorProto)
+                                            pos = attrScan;
+                                            parseTensorProto(avEnd, outputName);
+                                            attrScan = pos;
+                                        } else {
+                                            attrScan = avEnd;
+                                        }
+                                    } else {
+                                        skipField(data, attrScan, afEnd, aw);
+                                    }
+                                }
+                            }
+                            pos = afEnd;
+                        } else {
+                            pos = afEnd;
+                        }
+                    }
+                } else {
+                    pos = blockEnd;
+                }
+            } else {
+                pos = blockEnd;
             }
         }
         pos = graphEnd;
     }
 
+    Logger::info("ONNX patcher: graphs=" + std::to_string(graphCount)
+                 + "  tensors_found=" + std::to_string(initCount)
+                 + "  inline=" + std::to_string(result.size())
+                 + "  external=" + std::to_string(extCount)
+                 + "  (includes Constant nodes)");
+    if (graphCount == 0)
+        Logger::info("  WARNING: no GraphProto (field 7) found in ModelProto — "
+                     "file may be corrupted or use an unsupported ONNX variant");
     if (extCount > 0)
-        Logger::info("ONNX patcher: " + std::to_string(extCount) +
-                     " initialiser(s) use external data — LoRA skipped for those layers.");
+        Logger::info("  " + std::to_string(extCount) +
+                     " initialiser(s) use external data — LoRA skipped for those layers");
+    // Legacy single-line for backward log parsing.
     Logger::info("ONNX patcher: indexed " + std::to_string(result.size()) + " initialisers.");
 
     // Log a few sample names so the user can verify the dot→underscore normalisation
@@ -169,7 +308,12 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
 
     for (const auto& [key, tensor] : lora) {
         std::string body;
+        // Strip known kohya LoRA prefixes.
+        // lora_unet_  → UNet layers
+        // lora_te_    → text encoder 1 (SD 1.5 and SDXL encoder-1 / CLIP-L)
+        // lora_te2_   → text encoder 2 (SDXL OpenCLIP-G)
         if      (key.rfind("lora_unet_", 0) == 0) body = key.substr(10);
+        else if (key.rfind("lora_te2_",  0) == 0) body = key.substr(9);
         else if (key.rfind("lora_te_",   0) == 0) body = key.substr(8);
         else continue;
 
@@ -189,6 +333,43 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
     Logger::info("LoRA apply: " + std::to_string(completePairs) + " complete layer pair(s) in file"
                  + "  (scale=" + std::to_string(userScale) + ")");
 
+    // Key mapping: LoRA base names use underscores throughout (e.g.
+    // "down_blocks_0_attn1_to_q"), while ONNX initializer names may carry an
+    // extra model-level prefix (e.g. "model_diffusion_model_") that is absent
+    // from kohya LoRA keys.  parseTensorIndex already normalised all '.' to '_'
+    // so the suffix of the ONNX key matches the LoRA base exactly.
+    //
+    // Strategy: try exact match first (fast path); if that fails, scan for any
+    // ONNX key whose suffix equals "_" + target, which tolerates any prefix.
+    // The '_' boundary check prevents partial-word false positives.
+    auto findBySuffix = [&](const std::string& target)
+            -> OnnxTensorIndex::const_iterator {
+        // 1. Exact match (text-encoder layers often need no prefix stripping).
+        auto it = index.find(target);
+        if (it != index.end()) return it;
+
+        // 2. Suffix match: ONNX key ends with '_' + target.
+        //    Handles UNet keys that carry a "model_diffusion_model_" (or similar)
+        //    prefix that is not present in the LoRA key.
+        OnnxTensorIndex::const_iterator found = index.cend();
+        for (auto sit = index.cbegin(); sit != index.cend(); ++sit) {
+            const auto& k = sit->first;
+            if (k.size() > target.size() + 1 &&
+                k[k.size() - target.size() - 1] == '_' &&
+                k.compare(k.size() - target.size(), target.size(), target) == 0) {
+                if (found != index.cend()) {
+                    // Ambiguous suffix — log and prefer the first hit.
+                    Logger::info("  LoRA suffix ambiguous: " + target
+                                 + " matches both " + found->first
+                                 + " and " + k + " — using first");
+                    break;
+                }
+                found = sit;
+            }
+        }
+        return found;
+    };
+
     int patchCount  = 0;
     int missCount   = 0;
 
@@ -198,12 +379,17 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
             continue;
         }
 
-        // Lookup in ONNX index: LoRA base name + "_weight" suffix.
-        const auto it = index.find(loraBase + "_weight");
+        // Map LoRA base name to ONNX initializer:
+        //   loraBase (e.g. "down_blocks_0_attn1_to_q") + "_weight"
+        //   → ONNX key ending with "_down_blocks_0_attn1_to_q_weight"
+        // Also try "_bias" for layers that expose a bias initializer.
+        auto it = findBySuffix(loraBase + "_weight");
+        if (it == index.end())
+            it = findBySuffix(loraBase + "_bias");
         if (it == index.end()) {
             // Log the first few misses so the user can diagnose name-mapping issues.
             if (missCount < 5)
-                Logger::info("  LoRA no match: " + loraBase + "_weight");
+                Logger::info("  LoRA no match: " + loraBase + " (_weight / _bias)");
             ++missCount;
             continue;
         }
