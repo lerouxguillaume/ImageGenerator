@@ -1,6 +1,6 @@
 from safetensors import safe_open
 
-path = r"/media/sf_shared_vm/lora/goblin_v0.1a.safetensors"
+path = r"/media/sf_shared_vm/lora/nami_final_offset.safetensors"
 with safe_open(path, framework="pt") as f:
     keys = list(f.keys())
     print(f"Total keys: {len(keys)}")

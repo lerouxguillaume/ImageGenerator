@@ -107,11 +107,22 @@ def onnx_export(model: torch.nn.Module,
                 input_names: list,
                 output_names: list,
                 dynamic_axes: dict | None = None,
-                do_constant_folding: bool = True) -> None:
+                do_constant_folding: bool = False) -> None:
     """Consistent torch.onnx.export call with project-wide defaults.
 
     Always uses dynamo=False (TorchScript path) because the dynamo path does
     not support dynamic_axes.
+
+    keep_initializers_as_inputs=True forces PyTorch to store every model parameter
+    as a named ONNX initializer (graph.initializer) in its original, non-transposed
+    form with the Python dotted path as the name.  This is what the C++ LoRA patcher
+    requires: parseTensorIndex finds them by name, applyLoraToBytes patches the
+    un-transposed weight in-place.
+
+    do_constant_folding=False (default) keeps the graph structure clean (weight.T
+    is a runtime Transpose op, not a pre-folded constant), which is consistent with
+    the initializer storing the un-transposed weight.
+
     Prints the output file size on success.
     """
     name = os.path.basename(path)
@@ -124,7 +135,8 @@ def onnx_export(model: torch.nn.Module,
         output_names=output_names,
         dynamic_axes=dynamic_axes or {},
         do_constant_folding=do_constant_folding,
-        keep_initializers_as_inputs=False,
+        keep_initializers_as_inputs=True,
+        export_params=True,
     )
     size_mb = os.path.getsize(path) / 1e6
     print(f"  ✅ {name}  ({size_mb:.0f} MB)")

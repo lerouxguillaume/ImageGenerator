@@ -55,6 +55,8 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
     int extCount   = 0;
     int graphCount = 0;
     int initCount  = 0;  // all initializers seen (inline + external)
+    int f1seen     = 0;  // NodeProto entries (field 1) encountered
+    int f6seen     = 0;  // TensorProto initializer entries (field 6) encountered
 
     // Scan ModelProto for field 7 (graph).
     size_t pos = 0;
@@ -68,12 +70,15 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
 
         const uint64_t graphLen = readVarint(data, pos, total);
         const size_t   graphEnd = pos + static_cast<size_t>(graphLen);
+        Logger::info("GraphProto: graphLen=" + std::to_string(graphLen)
+                     + "  graphEnd=" + std::to_string(graphEnd)
+                     + "  total=" + std::to_string(total));
 
         // Parse one TensorProto sub-message (initializer or Constant value).
         // Reads from [pos, tpEnd), populates the result map, updates counters.
         // 'nameHint': for Constant nodes the name comes from NodeProto.output[0]
         // rather than TensorProto.name (which is typically empty there).
-        auto parseTensorProto = [&](size_t tpEnd, const std::string& nameHint) {
+        auto parseTensorProto = [&](size_t& p, size_t tpEnd, const std::string& nameHint) {
             std::string          name = nameHint;
             std::vector<int64_t> shape;
             int32_t              dtype      = 0;
@@ -82,40 +87,40 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
             bool                 hasRawData = false;
             bool                 hasExtData = false;
 
-            while (pos < tpEnd) {
-                const uint64_t ttag      = readVarint(data, pos, tpEnd);
+            while (p < tpEnd) {
+                const uint64_t ttag      = readVarint(data, p, tpEnd);
                 const int      tFieldNum = static_cast<int>(ttag >> 3);
                 const int      tWireType = static_cast<int>(ttag & 7u);
 
                 if (tFieldNum == 1 && tWireType == 0) {
-                    shape.push_back(static_cast<int64_t>(readVarint(data, pos, tpEnd)));
+                    shape.push_back(static_cast<int64_t>(readVarint(data, p, tpEnd)));
                 } else if (tFieldNum == 1 && tWireType == 2) {
                     // packed dims
-                    const uint64_t packLen = readVarint(data, pos, tpEnd);
-                    const size_t   packEnd = pos + static_cast<size_t>(packLen);
-                    while (pos < packEnd)
-                        shape.push_back(static_cast<int64_t>(readVarint(data, pos, packEnd)));
+                    const uint64_t packLen = readVarint(data, p, tpEnd);
+                    const size_t   packEnd = p + static_cast<size_t>(packLen);
+                    while (p < packEnd)
+                        shape.push_back(static_cast<int64_t>(readVarint(data, p, packEnd)));
                 } else if (tFieldNum == 2 && tWireType == 0) {
-                    dtype = static_cast<int32_t>(readVarint(data, pos, tpEnd));
+                    dtype = static_cast<int32_t>(readVarint(data, p, tpEnd));
                 } else if (tFieldNum == 4 && tWireType == 0) {
-                    if (readVarint(data, pos, tpEnd) == 2u) hasExtData = true;  // EXTERNAL
+                    if (readVarint(data, p, tpEnd) == 2u) hasExtData = true;  // EXTERNAL
                 } else if (tFieldNum == 8 && tWireType == 2) {
                     // TensorProto.name — prefer the nameHint if already set
-                    const uint64_t nLen = readVarint(data, pos, tpEnd);
+                    const uint64_t nLen = readVarint(data, p, tpEnd);
                     if (name.empty())
-                        name = std::string(reinterpret_cast<const char*>(data + pos), nLen);
-                    pos += static_cast<size_t>(nLen);
+                        name = std::string(reinterpret_cast<const char*>(data + p), nLen);
+                    p += static_cast<size_t>(nLen);
                 } else if (tFieldNum == 9 && tWireType == 2) {
-                    const uint64_t rdLen = readVarint(data, pos, tpEnd);
-                    rdOffset   = pos;
+                    const uint64_t rdLen = readVarint(data, p, tpEnd);
+                    rdOffset   = p;
                     rdLength   = static_cast<size_t>(rdLen);
                     hasRawData = true;
-                    pos += rdLength;
+                    p += rdLength;
                 } else {
-                    skipField(data, pos, tpEnd, tWireType);
+                    skipField(data, p, tpEnd, tWireType);
                 }
             }
-            pos = tpEnd;
+            p = tpEnd;
 
             ++initCount;
             if (hasExtData) {
@@ -162,9 +167,13 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
 
             if (gFieldNum == 6) {
                 // ── Standard initializer ──────────────────────────────────────
-                parseTensorProto(blockEnd, "");
+                ++f6seen;
+                size_t tpPos = pos;
+                parseTensorProto(tpPos, blockEnd, "");
+                pos = tpPos;
 
             } else if (gFieldNum == 1) {
+                ++f1seen;
                 // ── NodeProto ─────────────────────────────────────────────────
                 // Parse just enough to detect op_type == "Constant".
                 // NodeProto fields:
@@ -197,19 +206,20 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                     // Second pass over the NodeProto to find the "value" attribute.
                     // AttributeProto fields:
                     //   1 = name (string)   4 = type (varint)   5 = t (TensorProto)
-                    while (pos < blockEnd) {
-                        const uint64_t ntag2      = readVarint(data, pos, blockEnd);
-                        const int      nf2        = static_cast<int>(ntag2 >> 3);
-                        const int      nw2        = static_cast<int>(ntag2 & 7u);
-                        if (nw2 != 2) { skipField(data, pos, blockEnd, nw2); continue; }
+                    size_t nodePos = pos;
+                    while (nodePos < blockEnd) {
+                        const uint64_t ntag2 = readVarint(data, nodePos, blockEnd);
+                        const int      nf2   = static_cast<int>(ntag2 >> 3);
+                        const int      nw2   = static_cast<int>(ntag2 & 7u);
+                        if (nw2 != 2) { skipField(data, nodePos, blockEnd, nw2); continue; }
 
-                        const uint64_t afLen = readVarint(data, pos, blockEnd);
-                        const size_t   afEnd = pos + static_cast<size_t>(afLen);
+                        const uint64_t afLen = readVarint(data, nodePos, blockEnd);
+                        const size_t   afEnd = nodePos + static_cast<size_t>(afLen);
 
                         if (nf2 == 5) {
                             // AttributeProto — scan for name=="value" and field 5 (t)
                             std::string attrName;
-                            size_t attrScan = pos;
+                            size_t attrScan = nodePos;
                             while (attrScan < afEnd) {
                                 const uint64_t atag = readVarint(data, attrScan, afEnd);
                                 const int      af   = static_cast<int>(atag >> 3);
@@ -227,7 +237,7 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                             }
                             if (attrName == "value") {
                                 // Re-scan the same AttributeProto for field 5 (t = TensorProto).
-                                attrScan = pos;
+                                attrScan = nodePos;
                                 while (attrScan < afEnd) {
                                     const uint64_t atag = readVarint(data, attrScan, afEnd);
                                     const int      af   = static_cast<int>(atag >> 3);
@@ -236,9 +246,9 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                                         const uint64_t avLen = readVarint(data, attrScan, afEnd);
                                         const size_t   avEnd = attrScan + static_cast<size_t>(avLen);
                                         if (af == 5) {  // AttributeProto.t (TensorProto)
-                                            pos = attrScan;
-                                            parseTensorProto(avEnd, outputName);
-                                            attrScan = pos;
+                                            size_t tpPos = attrScan;
+                                            parseTensorProto(tpPos, avEnd, outputName);
+                                            attrScan = tpPos;
                                         } else {
                                             attrScan = avEnd;
                                         }
@@ -247,11 +257,12 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                                     }
                                 }
                             }
-                            pos = afEnd;
+                            nodePos = afEnd;
                         } else {
-                            pos = afEnd;
+                            nodePos = afEnd;
                         }
                     }
+                    pos = blockEnd;
                 } else {
                     pos = blockEnd;
                 }
@@ -262,6 +273,8 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
         pos = graphEnd;
     }
 
+    Logger::info("ONNX patcher: field1_nodes=" + std::to_string(f1seen)
+                 + "  field6_initializers=" + std::to_string(f6seen));
     Logger::info("ONNX patcher: graphs=" + std::to_string(graphCount)
                  + "  tensors_found=" + std::to_string(initCount)
                  + "  inline=" + std::to_string(result.size())

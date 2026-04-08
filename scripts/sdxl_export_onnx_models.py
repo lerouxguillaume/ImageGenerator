@@ -160,7 +160,6 @@ def export_sdxl(model_file: str, output_dir: str) -> None:
                 "time_ids":              {0: "batch"},
                 "latent_out":            {0: "batch", 2: "height", 3: "width"},
             },
-            do_constant_folding=False,  # must be False for fp16 UNet — see module docstring
         )
         fix_fp32_constants(unet_path)
         free(unet, pipe.unet)
@@ -180,7 +179,6 @@ def export_sdxl(model_file: str, output_dir: str) -> None:
                 "latent": {0: "batch", 2: "height", 3: "width"},
                 "image":  {0: "batch", 2: "height", 3: "width"},
             },
-            do_constant_folding=False,
         )
         fix_fp32_constants(vae_path)
         simplify_with_onnxsim(vae_path)

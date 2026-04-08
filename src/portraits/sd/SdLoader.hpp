@@ -17,4 +17,5 @@ GenerationContext loadModels(const ModelConfig&           cfg,
                              const std::string&           modelDir,
                              const std::vector<LoraEntry>& loras = {});
 
+std::string mapLoraKeyToOnnx(const std::string& key);
 } // namespace sd

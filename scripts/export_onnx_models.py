@@ -44,7 +44,12 @@ class CLIPTextEncoderClipSkip2(torch.nn.Module):
     def forward(self, input_ids):
         out = self.text_encoder(input_ids, output_hidden_states=True)
         hidden = out.hidden_states[-2]
-        return self.text_encoder.text_model.final_layer_norm(hidden)
+
+        # Apply the final layer norm
+        hidden_norm = self.text_encoder.text_model.final_layer_norm(hidden)
+
+        # Return both: normalized output (for UNet) and latent (for LoRA)
+        return hidden_norm, hidden
 
 
 class UNetWrapper(torch.nn.Module):
@@ -75,14 +80,15 @@ def export_sd15(model_file: str, output_dir: str) -> None:
 
     # 1. Text encoder ─────────────────────────────────────────────────────────
     with export_step("1/3  Text encoder"):
+        hidden_size = pipe.text_encoder.config.hidden_size  # probably 1024 or 768
         clip = CLIPTextEncoderClipSkip2(pipe.text_encoder).eval()
         dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
         onnx_export(
             clip, dummy_ids,
             os.path.join(output_dir, "text_encoder.onnx"),
             input_names=["input_ids"],
-            output_names=["text_embeds"],
-            dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
+            output_names=["text_embeds", "hidden_latent"],
+            dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}, "hidden_latent": {0: "batch"}},
         )
         free(clip, pipe.text_encoder, pipe.tokenizer)
         pipe.text_encoder = None
@@ -94,9 +100,10 @@ def export_sd15(model_file: str, output_dir: str) -> None:
         dummy_latent   = torch.randn(1, 4, 64, 64, dtype=torch.float16)
         dummy_timestep = torch.tensor([1], dtype=torch.float16)
         dummy_embeds   = torch.randn(1, 77, 768, dtype=torch.float16)
+        unet_path = os.path.join(output_dir, "unet.onnx")
         onnx_export(
             unet, (dummy_latent, dummy_timestep, dummy_embeds),
-            os.path.join(output_dir, "unet.onnx"),
+            unet_path,
             input_names=["latent", "timestep", "encoder_hidden_states"],
             output_names=["latent_out"],
             dynamic_axes={
