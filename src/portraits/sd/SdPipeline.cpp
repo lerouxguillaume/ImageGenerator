@@ -115,7 +115,7 @@ void runPipeline(const std::string& prompt,
     Logger::info("Prompt: " + prompt);
     Logger::info("Neg:    " + neg_prompt);
 
-    auto ctx               = loadModels(cfg, modelDir);
+    auto ctx               = loadModels(cfg, modelDir, params.loras);
     ctx.guidance_scale     = params.guidanceScale;
     ctx.neg_guidance_scale = (params.negativeGuidanceScale > 0.0f)
                                ? params.negativeGuidanceScale

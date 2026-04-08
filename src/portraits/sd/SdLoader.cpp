@@ -1,5 +1,7 @@
 #include "SdLoader.hpp"
 #include "SdUtils.hpp"
+#include "SdSafetensors.hpp"
+#include "SdOnnxPatcher.hpp"
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -71,9 +73,23 @@ ModelConfig loadModelConfig(const std::string& modelDir) {
     return cfg;
 }
 
+// ── File reader ───────────────────────────────────────────────────────────────
+
+static std::vector<uint8_t> readFileBytes(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) throw std::runtime_error("Cannot open: " + path);
+    const auto size = static_cast<size_t>(f.tellg());
+    f.seekg(0);
+    std::vector<uint8_t> buf(size);
+    f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(size));
+    return buf;
+}
+
 // ── Session loading ───────────────────────────────────────────────────────────
 
-GenerationContext loadModels(const ModelConfig& cfg, const std::string& modelDir) {
+GenerationContext loadModels(const ModelConfig&            cfg,
+                             const std::string&            modelDir,
+                             const std::vector<LoraEntry>& loras) {
     const int latent_w = cfg.image_w / 8;
     const int latent_h = cfg.image_h / 8;
     auto t0 = Clock::now();
@@ -128,6 +144,7 @@ GenerationContext loadModels(const ModelConfig& cfg, const std::string& modelDir
             Logger::info((std::filesystem::exists(p) ? "  [OK] " : "  [MISSING] ") + p);
     }
 
+    // Path-based loader — used for VAE (no LoRA layers) and the no-LoRA fast path.
     auto loadSession = [&](const char* label, auto path, Ort::SessionOptions& opts) {
         Logger::info("Loading " + std::string(label) + "...");
         auto ts = Clock::now();
@@ -153,25 +170,83 @@ GenerationContext loadModels(const ModelConfig& cfg, const std::string& modelDir
 #endif
 
 #ifdef _WIN32
-    // ORT on Windows requires wchar_t paths.
     auto toWide = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
     const std::wstring wModelDir = toWide(modelDir);
-    ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), auxOpts);
-    ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         unetOpts);
-    ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
-    ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  auxOpts);
-    if (cfg.type == ModelType::SDXL)
-        ctx.text_encoder_2 = loadSession("text_encoder_2",
-                                         (wModelDir + L"/text_encoder_2.onnx").c_str(), auxOpts);
-#else
-    ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), auxOpts);
-    ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         unetOpts);
-    ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
-    ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  auxOpts);
-    if (cfg.type == ModelType::SDXL)
-        ctx.text_encoder_2 = loadSession("text_encoder_2",
-                                         (modelDir + "/text_encoder_2.onnx").c_str(), auxOpts);
 #endif
+
+    if (loras.empty()) {
+        // No LoRA: load directly from path so ORT can memory-map the file.
+#ifdef _WIN32
+        ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), auxOpts);
+        ctx.unet         = loadSession("unet",         (wModelDir + L"/unet.onnx").c_str(),         unetOpts);
+        ctx.cpu_unet     = loadSession("cpu_unet",     (wModelDir + L"/unet.onnx").c_str(),         ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (wModelDir + L"/vae_decoder.onnx").c_str(),  auxOpts);
+        if (cfg.type == ModelType::SDXL)
+            ctx.text_encoder_2 = loadSession("text_encoder_2",
+                                             (wModelDir + L"/text_encoder_2.onnx").c_str(), auxOpts);
+#else
+        ctx.text_encoder = loadSession("text_encoder", (modelDir + "/text_encoder.onnx").c_str(), auxOpts);
+        ctx.unet         = loadSession("unet",         (modelDir + "/unet.onnx").c_str(),         unetOpts);
+        ctx.cpu_unet     = loadSession("cpu_unet",     (modelDir + "/unet.onnx").c_str(),         ctx.cpu_session_opts);
+        ctx.vae_decoder  = loadSession("vae_decoder",  (modelDir + "/vae_decoder.onnx").c_str(),  auxOpts);
+        if (cfg.type == ModelType::SDXL)
+            ctx.text_encoder_2 = loadSession("text_encoder_2",
+                                             (modelDir + "/text_encoder_2.onnx").c_str(), auxOpts);
+#endif
+    } else {
+        // LoRA path: read each model into memory, apply patches, create session from bytes.
+        Logger::info("LoRA mode: " + std::to_string(loras.size()) + " adapter(s) configured.");
+
+        // Helper: read file bytes, apply all configured LoRA adapters, return patched bytes.
+        auto makePatchedBytes = [&](const std::string& path) -> std::vector<uint8_t> {
+            Logger::info("  Reading " + std::filesystem::path(path).filename().string() + "...");
+            auto bytes = readFileBytes(path);
+            auto idx   = parseTensorIndex(bytes);
+            int  total = 0;
+            for (const auto& lo : loras) {
+                try {
+                    auto loraMap = loadSafetensors(lo.path);
+                    total += applyLoraToBytes(bytes, idx, loraMap, lo.scale);
+                } catch (const std::exception& e) {
+                    Logger::info("  LoRA '" + lo.path + "' skipped: " + std::string(e.what()));
+                }
+            }
+            Logger::info("  " + std::to_string(total) + " LoRA layer(s) patched.");
+            return bytes;
+        };
+
+        // Helper: create an ORT session from a byte buffer.
+        auto sessionFromBytes = [&](const char* label, const std::vector<uint8_t>& bytes,
+                                     Ort::SessionOptions& opts) -> Ort::Session {
+            auto ts = Clock::now();
+            Ort::Session s(ctx.env, bytes.data(), bytes.size(), opts);
+            Logger::info("  " + std::string(label) + " session created in " + fmtMs(ts));
+            return s;
+        };
+
+        {
+            auto bytes = makePatchedBytes(modelDir + "/text_encoder.onnx");
+            ctx.text_encoder = sessionFromBytes("text_encoder", bytes, auxOpts);
+        }
+        {
+            // UNet bytes are shared between unet and cpu_unet to avoid reading
+            // and patching the (potentially 2 GB) file twice.
+            auto unetBytes = makePatchedBytes(modelDir + "/unet.onnx");
+            ctx.unet     = sessionFromBytes("unet",     unetBytes, unetOpts);
+            ctx.cpu_unet = sessionFromBytes("cpu_unet", unetBytes, ctx.cpu_session_opts);
+        }
+        // VAE has no LoRA layers in any known kohya-format adapter file.
+        // Load from path to avoid buffering an extra ~1 GB in RAM.
+#ifdef _WIN32
+        ctx.vae_decoder = loadSession("vae_decoder", (wModelDir + L"/vae_decoder.onnx").c_str(), auxOpts);
+#else
+        ctx.vae_decoder = loadSession("vae_decoder", (modelDir + "/vae_decoder.onnx").c_str(), auxOpts);
+#endif
+        if (cfg.type == ModelType::SDXL) {
+            auto bytes = makePatchedBytes(modelDir + "/text_encoder_2.onnx");
+            ctx.text_encoder_2 = sessionFromBytes("text_encoder_2", bytes, auxOpts);
+        }
+    }
 
     logModelIO("text_encoder", ctx.text_encoder, ctx.allocator);
     logModelIO("unet",         ctx.unet,         ctx.allocator);

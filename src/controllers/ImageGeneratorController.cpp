@@ -666,6 +666,10 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         params.width  = rw;
         params.height = rh;
         const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
+        const std::string modelName   = std::filesystem::path(modelDir).filename().string();
+        const auto mcIt = config.modelConfigs.find(modelName);
+        if (mcIt != config.modelConfigs.end())
+            params.loras = mcIt->second.loras;
         std::atomic<bool>* done       = &view.generationDone;
         std::atomic<int>*  step       = &view.generationStep;
         std::atomic<bool>* cancel     = &view.cancelToken;

@@ -1,8 +1,10 @@
 #pragma once
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "../enum/enums.hpp"
+#include "../config/AppConfig.hpp"   // for LoraEntry
 
 // Parameters shared by all generation entry points.
 struct GenerationParams {
@@ -14,6 +16,7 @@ struct GenerationParams {
     int     width                = 0;    // Output width in pixels; 0 = use model default (512 for SD1.5, 1024 for SDXL)
     int     height               = 0;    // Output height in pixels; 0 = use model default
     int64_t seed                 = -1;   // RNG seed; -1 = generate randomly. For multi-image runs, seed+i is used per image.
+    std::vector<LoraEntry> loras;        // LoRA adapters to apply; empty = none
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).

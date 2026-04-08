@@ -26,6 +26,15 @@ AppConfig AppConfig::load(const std::string& configPath) {
                 md.numSteps       = val.value("numSteps",       0);
                 md.guidanceScale  = val.value("guidanceScale",  0.f);
                 md.llmHint        = val.value("llmHint",        "");
+                if (val.contains("loras") && val["loras"].is_array()) {
+                    for (const auto& lo : val["loras"]) {
+                        LoraEntry entry;
+                        entry.path  = lo.value("path",  std::string{});
+                        entry.scale = lo.value("scale", 1.0f);
+                        if (!entry.path.empty())
+                            md.loras.push_back(entry);
+                    }
+                }
                 cfg.modelConfigs[key] = md;
             }
         }
@@ -59,6 +68,16 @@ void AppConfig::save(const std::string& configPath) const {
             if (md.numSteps > 0)            entry["numSteps"]       = md.numSteps;
             if (md.guidanceScale > 0.f)     entry["guidanceScale"]  = md.guidanceScale;
             if (!md.llmHint.empty())        entry["llmHint"]        = md.llmHint;
+            if (!md.loras.empty()) {
+                nlohmann::json lorasArr = nlohmann::json::array();
+                for (const auto& lo : md.loras) {
+                    nlohmann::json loEntry;
+                    loEntry["path"]  = lo.path;
+                    loEntry["scale"] = lo.scale;
+                    lorasArr.push_back(loEntry);
+                }
+                entry["loras"] = lorasArr;
+            }
             mcj[key] = entry;
         }
         j["modelConfigs"] = mcj;

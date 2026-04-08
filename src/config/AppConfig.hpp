@@ -1,6 +1,12 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
+
+struct LoraEntry {
+    std::string path;       // path to .safetensors file (relative to working dir)
+    float       scale = 1.0f;
+};
 
 struct PromptEnhancerConfig {
     bool        enabled  = false;
@@ -16,6 +22,7 @@ struct ModelDefaults {
     float       guidanceScale = 0.f;  // 0      → use global default
     std::string llmHint;              // plain-English style hint for the LLM enhancer
                                       // empty  → fall back to positivePrompt as style example
+    std::vector<LoraEntry> loras;     // LoRA adapters to apply to this model (empty = none)
 };
 
 // Persisted application settings. Saved to / loaded from config.json in the
