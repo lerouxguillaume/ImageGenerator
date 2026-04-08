@@ -175,6 +175,7 @@ GenerationContext loadModels(const ModelConfig&            cfg,
 #endif
 
     if (loras.empty()) {
+        Logger::info("No LoRA adapters configured — loading models directly from disk");
         // No LoRA: load directly from path so ORT can memory-map the file.
 #ifdef _WIN32
         ctx.text_encoder = loadSession("text_encoder", (wModelDir + L"/text_encoder.onnx").c_str(), auxOpts);
@@ -204,14 +205,17 @@ GenerationContext loadModels(const ModelConfig&            cfg,
             auto idx   = parseTensorIndex(bytes);
             int  total = 0;
             for (const auto& lo : loras) {
+                Logger::info("  Applying LoRA: " + lo.path + "  scale=" + std::to_string(lo.scale));
                 try {
                     auto loraMap = loadSafetensors(lo.path);
-                    total += applyLoraToBytes(bytes, idx, loraMap, lo.scale);
+                    Logger::info("  LoRA tensors loaded: " + std::to_string(loraMap.size()) + " key(s)");
+                    const int n = applyLoraToBytes(bytes, idx, loraMap, lo.scale);
+                    total += n;
                 } catch (const std::exception& e) {
                     Logger::info("  LoRA '" + lo.path + "' skipped: " + std::string(e.what()));
                 }
             }
-            Logger::info("  " + std::to_string(total) + " LoRA layer(s) patched.");
+            Logger::info("  Total LoRA patches for this model: " + std::to_string(total));
             return bytes;
         };
 

@@ -27,7 +27,9 @@ AppConfig AppConfig::load(const std::string& configPath) {
                 md.guidanceScale  = val.value("guidanceScale",  0.f);
                 md.llmHint        = val.value("llmHint",        "");
                 if (val.contains("loras") && val["loras"].is_array()) {
+                    Logger::info("Model '" + key + "' has " + std::to_string(val["loras"].size()) + " LoRA adapter(s) configured.");
                     for (const auto& lo : val["loras"]) {
+                        Logger::info("  LoRA entry: " + lo.dump());
                         LoraEntry entry;
                         entry.path  = lo.value("path",  std::string{});
                         entry.scale = lo.value("scale", 1.0f);

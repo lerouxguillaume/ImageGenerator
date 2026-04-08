@@ -136,6 +136,14 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
         Logger::info("ONNX patcher: " + std::to_string(extCount) +
                      " initialiser(s) use external data — LoRA skipped for those layers.");
     Logger::info("ONNX patcher: indexed " + std::to_string(result.size()) + " initialisers.");
+
+    // Log a few sample names so the user can verify the dot→underscore normalisation
+    // matches the kohya LoRA key format if 0 layers end up being patched.
+    int sample = 0;
+    for (const auto& [norm, _] : result) {
+        Logger::info("  ONNX index sample: " + norm);
+        if (++sample >= 3) break;
+    }
     return result;
 }
 
@@ -173,14 +181,32 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
             layers[body.substr(0, body.size() - 6)].alpha = tensor.data[0];
     }
 
-    int patchCount = 0;
+    // Count complete pairs (both down + up present).
+    int completePairs = 0;
+    for (const auto& [base, layer] : layers)
+        if (layer.down && layer.up) ++completePairs;
+
+    Logger::info("LoRA apply: " + std::to_string(completePairs) + " complete layer pair(s) in file"
+                 + "  (scale=" + std::to_string(userScale) + ")");
+
+    int patchCount  = 0;
+    int missCount   = 0;
 
     for (const auto& [loraBase, layer] : layers) {
-        if (!layer.down || !layer.up) continue;
+        if (!layer.down || !layer.up) {
+            Logger::info("  LoRA incomplete pair (missing down or up): " + loraBase);
+            continue;
+        }
 
         // Lookup in ONNX index: LoRA base name + "_weight" suffix.
         const auto it = index.find(loraBase + "_weight");
-        if (it == index.end()) continue;
+        if (it == index.end()) {
+            // Log the first few misses so the user can diagnose name-mapping issues.
+            if (missCount < 5)
+                Logger::info("  LoRA no match: " + loraBase + "_weight");
+            ++missCount;
+            continue;
+        }
 
         const TensorIndex& ti = it->second;
         if (ti.dtype != 1 && ti.dtype != 10) continue;  // only fp32 / fp16
@@ -235,10 +261,18 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         }
 
         ++patchCount;
-        Logger::info("LoRA patched: " + loraBase +
-                     " [" + std::to_string(out_feat) + "x" + std::to_string(in_feat) + "]");
+        Logger::info("  LoRA patched: " + loraBase +
+                     " [" + std::to_string(out_feat) + "x" + std::to_string(in_feat) + "]"
+                     + "  rank=" + std::to_string(rank)
+                     + "  effective_scale=" + std::to_string(effectiveScale));
     }
 
+    if (missCount > 5)
+        Logger::info("  LoRA no match: ..." + std::to_string(missCount - 5) + " more (total unmatched: "
+                     + std::to_string(missCount) + ")");
+
+    Logger::info("LoRA apply summary: " + std::to_string(patchCount) + "/" +
+                 std::to_string(completePairs) + " layers patched.");
     return patchCount;
 }
 
