@@ -346,11 +346,11 @@ namespace sd {
             k = k.substr(10);
         }
 
-        // Remove LoRA suffixes
-        if (k.find(".lora_down.weight") != std::string::npos)
-            k.replace(k.find(".lora_down.weight"), 18, ".weight");
-        else if (k.find(".lora_up.weight") != std::string::npos)
-            k.replace(k.find(".lora_up.weight"), 16, ".weight");
+        // ---- Remove LoRA suffixes ----
+        if (k.size() >= 18 && k.compare(k.size() - 18, 18, ".lora_down.weight") == 0)
+            k.replace(k.size() - 18, 18, ".weight");
+        else if (k.size() >= 16 && k.compare(k.size() - 16, 16, ".lora_up.weight") == 0)
+            k.replace(k.size() - 16, 16, ".weight");
 
         if (k.find(".alpha") != std::string::npos)
             return "";
@@ -364,26 +364,32 @@ namespace sd {
             }
         };
 
-        // hierarchy (underscores → dots ONLY for structure)
-        fix("down_blocks_", "down_blocks.");
-        fix("up_blocks_", "up_blocks.");
-        fix("mid_block_", "mid_block.");
-        fix("attentions_", "attentions.");
-        fix("transformer_blocks_", "transformer_blocks.");
+        if (is_unet) {
+            // hierarchy (underscores → dots ONLY for structure)
+            fix("down_blocks_", "down_blocks.");
+            fix("up_blocks_", "up_blocks.");
+            fix("mid_block_", "mid_block.");
+            fix("attentions_", "attentions.");
+            fix("transformer_blocks_", "transformer_blocks.");
 
-        // attention projections
-        fix("_to_q", ".to_q");
-        fix("_to_k", ".to_k");
-        fix("_to_v", ".to_v");
-        fix("_to_out_0", ".to_out.0");
+            // attention projections
+            fix("_to_q", ".to_q");
+            fix("_to_k", ".to_k");
+            fix("_to_v", ".to_v");
+            fix("_to_out_0", ".to_out.0");
+        }
 
-        // optional (some LoRAs use these)
+        if (is_te) {
+            fix("text_model_encoder_layers_", "text_model.encoder.layers.");
+            fix("mlp_fc1", "mlp.fc1");
+            fix("mlp_fc2", "mlp.fc2");
+        }
+
+        // Attention projections (both TE & UNet)
         fix("_q_proj", ".q_proj");
         fix("_k_proj", ".k_proj");
         fix("_v_proj", ".v_proj");
         fix("_out_proj", ".out_proj");
-
-        // ---- IMPORTANT: DO NOT TOUCH REMAINING UNDERSCORES ----
 
         // Add prefix
         if (is_te)

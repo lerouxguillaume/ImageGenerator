@@ -158,6 +158,126 @@ If the new model needs extra UNet inputs, add them to `GenerationContext` and ex
 
 Add `scripts/mynewmodel_export_onnx_models.py` following the same pattern as the existing scripts. Write `model.json` with the new type key so the loader detects it automatically.
 
+## LoRA support
+
+### Architecture
+
+LoRA is applied at model load time by patching the ONNX binary in memory before creating the ORT session. No LoRA-specific code runs at inference time.
+
+```
+SdLoader.cpp  makePatchedBytes()
+  → readFileBytes()          — load raw ONNX bytes
+  → parseTensorIndex()       — build name→{offset, length, shape, dtype} index
+  → applyLoraToBytes()       — patch weights in-place
+  → Ort::Session(bytes)      — create session from patched memory
+```
+
+Key files:
+- `sd/SdOnnxPatcher.hpp/.cpp` — ONNX protobuf parser + LoRA patcher
+- `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
+- `sd/SdLoader.cpp` `makePatchedBytes()` lambda (line ~202) — orchestrates load→patch→session
+- `sd/SdLoader.cpp` `mapLoraKeyToOnnx()` — debug-only key mapping (NOT used for actual matching)
+
+### LoRA key format (Kohya)
+
+Safetensors keys use this naming pattern:
+- `lora_te_text_model_encoder_layers_0_self_attn_q_proj.lora_down.weight`  (CLIP text encoder)
+- `lora_unet_down_blocks_0_attentions_0_transformer_blocks_0_attn1_to_q.lora_down.weight`  (UNet)
+- `lora_te2_...` — second text encoder (SDXL only)
+
+Each layer needs a down, up, and optionally alpha tensor. `applyLoraToBytes` groups these into triplets.
+
+### ONNX weight name matching
+
+`parseTensorIndex` normalises all `.` and `/` in ONNX initializer names to `_`, then builds a map. `applyLoraToBytes` strips the `lora_te_`/`lora_unet_` prefix, appends `_weight`, and searches by suffix:
+
+```
+LoRA base:  text_model_encoder_layers_0_self_attn_q_proj
+ONNX key:   text_encoder_text_model_encoder_layers_0_self_attn_q_proj_weight
+                         └──────────── suffix match ─────────────────────────┘
+```
+
+The suffix search is relaxed (no `_` boundary requirement). This works because ONNX names include a model-level prefix absent from LoRA keys.
+
+### ONNX protobuf field numbers
+
+PyTorch `torch.onnx.export` places named initializers at **GraphProto field 5** (not field 6 as some tools use). The parser accepts both. The diagnostic log line `ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...` confirms this — `f5x180` = 180 named initializers. If you see `f5x0 f6x0` on a newly exported model, the model was exported without `keep_initializers_as_inputs=True` and all weights are anonymous Constant nodes — re-export with the project's scripts.
+
+### Export requirements for LoRA to work
+
+Models **must** be exported with:
+```python
+keep_initializers_as_inputs=True   # weights become named field-5 initializers
+do_constant_folding=False          # prevents weights becoming anonymous Constant nodes
+```
+Both flags are set in `scripts/export_common.py` `onnx_export()`. Third-party pre-exported ONNX models typically lack these and will show 0 layers patched.
+
+### Delta formula
+
+```
+delta = effectiveScale × (lora_up @ lora_down)
+      = (userScale × alpha / rank) × (lora_up @ lora_down)
+```
+
+`lora_down`: shape `[rank, in_feat]` — `lora_up`: shape `[out_feat, rank]`
+
+### Known bugs (fixed)
+
+**`floatToFp16` subnormal bug** (`SdSafetensors.hpp`):  
+The original subnormal path used `shift = 1 + (-14 - exp32)` which was 12 too small, causing values in the fp16 subnormal range (~6e-8 to ~6e-5) to overflow and produce fp16 NaN. Symptom: `LoRA WARNING: X has N NaN/Inf AFTER patching` followed by all-NaN text encoder output. Fixed to `shift = 13 + (-14 - exp32)` with `& 0x3FFu` masking.
+
+### Diagnosing LoRA problems
+
+The log tells you everything. Check in this order:
+
+**1. Are initializers found at all?**
+```
+ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...
+ONNX patcher: indexed 397 initialisers.
+```
+`f5x0 f6x0` = no named weights. The model needs re-export.
+
+**2. Are weight names matching?**
+```
+ONNX weight sample: text_encoder_text_model_encoder_layers_0_mlp_fc1_weight
+LoRA patched: text_model_encoder_layers_0_mlp_fc1 [3072x768]
+```
+If you see `LoRA no match: ...` for most layers, the ONNX weight prefix or normalisation doesn't align with the LoRA key suffix.
+
+**3. Is patching introducing NaN?**
+```
+LoRA WARNING: text_model_encoder_layers_0_mlp_fc1 has 212 NaN/Inf AFTER patching
+```
+This indicates a bug in the fp16 write-back path. Check `floatToFp16` in `SdSafetensors.hpp`.
+
+**4. Are base weights already corrupt?**
+```
+LoRA WARNING: base text_model_encoder_layers_0_mlp_fc1 has N NaN/Inf BEFORE patching
+```
+The ONNX file itself is corrupted or the dtype detection is wrong.
+
+**5. Are delta values sane?**
+```
+[diag] first patch dtype=10  offset=80961930  pre[0..3]: 0.04 0.005 ...  delta[0..3]: 0.00002 ...
+[diag] post-patch[0..3]: 0.040192 ...
+```
+dtype should be 10 (fp16) or 1 (fp32). pre/post values should change by the delta. Huge delta values (`LoRA large delta: ... peak=15`) indicate scale or alpha issue.
+
+**6. Does the text encoder output have NaN?**
+```
+embedding stats: min=1000000000.000000  max=-1000000000.000000  mean=nan
+```
+The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons return false). NaN propagates: text encoder → UNet cross-attention → NaN eps → black image.
+
+### Temporary diagnostics in the patcher
+
+`SdOnnxPatcher.cpp` `applyLoraToBytes()` contains:
+- Pre/post-patch NaN checks for every patched tensor (logs `LoRA WARNING`)
+- First-patch dtype + sample value logging (logs `[diag]`)
+- Delta magnitude warning for `peak > 1.0` (logs `LoRA large delta`)
+
+These are safe to leave enabled; they add minimal overhead relative to session creation time. Remove them when LoRA is fully stable.
+
 ## What NOT to do
 
 - The SD 1.5 VAE export now uses `dynamic_axes` for height/width (needed for non-512 resolutions). This is safe because the VAE always loads with `cpu_session_opts` and never goes through DML. Do not remove those dynamic axes.

@@ -51,8 +51,12 @@ static inline uint16_t floatToFp16(float f) {
     if (exp32 > 15)  return static_cast<uint16_t>((sign << 15) | 0x7C00u);  // clamp to Inf
     if (exp32 < -24) return static_cast<uint16_t>(sign << 15);              // underflow → zero
     if (exp32 < -14) {                                                        // subnormal fp16
-        const uint32_t m = (mant32 | 0x800000u) >> (1u + static_cast<uint32_t>(-14 - exp32));
-        return static_cast<uint16_t>((sign << 15) | m);
+        // Correct shift: mant10 = (1.mant32) >> (-exp32 - 1)
+        // = (mant32 | 0x800000) >> (13 + (-14 - exp32))
+        // The original used shift=1+(-14-exp32) which was 12 too small, causing
+        // overflow in the lower 16 bits and producing fp16 NaN for ~[6e-8, 6e-5].
+        const uint32_t m = (mant32 | 0x800000u) >> (13u + static_cast<uint32_t>(-14 - exp32));
+        return static_cast<uint16_t>((sign << 15) | (m & 0x3FFu));
     }
     const uint32_t exp5   = static_cast<uint32_t>(exp32 + 15);
     const uint32_t mant10 = (mant32 + 0x1000u) >> 13;  // round-to-nearest

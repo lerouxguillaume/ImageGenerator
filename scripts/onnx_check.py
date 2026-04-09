@@ -74,9 +74,9 @@ print(f'Initializers (field 6): {len(inits)}')
 print(f'All nodes: {len(nodes)}')
 print(f'Constant nodes: {len(const_nodes)}')
 if inits:
-    print('First 3 initializer names:', [i.name for i in inits[:3]])
+    print('First 3 initializer names:', [i.name for i in inits[:10]])
 if const_nodes:
-    print('First 3 Constant output names:', [n.output[0] for n in const_nodes[:3]])
+    print('First 3 Constant output names:', [n.output[0] for n in const_nodes[:10]])
 # Check for weight-like names
 weight_inits = [i.name for i in inits if 'weight' in i.name.lower() or 'proj' in i.name.lower()]
 print(f'Weight-like initializers: {len(weight_inits)}')

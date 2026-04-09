@@ -450,6 +450,42 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         // Patch raw_data in-place (same byte count — only values change, not size).
         uint8_t* raw = onnxBytes.data() + ti.rawDataOffset;
 
+        // Pre-patch diagnostics for the first patch: verify dtype and sample values.
+        if (patchCount == 0) {
+            std::string dbgPre, dbgDelta;
+            if (ti.dtype == 10) {
+                auto* b = reinterpret_cast<uint16_t*>(raw);
+                for (int j = 0; j < 4 && j < static_cast<int>(out_feat * in_feat); ++j)
+                    dbgPre += std::to_string(fp16ToFloat(b[j])) + " ";
+            } else if (ti.dtype == 1) {
+                auto* b = reinterpret_cast<float*>(raw);
+                for (int j = 0; j < 4 && j < static_cast<int>(out_feat * in_feat); ++j)
+                    dbgPre += std::to_string(b[j]) + " ";
+            }
+            for (int j = 0; j < 4 && j < static_cast<int>(delta.size()); ++j)
+                dbgDelta += std::to_string(delta[j]) + " ";
+            Logger::info("  [diag] first patch dtype=" + std::to_string(ti.dtype)
+                         + "  offset=" + std::to_string(ti.rawDataOffset)
+                         + "  pre[0..3]: " + dbgPre + " delta[0..3]: " + dbgDelta);
+        }
+
+        // Pre-patch NaN check: detect if base weight was already corrupt.
+        {
+            int nanPre = 0;
+            if (ti.dtype == 10) {
+                auto* b = reinterpret_cast<uint16_t*>(raw);
+                for (int64_t k = 0; k < out_feat * in_feat; ++k)
+                    if (!std::isfinite(fp16ToFloat(b[k]))) ++nanPre;
+            } else if (ti.dtype == 1) {
+                auto* b = reinterpret_cast<float*>(raw);
+                for (int64_t k = 0; k < out_feat * in_feat; ++k)
+                    if (!std::isfinite(b[k])) ++nanPre;
+            }
+            if (nanPre > 0)
+                Logger::info("  LoRA WARNING: base " + loraBase
+                             + " has " + std::to_string(nanPre) + " NaN/Inf BEFORE patching");
+        }
+
         if (ti.dtype == 1) {
             // float32 base
             auto* base = reinterpret_cast<float*>(raw);
@@ -460,6 +496,38 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
             auto* base = reinterpret_cast<uint16_t*>(raw);
             for (int64_t k = 0; k < out_feat * in_feat; ++k)
                 base[k] = floatToFp16(fp16ToFloat(base[k]) + delta[static_cast<size_t>(k)]);
+        }
+
+        // Post-patch NaN check: detect if patching introduced NaN/Inf.
+        {
+            int nanPost = 0;
+            if (ti.dtype == 10) {
+                auto* b = reinterpret_cast<uint16_t*>(raw);
+                for (int64_t k = 0; k < out_feat * in_feat; ++k)
+                    if (!std::isfinite(fp16ToFloat(b[k]))) ++nanPost;
+            } else if (ti.dtype == 1) {
+                auto* b = reinterpret_cast<float*>(raw);
+                for (int64_t k = 0; k < out_feat * in_feat; ++k)
+                    if (!std::isfinite(b[k])) ++nanPost;
+            }
+            if (nanPost > 0)
+                Logger::info("  LoRA WARNING: " + loraBase
+                             + " has " + std::to_string(nanPost) + " NaN/Inf AFTER patching");
+        }
+
+        // Post-patch: log first 4 values for the first layer to confirm correct write.
+        if (patchCount == 0) {
+            std::string dbgPost;
+            if (ti.dtype == 10) {
+                auto* b = reinterpret_cast<uint16_t*>(raw);
+                for (int j = 0; j < 4 && j < static_cast<int>(out_feat * in_feat); ++j)
+                    dbgPost += std::to_string(fp16ToFloat(b[j])) + " ";
+            } else if (ti.dtype == 1) {
+                auto* b = reinterpret_cast<float*>(raw);
+                for (int j = 0; j < 4 && j < static_cast<int>(out_feat * in_feat); ++j)
+                    dbgPost += std::to_string(b[j]) + " ";
+            }
+            Logger::info("  [diag] post-patch[0..3]: " + dbgPost);
         }
 
         ++patchCount;
