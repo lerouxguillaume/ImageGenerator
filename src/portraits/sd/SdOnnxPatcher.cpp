@@ -15,10 +15,10 @@ namespace sd {
 //
 // Relevant field numbers:
 //   ModelProto  field 7  → GraphProto
-//   GraphProto  field 6  → TensorProto (repeated)
+//   GraphProto  field 5  → TensorProto initializer (repeated)  ← PyTorch/ONNX runtime uses 5
+//               field 6  → TensorProto initializer (repeated)  ← some ONNX versions use 6
 //   TensorProto field 1  → dims        (repeated varint)
 //               field 2  → data_type   (varint: 1=float32, 10=float16)
-//               field 4  → data_location (varint: 2=EXTERNAL)
 //               field 8  → name        (string)
 //               field 9  → raw_data    (bytes)
 
@@ -127,13 +127,17 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                 ++extCount;
             } else if (hasRawData && !name.empty()) {
                 std::string norm = name;
-                for (char& c : norm) if (c == '.') c = '_';
+                // Normalise both '.' and '/' to '_' so that:
+                //   - dotted PyTorch names  "text_encoder.text_model.encoder..."
+                //   - ONNX path names       "/text_encoder/text_model/encoder..."
+                // both become underscore-separated and match kohya LoRA keys.
+                for (char& c : norm) if (c == '.' || c == '/') c = '_';
                 result[norm] = { rdOffset, rdLength, shape, dtype };
             }
         };
 
-        // Diagnostic: count which field numbers appear in the GraphProto.
-        // Helps diagnose why 0 initialisers are found.
+        // Diagnostic: count ALL field numbers in the GraphProto.
+        // skipField jumps over bulk data, so this is fast (~1200 fields total).
         {
             size_t dpos = pos;
             std::map<int,int> fieldCounts;
@@ -143,12 +147,11 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                 const int dw = static_cast<int>(dtag & 7u);
                 fieldCounts[df]++;
                 skipField(data, dpos, graphEnd, dw);
-                if (fieldCounts.size() + fieldCounts[df] > 50) break;  // stop after 50 distinct+repeated
             }
             std::string fc;
             for (const auto& [f, c] : fieldCounts)
                 fc += "f" + std::to_string(f) + "x" + std::to_string(c) + " ";
-            Logger::info("ONNX graph fields (first 50): " + fc);
+            Logger::info("ONNX graph fields (ALL): " + fc);
         }
 
         // Scan GraphProto for:
@@ -165,8 +168,9 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
             const uint64_t blockLen = readVarint(data, pos, graphEnd);
             const size_t   blockEnd = pos + static_cast<size_t>(blockLen);
 
-            if (gFieldNum == 6) {
+            if (gFieldNum == 5 || gFieldNum == 6) {
                 // ── Standard initializer ──────────────────────────────────────
+                // PyTorch-exported ONNX models use field 5; some other tools use field 6.
                 ++f6seen;
                 size_t tpPos = pos;
                 parseTensorProto(tpPos, blockEnd, "");
@@ -270,6 +274,10 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
                 pos = blockEnd;
             }
         }
+        if (pos != graphEnd)
+            Logger::info("  WARNING: inner loop ended at pos=" + std::to_string(pos)
+                         + " expected graphEnd=" + std::to_string(graphEnd)
+                         + " (diff=" + std::to_string(static_cast<int64_t>(graphEnd) - static_cast<int64_t>(pos)) + ")");
         pos = graphEnd;
     }
 
@@ -289,12 +297,19 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
     // Legacy single-line for backward log parsing.
     Logger::info("ONNX patcher: indexed " + std::to_string(result.size()) + " initialisers.");
 
-    // Log a few sample names so the user can verify the dot→underscore normalisation
-    // matches the kohya LoRA key format if 0 layers end up being patched.
+    // Log sample names so the user can verify normalisation matches kohya LoRA keys.
+    // Show the first 5 and then 5 names that contain "weight" (more diagnostic value).
     int sample = 0;
     for (const auto& [norm, _] : result) {
         Logger::info("  ONNX index sample: " + norm);
-        if (++sample >= 3) break;
+        if (++sample >= 5) break;
+    }
+    int wsample = 0;
+    for (const auto& [norm, _] : result) {
+        if (norm.find("weight") != std::string::npos) {
+            Logger::info("  ONNX weight sample: " + norm);
+            if (++wsample >= 5) break;
+        }
     }
     return result;
 }
@@ -357,30 +372,18 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
     // The '_' boundary check prevents partial-word false positives.
     auto findBySuffix = [&](const std::string& target)
             -> OnnxTensorIndex::const_iterator {
-        // 1. Exact match (text-encoder layers often need no prefix stripping).
-        auto it = index.find(target);
-        if (it != index.end()) return it;
 
-        // 2. Suffix match: ONNX key ends with '_' + target.
-        //    Handles UNet keys that carry a "model_diffusion_model_" (or similar)
-        //    prefix that is not present in the LoRA key.
-        OnnxTensorIndex::const_iterator found = index.cend();
-        for (auto sit = index.cbegin(); sit != index.cend(); ++sit) {
-            const auto& k = sit->first;
-            if (k.size() > target.size() + 1 &&
-                k[k.size() - target.size() - 1] == '_' &&
+        for (auto it = index.cbegin(); it != index.cend(); ++it) {
+            const auto& k = it->first;
+
+            // 🔥 relaxed match (no strict '_' boundary)
+            if (k.size() >= target.size() &&
                 k.compare(k.size() - target.size(), target.size(), target) == 0) {
-                if (found != index.cend()) {
-                    // Ambiguous suffix — log and prefer the first hit.
-                    Logger::info("  LoRA suffix ambiguous: " + target
-                                 + " matches both " + found->first
-                                 + " and " + k + " — using first");
-                    break;
+                return it;
                 }
-                found = sit;
-            }
         }
-        return found;
+
+        return index.cend();
     };
 
     int patchCount  = 0;

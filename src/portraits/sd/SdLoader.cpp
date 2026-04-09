@@ -340,64 +340,56 @@ namespace sd {
 
         // Strip prefixes
         if (is_te) {
-            if (k.rfind("lora_te_", 0) == 0) k = k.substr(strlen("lora_te_"));
-            else if (k.rfind("lora_text_encoder_", 0) == 0)
-                k = k.substr(strlen("lora_text_encoder_"));
+            if (k.rfind("lora_te_", 0) == 0) k = k.substr(8);
+            else if (k.rfind("lora_text_encoder_", 0) == 0) k = k.substr(18);
+        } else if (is_unet) {
+            k = k.substr(10);
         }
-        if (is_unet) k = k.substr(strlen("lora_unet_"));
 
-        // Remove LoRA suffixes (common variations)
+        // Remove LoRA suffixes
         if (k.find(".lora_down.weight") != std::string::npos)
             k.replace(k.find(".lora_down.weight"), 18, ".weight");
-        else if (k.find("lora_down.weight") != std::string::npos)
-            k.replace(k.find("lora_down.weight"), 15, ".weight");
-        else if (k.find("lora_down") != std::string::npos)
-            k.replace(k.find("lora_down"), 9, ".weight");
-
-        if (k.find(".lora_up.weight") != std::string::npos)
+        else if (k.find(".lora_up.weight") != std::string::npos)
             k.replace(k.find(".lora_up.weight"), 16, ".weight");
-        else if (k.find("lora_up.weight") != std::string::npos)
-            k.replace(k.find("lora_up.weight"), 13, ".weight");
-        else if (k.find("lora_up") != std::string::npos)
-            k.replace(k.find("lora_up"), 7, ".weight");
 
-        // Ignore alpha parameters
-        if (k.find(".alpha") != std::string::npos) return "";
+        if (k.find(".alpha") != std::string::npos)
+            return "";
 
-        // Fix attention projection names
+        // ---- STRUCTURE FIXES (ONLY THESE!) ----
         auto fix = [&](const std::string& from, const std::string& to) {
-            size_t pos;
-            while ((pos = k.find(from)) != std::string::npos)
+            size_t pos = 0;
+            while ((pos = k.find(from, pos)) != std::string::npos) {
                 k.replace(pos, from.length(), to);
+                pos += to.length();
+            }
         };
-        fix("_q_proj", ".q_proj");
-        fix("_k_proj", ".k_proj");
-        fix("_v_proj", ".v_proj");
-        fix("_out_proj", ".out_proj");
+
+        // hierarchy (underscores → dots ONLY for structure)
+        fix("down_blocks_", "down_blocks.");
+        fix("up_blocks_", "up_blocks.");
+        fix("mid_block_", "mid_block.");
+        fix("attentions_", "attentions.");
+        fix("transformer_blocks_", "transformer_blocks.");
+
+        // attention projections
         fix("_to_q", ".to_q");
         fix("_to_k", ".to_k");
         fix("_to_v", ".to_v");
         fix("_to_out_0", ".to_out.0");
 
-        // Underscore → dot (skip prefix like text_model)
-        if (is_te) {
-            const std::string prefix = "text_model";
-            if (k.rfind(prefix, 0) == 0)
-                std::replace(k.begin() + prefix.size(), k.end(), '_', '.');
-            else
-                std::replace(k.begin(), k.end(), '_', '.');
-        } else {
-            std::replace(k.begin(), k.end(), '_', '.');
-        }
+        // optional (some LoRAs use these)
+        fix("_q_proj", ".q_proj");
+        fix("_k_proj", ".k_proj");
+        fix("_v_proj", ".v_proj");
+        fix("_out_proj", ".out_proj");
 
-        // Add root module prefix
-        if (is_te) {
+        // ---- IMPORTANT: DO NOT TOUCH REMAINING UNDERSCORES ----
+
+        // Add prefix
+        if (is_te)
             k = "text_encoder." + k;
-        } else if (is_unet) {
+        else if (is_unet)
             k = "unet." + k;
-        } else {
-            Logger::info("Warning: unknown module for LoRA key: " + key);
-        }
 
         Logger::info("mapLoraKeyToOnnx: " + key + " -> " + k);
         return k;

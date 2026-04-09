@@ -45,15 +45,40 @@
 # for w in weights[:10]: print(' ', w)
 
 
+# import onnx
+# m = onnx.load('/media/sf_shared_vm/models/hassakuSD15_v13/unet.onnx')
+# has_raw  = sum(1 for i in m.graph.initializer if len(i.raw_data) > 0)
+# no_data  = sum(1 for i in m.graph.initializer if len(i.raw_data) == 0 and len(i.float_data) == 0)
+# print(f'Initializers total : {len(m.graph.initializer)}')
+# print(f'  with raw_data    : {has_raw}')
+# print(f'  empty (no data)  : {no_data}')
+# # Show first weight initializer details
+# for i in m.graph.initializer:
+#     if 'weight' in i.name and 'embedding' not in i.name:
+#         print(f'Sample weight: {i.name}  raw_data={len(i.raw_data)}  float_data={len(i.float_data)}  dims={list(i.dims)}')
+#         break
+
+
+# import onnx
+#
+# model = onnx.load('/media/sf_shared_vm/models/hassakuSD15_v13/unet.onnx')
+#
+# print("Initializers:", len(model.graph.initializer))
+
 import onnx
-m = onnx.load('/media/sf_shared_vm/models/hassakuSD15_v13/unet.onnx')
-has_raw  = sum(1 for i in m.graph.initializer if len(i.raw_data) > 0)
-no_data  = sum(1 for i in m.graph.initializer if len(i.raw_data) == 0 and len(i.float_data) == 0)
-print(f'Initializers total : {len(m.graph.initializer)}')
-print(f'  with raw_data    : {has_raw}')
-print(f'  empty (no data)  : {no_data}')
-# Show first weight initializer details
-for i in m.graph.initializer:
-    if 'weight' in i.name and 'embedding' not in i.name:
-        print(f'Sample weight: {i.name}  raw_data={len(i.raw_data)}  float_data={len(i.float_data)}  dims={list(i.dims)}')
-        break
+m = onnx.load('/media/sf_shared_vm/models/hassakuSD15_v13/text_encoder.onnx')
+inits = list(m.graph.initializer)
+nodes = list(m.graph.node)
+const_nodes = [n for n in nodes if n.op_type == 'Constant']
+print(f'Initializers (field 6): {len(inits)}')
+print(f'All nodes: {len(nodes)}')
+print(f'Constant nodes: {len(const_nodes)}')
+if inits:
+    print('First 3 initializer names:', [i.name for i in inits[:3]])
+if const_nodes:
+    print('First 3 Constant output names:', [n.output[0] for n in const_nodes[:3]])
+# Check for weight-like names
+weight_inits = [i.name for i in inits if 'weight' in i.name.lower() or 'proj' in i.name.lower()]
+print(f'Weight-like initializers: {len(weight_inits)}')
+if weight_inits:
+    print('Sample:', weight_inits[:3])
