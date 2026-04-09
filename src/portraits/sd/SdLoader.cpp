@@ -209,32 +209,10 @@ namespace sd {
                     Logger::info("Applying LoRA: " + lo.path + "  scale=" + std::to_string(lo.scale));
                     try {
                         auto rawLoraMap = loadSafetensors(lo.path);
-                        SafetensorsMap mappedLoraMap;
-
-                        for (const auto& [key, tensor] : rawLoraMap) {
-                            std::string mappedKey = mapLoraKeyToOnnx(key);
-
-                            if (!mappedKey.empty()) {
-                                mappedLoraMap[mappedKey] = tensor;
-                            }
-                        }
                         Logger::info("  LoRA tensors loaded: " + std::to_string(rawLoraMap.size()) + " key(s)");
 
-                        // Log which keys exist in the model
-                        int matched = 0;
-                        for (const auto& [mapped, _] : mappedLoraMap) {
-                            if (idx.find(mapped) != idx.end()) {
-                                Logger::info("    Matched key: " + mapped);
-                                matched++;
-                            } else {
-                                Logger::info("    Key not matched: " + mapped);
-                            }
-                        }
-                        Logger::info("  LoRA keys matching model: " + std::to_string(matched) + "/" + std::to_string(mappedLoraMap.size()));
-
-                        // Apply LoRA directly to the model bytes we read.
                         // applyLoraToBytes expects raw kohya keys (lora_te_/lora_unet_ prefixes)
-                        // and does its own internal name mapping — pass rawLoraMap, not mappedLoraMap.
+                        // and does its own internal suffix-based name matching.
                         const int n = applyLoraToBytes(bytes, idx, rawLoraMap, lo.scale);
                         total += n; // accumulate patched layers
                         Logger::info("  Total layers patched for this LoRA: " + std::to_string(n));
@@ -332,72 +310,4 @@ namespace sd {
         return ctx;
     }
 
-    std::string mapLoraKeyToOnnx(const std::string& key) {
-        std::string k = key;
-
-        bool is_te   = k.rfind("lora_te_", 0) == 0 || k.rfind("lora_text_encoder_", 0) == 0;
-        bool is_unet = k.rfind("lora_unet_", 0) == 0;
-
-        // Strip prefixes
-        if (is_te) {
-            if (k.rfind("lora_te_", 0) == 0) k = k.substr(8);
-            else if (k.rfind("lora_text_encoder_", 0) == 0) k = k.substr(18);
-        } else if (is_unet) {
-            k = k.substr(10);
-        }
-
-        // ---- Remove LoRA suffixes ----
-        if (k.size() >= 18 && k.compare(k.size() - 18, 18, ".lora_down.weight") == 0)
-            k.replace(k.size() - 18, 18, ".weight");
-        else if (k.size() >= 16 && k.compare(k.size() - 16, 16, ".lora_up.weight") == 0)
-            k.replace(k.size() - 16, 16, ".weight");
-
-        if (k.find(".alpha") != std::string::npos)
-            return "";
-
-        // ---- STRUCTURE FIXES (ONLY THESE!) ----
-        auto fix = [&](const std::string& from, const std::string& to) {
-            size_t pos = 0;
-            while ((pos = k.find(from, pos)) != std::string::npos) {
-                k.replace(pos, from.length(), to);
-                pos += to.length();
-            }
-        };
-
-        if (is_unet) {
-            // hierarchy (underscores → dots ONLY for structure)
-            fix("down_blocks_", "down_blocks.");
-            fix("up_blocks_", "up_blocks.");
-            fix("mid_block_", "mid_block.");
-            fix("attentions_", "attentions.");
-            fix("transformer_blocks_", "transformer_blocks.");
-
-            // attention projections
-            fix("_to_q", ".to_q");
-            fix("_to_k", ".to_k");
-            fix("_to_v", ".to_v");
-            fix("_to_out_0", ".to_out.0");
-        }
-
-        if (is_te) {
-            fix("text_model_encoder_layers_", "text_model.encoder.layers.");
-            fix("mlp_fc1", "mlp.fc1");
-            fix("mlp_fc2", "mlp.fc2");
-        }
-
-        // Attention projections (both TE & UNet)
-        fix("_q_proj", ".q_proj");
-        fix("_k_proj", ".k_proj");
-        fix("_v_proj", ".v_proj");
-        fix("_out_proj", ".out_proj");
-
-        // Add prefix
-        if (is_te)
-            k = "text_encoder." + k;
-        else if (is_unet)
-            k = "unet." + k;
-
-        Logger::info("mapLoraKeyToOnnx: " + key + " -> " + k);
-        return k;
-    }
 }
