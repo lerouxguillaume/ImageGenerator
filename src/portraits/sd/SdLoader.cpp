@@ -85,6 +85,22 @@ namespace sd {
         return buf;
     }
 
+    // ── Model byte cache ──────────────────────────────────────────────────────────
+    // Base model bytes (unpatched) keyed by absolute file path.
+    // Populated on the first LoRA run; avoids disk I/O on subsequent runs.
+    static std::unordered_map<std::string, std::vector<uint8_t>> s_modelBytesCache;
+
+    static const std::vector<uint8_t>& cachedReadFileBytes(const std::string& path) {
+        auto it = s_modelBytesCache.find(path);
+        if (it != s_modelBytesCache.end()) {
+            Logger::info("  Byte cache hit: " + std::filesystem::path(path).filename().string());
+            return it->second;
+        }
+        Logger::info("  Byte cache miss (reading from disk): "
+                     + std::filesystem::path(path).filename().string());
+        return s_modelBytesCache[path] = readFileBytes(path);
+    }
+
     // ── Session loading ───────────────────────────────────────────────────────────
 
     GenerationContext loadModels(const ModelConfig&            cfg,
@@ -200,8 +216,8 @@ namespace sd {
 
             // Helper: read file bytes, apply all configured LoRA adapters, return patched bytes.
             auto makePatchedBytes = [&](const std::string& path) -> std::vector<uint8_t> {
-                Logger::info("  Reading " + std::filesystem::path(path).filename().string() + "...");
-                auto bytes = readFileBytes(path);
+                Logger::info("  Preparing " + std::filesystem::path(path).filename().string() + "...");
+                auto bytes = cachedReadFileBytes(path);  // copy from cache; avoids disk re-read
                 auto idx   = parseTensorIndex(bytes);
                 auto sidx  = buildSuffixIndex(idx);
                 int total  = 0;
