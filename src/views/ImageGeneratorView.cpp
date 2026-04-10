@@ -79,7 +79,7 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     drawButton(win, btnSettings, "Settings", Col::Panel2, Col::Muted, false, 12, font);
     y += 44.f;
 
-    // Model selector (dropdown)
+    // Model selector (dropdown) + LoRA button on the same row
     {
         const std::string displayName = availableModels.empty()
             ? "(no models found)"
@@ -89,6 +89,13 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
         btnModelDropdown = {LEFT_X + 60.f, y, 300.f, 22.f};
         drawButton(win, btnModelDropdown, label, Col::Panel2,
                    showModelDropdown ? Col::GoldLt : Col::Text, false, 12, font);
+
+        const int numSel = static_cast<int>(
+            std::count(loraSelected.begin(), loraSelected.end(), true));
+        const std::string loraLabel = "LoRA (" + std::to_string(numSel) + ")";
+        btnLoraPanel = {LEFT_X + 370.f, y, 110.f, 22.f};
+        drawButton(win, btnLoraPanel, loraLabel, Col::Panel2,
+                   showLoraPanel ? Col::GoldLt : Col::Text, false, 12, font);
     }
     y += 28.f;
 
@@ -219,6 +226,65 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
             drawText(win, font, name,
                      selected ? Col::GoldLt : Col::Text,
                      listX + 6.f, itemY + 4.f, 12);
+        }
+    }
+
+    // LoRA panel (drawn on top of all other UI, like the model dropdown)
+    if (showLoraPanel) {
+        constexpr float panelW   = 340.f;
+        constexpr float rowH     = 24.f;
+        constexpr float scaleW   = 50.f;
+        constexpr float listPad  = 4.f;
+        const float panelX = btnLoraPanel.left;
+        const float panelY = btnLoraPanel.top + btnLoraPanel.height + 2.f;
+        const int   count  = static_cast<int>(availableLoras.size());
+
+        if (count == 0) {
+            drawRect(win, {panelX, panelY, panelW, 30.f}, Col::Panel2, Col::BorderHi, 1.f);
+            drawText(win, font, "No .safetensors found in LoRA dir",
+                     Col::Muted, panelX + 8.f, panelY + 8.f, 11);
+        } else {
+            const float panelH = listPad * 2.f + rowH * static_cast<float>(count);
+            drawRect(win, {panelX, panelY, panelW, panelH}, Col::Panel2, Col::BorderHi, 1.f);
+
+            loraRowToggleRects.resize(static_cast<size_t>(count));
+            loraScaleRects.resize(static_cast<size_t>(count));
+
+            for (int i = 0; i < count; ++i) {
+                const float rowY2 = panelY + listPad + static_cast<float>(i) * rowH;
+                const bool  sel   = (i < static_cast<int>(loraSelected.size())) && loraSelected[static_cast<size_t>(i)];
+
+                // Highlight selected rows
+                if (sel)
+                    drawRect(win, {panelX + 1.f, rowY2, panelW - 2.f, rowH}, Col::Panel);
+
+                // Checkbox
+                constexpr float cbSize = 10.f;
+                const float cbX = panelX + 8.f;
+                const float cbY = rowY2 + (rowH - cbSize) / 2.f;
+                drawRect(win, {cbX, cbY, cbSize, cbSize}, sel ? Col::GoldLt : Col::Panel2,
+                         Col::Border, 1.f);
+
+                // LoRA name (strip path and .safetensors)
+                std::string name = std::filesystem::path(
+                    availableLoras[static_cast<size_t>(i)]).stem().string();
+                drawText(win, font, name, sel ? Col::GoldLt : Col::Text,
+                         cbX + cbSize + 6.f, rowY2 + 5.f, 11);
+
+                // Toggle rect covers name+checkbox area
+                loraRowToggleRects[static_cast<size_t>(i)] = {
+                    panelX, rowY2, panelW - scaleW - 4.f, rowH};
+
+                // Scale text field
+                const float scaleX = panelX + panelW - scaleW - 4.f;
+                loraScaleRects[static_cast<size_t>(i)] = {scaleX, rowY2 + 2.f, scaleW, rowH - 4.f};
+                const bool        scaleActive = (activeLoraScaleIdx == i);
+                const std::string scaleText   = (i < static_cast<int>(loraScaleInputs.size()))
+                                                    ? loraScaleInputs[static_cast<size_t>(i)] : "1";
+                const int scaleCursor = scaleActive ? static_cast<int>(scaleText.size()) : 0;
+                drawSingleLineField(win, loraScaleRects[static_cast<size_t>(i)],
+                                    scaleText, scaleCursor, scaleActive);
+            }
         }
     }
 
@@ -394,7 +460,7 @@ void ImageGeneratorView::drawSettingsModal(sf::RenderWindow& win) {
     win.draw(overlay);
 
     // Modal panel
-    constexpr float boxW = 560.f, boxH = 282.f;
+    constexpr float boxW = 560.f, boxH = 330.f;
     const float boxX = (WIN_W - boxW) / 2.f;
     const float boxY = (WIN_H - boxH) / 2.f;
     drawRect(win, {boxX, boxY, boxW, boxH}, Col::Panel2, Col::BorderHi, 2.f);
@@ -436,6 +502,15 @@ void ImageGeneratorView::drawSettingsModal(sf::RenderWindow& win) {
     drawButton(win, settingsBtnBrowseLlm, "...", Col::Panel2, Col::Muted, false, 12, font);
     if (llmLoading)
         drawText(win, font, "Loading...", Col::Muted, fieldX, rowY + fieldH + 2.f, 10);
+
+    // Row 4: LoRA directory
+    rowY += 48.f;
+    drawText(win, font, "LoRA directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    settingsLoraDirField = {fieldX, rowY, fieldW, fieldH};
+    drawSingleLineField(win, settingsLoraDirField, settingsLoraDir,
+                        settingsLoraDirCursor, settingsLoraDirActive);
+    settingsBtnBrowseLora = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
+    drawButton(win, settingsBtnBrowseLora, "...", Col::Panel2, Col::Muted, false, 12, font);
 
     // Buttons
     constexpr float btnW = 100.f, btnH = 28.f;

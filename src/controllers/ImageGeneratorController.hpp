@@ -45,6 +45,7 @@ private:
     ImageGeneratorPresenter          presenter;
     std::unique_ptr<IPromptEnhancer> enhancer;
     bool                             modelsDirty     = true;
+    bool                             lorasDirty      = true;
     bool                             viewInitialized = false;
     int                              lastModelIdx    = -1;
 
@@ -52,7 +53,7 @@ private:
     std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;
 
     // Async folder browser (zenity/Windows dialog runs on a thread; result polled in update()).
-    enum class BrowseTarget { ModelDir, OutputDir, LlmDir };
+    enum class BrowseTarget { ModelDir, OutputDir, LlmDir, LoraDir };
     std::future<std::string> browseFuture;
     BrowseTarget             browseTarget = BrowseTarget::ModelDir;
 };

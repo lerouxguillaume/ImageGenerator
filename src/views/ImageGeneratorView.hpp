@@ -70,6 +70,14 @@ public:
     std::vector<std::string> availableModels; // Populated at screen init from the models/ directory
     int selectedModelIdx = 0;
 
+    // ── LoRA selection ────────────────────────────────────────────────────────
+    std::vector<std::string> availableLoras;    // Full paths from loraBaseDir (*.safetensors)
+    std::vector<bool>        loraSelected;      // Per-lora enabled toggle
+    std::vector<float>       loraScales;        // Per-lora scale (default 1.0f)
+    std::vector<std::string> loraScaleInputs;   // Raw text for the scale field
+    bool showLoraPanel      = false;
+    int  activeLoraScaleIdx = -1;               // Which scale field has keyboard focus (-1 = none)
+
     // ── Resolution selection ──────────────────────────────────────────────────
     // Common SD resolutions (width, height). Index 0 is the default (512×512).
     // The user can cycle through these; the selected dimensions are injected into
@@ -93,6 +101,9 @@ public:
     sf::FloatRect btnModelDropdown;
     std::vector<sf::FloatRect> modelDropdownItems; // one per availableModels entry
     bool          showModelDropdown = false;
+    sf::FloatRect              btnLoraPanel;
+    std::vector<sf::FloatRect> loraRowToggleRects; // per-lora: checkbox+name area
+    std::vector<sf::FloatRect> loraScaleRects;     // per-lora: scale text field
     sf::FloatRect btnResolutionPrev;
     sf::FloatRect btnResolutionNext;
     sf::FloatRect stepsSliderTrack;
@@ -106,21 +117,26 @@ public:
     std::string settingsModelDir;           // Editable copy while the modal is open
     std::string settingsOutputDir;
     std::string settingsLlmModelDir;        // Path to the ort-genai LLM model directory
+    std::string settingsLoraDir;            // Path to the LoRA directory
     int         settingsModelDirCursor    = 0;
     int         settingsOutputDirCursor   = 0;
     int         settingsLlmModelDirCursor = 0;
+    int         settingsLoraDirCursor     = 0;
     bool        settingsModelDirActive    = true;
     bool        settingsOutputDirActive   = false;
     bool        settingsLlmModelDirActive = false;
+    bool        settingsLoraDirActive     = false;
 
     // Hit rects for the settings button and modal controls
     sf::FloatRect btnSettings;
     sf::FloatRect settingsModelDirField;
     sf::FloatRect settingsOutputDirField;
     sf::FloatRect settingsLlmModelDirField;
+    sf::FloatRect settingsLoraDirField;
     sf::FloatRect settingsBtnBrowseModel;
     sf::FloatRect settingsBtnBrowseOutput;
     sf::FloatRect settingsBtnBrowseLlm;
+    sf::FloatRect settingsBtnBrowseLora;
     sf::FloatRect settingsBtnSave;
     sf::FloatRect settingsBtnCancel;
 

@@ -128,18 +128,22 @@ void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
     view.settingsModelDir             = config.modelBaseDir;
     view.settingsOutputDir            = config.outputDir;
     view.settingsLlmModelDir          = config.promptEnhancer.modelDir;
+    view.settingsLoraDir              = config.loraBaseDir;
     view.settingsModelDirCursor       = static_cast<int>(config.modelBaseDir.size());
     view.settingsOutputDirCursor      = static_cast<int>(config.outputDir.size());
     view.settingsLlmModelDirCursor    = static_cast<int>(config.promptEnhancer.modelDir.size());
+    view.settingsLoraDirCursor        = static_cast<int>(config.loraBaseDir.size());
     view.settingsModelDirActive       = true;
     view.settingsOutputDirActive      = false;
     view.settingsLlmModelDirActive    = false;
+    view.settingsLoraDirActive        = false;
     view.showSettings                 = true;
 }
 
 void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     config.modelBaseDir = view.settingsModelDir;
     config.outputDir    = view.settingsOutputDir;
+    config.loraBaseDir  = view.settingsLoraDir;
 
     const std::string newLlmDir = view.settingsLlmModelDir;
     const bool llmDirChanged    = (newLlmDir != config.promptEnhancer.modelDir);
@@ -153,6 +157,9 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     view.availableModels.clear();
     view.selectedModelIdx = 0;
     modelsDirty = true;
+
+    // Trigger a LoRA rescan with the new LoRA directory.
+    lorasDirty = true;
 
     // Reload the LLM if its directory changed.
     if (llmDirChanged) {
@@ -212,28 +219,38 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 
     // Settings modal keyboard input
     if (view.showSettings) {
-        std::string& activeField = view.settingsLlmModelDirActive ? view.settingsLlmModelDir
+        std::string& activeField = view.settingsLoraDirActive     ? view.settingsLoraDir
+                                 : view.settingsLlmModelDirActive ? view.settingsLlmModelDir
                                  : view.settingsModelDirActive    ? view.settingsModelDir
                                                                   : view.settingsOutputDir;
-        int& cursor = view.settingsLlmModelDirActive ? view.settingsLlmModelDirCursor
-                    : view.settingsModelDirActive     ? view.settingsModelDirCursor
-                                                      : view.settingsOutputDirCursor;
+        int& cursor = view.settingsLoraDirActive     ? view.settingsLoraDirCursor
+                    : view.settingsLlmModelDirActive ? view.settingsLlmModelDirCursor
+                    : view.settingsModelDirActive    ? view.settingsModelDirCursor
+                                                     : view.settingsOutputDirCursor;
 
         if (e.type == sf::Event::KeyPressed) {
             if (e.key.code == sf::Keyboard::Tab) {
-                // Cycle: ModelDir → OutputDir → LlmDir → ModelDir
+                // Cycle: ModelDir → OutputDir → LlmDir → LoraDir → ModelDir
                 if (view.settingsModelDirActive) {
                     view.settingsModelDirActive    = false;
                     view.settingsOutputDirActive   = true;
                     view.settingsLlmModelDirActive = false;
+                    view.settingsLoraDirActive     = false;
                 } else if (view.settingsOutputDirActive) {
                     view.settingsModelDirActive    = false;
                     view.settingsOutputDirActive   = false;
                     view.settingsLlmModelDirActive = true;
+                    view.settingsLoraDirActive     = false;
+                } else if (view.settingsLlmModelDirActive) {
+                    view.settingsModelDirActive    = false;
+                    view.settingsOutputDirActive   = false;
+                    view.settingsLlmModelDirActive = false;
+                    view.settingsLoraDirActive     = true;
                 } else {
                     view.settingsModelDirActive    = true;
                     view.settingsOutputDirActive   = false;
                     view.settingsLlmModelDirActive = false;
+                    view.settingsLoraDirActive     = false;
                 }
             } else if (e.key.code == sf::Keyboard::Enter) {
                 saveSettings(view);
@@ -267,6 +284,35 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 
     // Text input for active field
     if (!view.generating) {
+        // LoRA scale field keyboard handling
+        if (view.activeLoraScaleIdx >= 0) {
+            const size_t idx = static_cast<size_t>(view.activeLoraScaleIdx);
+            if (e.type == sf::Event::KeyPressed) {
+                auto& s = view.loraScaleInputs[idx];
+                if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Tab
+                    || e.key.code == sf::Keyboard::Enter) {
+                    view.activeLoraScaleIdx = -1;
+                } else if (e.key.code == sf::Keyboard::BackSpace && !s.empty()) {
+                    s.pop_back();
+                    try { view.loraScales[idx] = std::stof(s); } catch (...) {}
+                } else if (e.key.code == sf::Keyboard::Delete) {
+                    s.clear();
+                    view.loraScales[idx] = 0.f;
+                }
+            }
+            if (e.type == sf::Event::TextEntered) {
+                const auto ch = static_cast<char>(e.text.unicode);
+                // Accept digits and a single decimal point
+                const bool isDigit = (ch >= '0' && ch <= '9');
+                const bool isDot   = (ch == '.' && view.loraScaleInputs[idx].find('.') == std::string::npos);
+                if ((isDigit || isDot) && view.loraScaleInputs[idx].size() < 8) {
+                    view.loraScaleInputs[idx] += ch;
+                    try { view.loraScales[idx] = std::stof(view.loraScaleInputs[idx]); } catch (...) {}
+                }
+            }
+            return; // don't forward to prompt fields
+        }
+
         // Seed field keyboard handling
         if (view.seedInputActive) {
             if (e.type == sf::Event::KeyPressed) {
@@ -431,9 +477,12 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             } else if (browseTarget == BrowseTarget::OutputDir) {
                 view.settingsOutputDir       = picked;
                 view.settingsOutputDirCursor = static_cast<int>(picked.size());
-            } else {
+            } else if (browseTarget == BrowseTarget::LlmDir) {
                 view.settingsLlmModelDir       = picked;
                 view.settingsLlmModelDirCursor = static_cast<int>(picked.size());
+            } else {
+                view.settingsLoraDir       = picked;
+                view.settingsLoraDirCursor = static_cast<int>(picked.size());
             }
         }
     }
@@ -452,6 +501,24 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         std::sort(view.availableModels.begin(), view.availableModels.end());
         view.selectedModelIdx = 0;
         modelsDirty = false;
+    }
+
+    // Scan loraBaseDir for .safetensors files.
+    if (lorasDirty) {
+        view.availableLoras.clear();
+        std::error_code ec;
+        for (const auto& entry :
+             std::filesystem::directory_iterator(config.loraBaseDir, ec)) {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() == ".safetensors")
+                view.availableLoras.push_back(entry.path().string());
+        }
+        std::sort(view.availableLoras.begin(), view.availableLoras.end());
+        view.loraSelected.assign(view.availableLoras.size(), false);
+        view.loraScales.assign(view.availableLoras.size(), 1.0f);
+        view.loraScaleInputs.assign(view.availableLoras.size(), "1");
+        view.activeLoraScaleIdx = -1;
+        lorasDirty = false;
     }
 
     // Sync enhancer availability — not available while the model is still loading.
@@ -507,22 +574,37 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
             browseFuture = std::async(std::launch::async, browseForFolder, view.settingsLlmModelDir);
             return;
         }
+        if (view.settingsBtnBrowseLora.contains(pos)) {
+            browseTarget = BrowseTarget::LoraDir;
+            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsLoraDir);
+            return;
+        }
         if (view.settingsModelDirField.contains(pos)) {
             view.settingsModelDirActive    = true;
             view.settingsOutputDirActive   = false;
             view.settingsLlmModelDirActive = false;
+            view.settingsLoraDirActive     = false;
             return;
         }
         if (view.settingsOutputDirField.contains(pos)) {
             view.settingsModelDirActive    = false;
             view.settingsOutputDirActive   = true;
             view.settingsLlmModelDirActive = false;
+            view.settingsLoraDirActive     = false;
             return;
         }
         if (view.settingsLlmModelDirField.contains(pos)) {
             view.settingsModelDirActive    = false;
             view.settingsOutputDirActive   = false;
             view.settingsLlmModelDirActive = true;
+            view.settingsLoraDirActive     = false;
+            return;
+        }
+        if (view.settingsLoraDirField.contains(pos)) {
+            view.settingsModelDirActive    = false;
+            view.settingsOutputDirActive   = false;
+            view.settingsLlmModelDirActive = false;
+            view.settingsLoraDirActive     = true;
             return;
         }
         return; // absorb clicks outside modal controls
@@ -553,6 +635,30 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         }
         view.showModelDropdown = false; // click outside closes it
         return;
+    }
+
+    // LoRA panel toggle button and row interactions
+    if (view.btnLoraPanel.contains(pos)) {
+        view.showLoraPanel = !view.showLoraPanel;
+        view.activeLoraScaleIdx = -1;
+        return;
+    }
+    if (view.showLoraPanel) {
+        for (int i = 0; i < static_cast<int>(view.loraScaleRects.size()); ++i) {
+            if (view.loraScaleRects[static_cast<size_t>(i)].contains(pos)) {
+                view.activeLoraScaleIdx = i;
+                view.seedInputActive    = false;
+                return;
+            }
+        }
+        for (int i = 0; i < static_cast<int>(view.loraRowToggleRects.size()); ++i) {
+            if (view.loraRowToggleRects[static_cast<size_t>(i)].contains(pos)) {
+                if (i < static_cast<int>(view.loraSelected.size()))
+                    view.loraSelected[static_cast<size_t>(i)] = !view.loraSelected[static_cast<size_t>(i)];
+                view.activeLoraScaleIdx = -1;
+                return;
+            }
+        }
     }
 
     if (view.btnSettings.contains(pos)) {
@@ -666,10 +772,11 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         params.width  = rw;
         params.height = rh;
         const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
-        const std::string modelName   = std::filesystem::path(modelDir).filename().string();
-        const auto mcIt = config.modelConfigs.find(modelName);
-        if (mcIt != config.modelConfigs.end())
-            params.loras = mcIt->second.loras;
+        for (size_t i = 0; i < view.availableLoras.size(); ++i) {
+            if (i < view.loraSelected.size() && view.loraSelected[i])
+                params.loras.push_back({view.availableLoras[i],
+                                        i < view.loraScales.size() ? view.loraScales[i] : 1.0f});
+        }
         std::atomic<bool>* done       = &view.generationDone;
         std::atomic<int>*  step       = &view.generationStep;
         std::atomic<bool>* cancel     = &view.cancelToken;

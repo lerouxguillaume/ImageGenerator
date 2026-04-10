@@ -14,6 +14,7 @@ AppConfig AppConfig::load(const std::string& configPath) {
         const auto j = nlohmann::json::parse(f);
         cfg.modelBaseDir            = j.value("modelBaseDir",            cfg.modelBaseDir);
         cfg.outputDir               = j.value("outputDir",               cfg.outputDir);
+        cfg.loraBaseDir             = j.value("loraBaseDir",             cfg.loraBaseDir);
         cfg.defaultPositivePrompt   = j.value("defaultPositivePrompt",   cfg.defaultPositivePrompt);
         cfg.defaultNegativePrompt   = j.value("defaultNegativePrompt",   cfg.defaultNegativePrompt);
         cfg.defaultNumSteps         = j.value("defaultNumSteps",         cfg.defaultNumSteps);
@@ -58,6 +59,7 @@ void AppConfig::save(const std::string& configPath) const {
         nlohmann::json j;
         j["modelBaseDir"]          = modelBaseDir;
         j["outputDir"]             = outputDir;
+        j["loraBaseDir"]           = loraBaseDir;
         j["defaultPositivePrompt"] = defaultPositivePrompt;
         j["defaultNegativePrompt"] = defaultNegativePrompt;
         j["defaultNumSteps"]       = defaultNumSteps;

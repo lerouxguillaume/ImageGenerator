@@ -31,6 +31,7 @@ struct ModelDefaults {
 struct AppConfig {
     std::string modelBaseDir = "models";           // Root directory scanned for model subdirectories
     std::string outputDir    = "assets/generated"; // Directory where generated images are written
+    std::string loraBaseDir  = "loras";            // Directory scanned for .safetensors LoRA files
 
     // Generation defaults — applied when the image generator screen first opens.
     // Edit config.json to change them permanently; the sliders/fields stay editable per-session.
