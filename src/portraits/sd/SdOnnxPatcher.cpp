@@ -1,4 +1,5 @@
 #include "SdOnnxPatcher.hpp"
+#include "SdLoraMatch.hpp"
 #include "../../managers/Logger.hpp"
 #include <stdexcept>
 #include <string>
@@ -355,62 +356,35 @@ OnnxSuffixIndex buildSuffixIndex(const OnnxTensorIndex& index) {
     return result;
 }
 
-// ── matchLoraKey ─────────────────────────────────────────────────────────────
+// ── computeLoraDelta ─────────────────────────────────────────────────────────
 
-    const TensorIndex* matchLoraKey(
-        const OnnxSuffixIndex& suffixIndex,
-        const std::string&     loraBase)
-{
-    // Try weight first (most common)
-    const std::string weightKey = loraBase + "_weight";
-    auto it = suffixIndex.find(weightKey);
+std::vector<float> computeLoraDelta(const SafeTensor& up,
+                                    const SafeTensor& down,
+                                    float             effectiveScale) {
+    const int64_t rank    = down.shape[0];
+    int64_t       in_feat = 1;
+    for (size_t d = 1; d < down.shape.size(); ++d) in_feat *= down.shape[d];
+    const int64_t out_feat = up.shape[0];
 
-    if (it == suffixIndex.end()) {
-        // fallback to bias
-        const std::string biasKey = loraBase + "_bias";
-        it = suffixIndex.find(biasKey);
+    std::vector<float> delta(static_cast<size_t>(out_feat * in_feat), 0.0f);
+    const float* upData   = up.data.data();
+    const float* downData = down.data.data();
 
-        if (it == suffixIndex.end())
-            return nullptr;
-    }
-
-    const auto& candidates = it->second;
-
-    // Fast path: unique match
-    if (candidates.size() == 1)
-        return &candidates[0].it->second;
-
-    // Resolve ambiguity: pick longest suffix match
-    const SuffixEntry* best = nullptr;
-
-    for (const auto& entry : candidates) {
-        if (!best || entry.suffixLen > best->suffixLen)
-            best = &entry;
-    }
-
-    // Optional: debug log ambiguity
-    if (candidates.size() > 1) {
-        Logger::info("LoRA ambiguous match for: " + loraBase +
-                     " (" + std::to_string(candidates.size()) + " candidates)");
-    }
-
-    return best ? &best->it->second : nullptr;
+    for (int64_t o = 0; o < out_feat; ++o)
+        for (int64_t r = 0; r < rank; ++r) {
+            const float u = upData[o * rank + r];
+            if (u == 0.0f) continue;
+            for (int64_t i = 0; i < in_feat; ++i)
+                delta[static_cast<size_t>(o * in_feat + i)] += u * downData[r * in_feat + i];
+        }
+    for (float& v : delta) v *= effectiveScale;
+    return delta;
 }
 
-// ── applyLoraToBytes ──────────────────────────────────────────────────────────
+// ── parseLoraLayers ───────────────────────────────────────────────────────────
 
-int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
-                     const OnnxSuffixIndex& suffixIndex,
-                     const SafetensorsMap&  lora,
-                     float                  userScale) {
-    // Group safetensors keys into (down, up, alpha) triplets by base layer name.
-    // Supports both lora_unet_ (UNet) and lora_te_ (text encoder) prefixes.
-    struct Layer {
-        const SafeTensor* down  = nullptr;
-        const SafeTensor* up    = nullptr;
-        float             alpha = 0.0f;  // 0 → default to rank
-    };
-    std::map<std::string, Layer> layers;
+ParsedLora parseLoraLayers(const SafetensorsMap& lora) {
+    ParsedLora result;
 
     for (const auto& [key, tensor] : lora) {
         std::string body;
@@ -424,12 +398,27 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         else continue;
 
         if (endsWith(body, ".lora_down.weight"))
-            layers[body.substr(0, body.size() - 17)].down = &tensor;
+            result.layers[body.substr(0, body.size() - 17)].down = &tensor;
         else if (endsWith(body, ".lora_up.weight"))
-            layers[body.substr(0, body.size() - 15)].up = &tensor;
+            result.layers[body.substr(0, body.size() - 15)].up = &tensor;
         else if (endsWith(body, ".alpha") && !tensor.data.empty())
-            layers[body.substr(0, body.size() - 6)].alpha = tensor.data[0];
+            result.layers[body.substr(0, body.size() - 6)].alpha = tensor.data[0];
     }
+
+    return result;
+}
+
+// ── applyLoraToBytes ──────────────────────────────────────────────────────────
+
+PatchResult applyLoraToBytes(std::shared_ptr<const std::vector<uint8_t>> onnxBytes,
+                              const OnnxSuffixIndex&                      suffixIndex,
+                              const SafetensorsMap&                       lora,
+                              float                                       userScale) {
+    // Copy the immutable input into a new writable buffer.
+    auto out = std::make_shared<std::vector<uint8_t>>(*onnxBytes);
+
+    const ParsedLora parsed = parseLoraLayers(lora);
+    const auto& layers      = parsed.layers;
 
     // Count complete pairs (both down + up present).
     int completePairs = 0;
@@ -459,13 +448,12 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         }
         if (ti->dtype != 1 && ti->dtype != 10) continue;  // only fp32 / fp16
 
-        // in_feat = product of all dims after the rank dim.
+        // Validate that the delta shape matches the base weight element count.
         const int64_t rank     = layer.down->shape[0];
         int64_t       in_feat  = 1;
         for (size_t d = 1; d < layer.down->shape.size(); ++d) in_feat *= layer.down->shape[d];
         const int64_t out_feat = layer.up->shape[0];
 
-        // Validate that the delta shape matches the base weight element count.
         int64_t baseElems = 1;
         for (auto d : ti->shape) baseElems *= d;
         if (baseElems != out_feat * in_feat) {
@@ -477,24 +465,10 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         const float alpha          = (layer.alpha > 0.0f) ? layer.alpha : static_cast<float>(rank);
         const float effectiveScale = userScale * (alpha / static_cast<float>(rank));
 
-        // Compute delta = effectiveScale * (lora_up @ lora_down) in fp32.
-        // lora_up:   [out_feat, rank]
-        // lora_down: [rank, in_feat]
-        std::vector<float> delta(static_cast<size_t>(out_feat * in_feat), 0.0f);
-        const float* upData   = layer.up->data.data();
-        const float* downData = layer.down->data.data();
+        const std::vector<float> delta = computeLoraDelta(*layer.up, *layer.down, effectiveScale);
 
-        for (int64_t o = 0; o < out_feat; ++o)
-            for (int64_t r = 0; r < rank; ++r) {
-                const float u = upData[o * rank + r];
-                if (u == 0.0f) continue;
-                for (int64_t i = 0; i < in_feat; ++i)
-                    delta[static_cast<size_t>(o * in_feat + i)] += u * downData[r * in_feat + i];
-            }
-        for (float& v : delta) v *= effectiveScale;
-
-        // Patch raw_data in-place (same byte count — only values change, not size).
-        uint8_t* raw = onnxBytes.data() + ti->rawDataOffset;
+        // Patch raw_data in the output copy (same byte count — only values change, not size).
+        uint8_t* raw = out->data() + ti->rawDataOffset;
 
         if (ti->dtype == 1) {
             // float32 base
@@ -521,7 +495,7 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
                  std::to_string(completePairs) + " layers patched"
                  + "  (TE=" + std::to_string(tePatchCount)
                  + " UNet=" + std::to_string(unetPatchCount) + ")");
-    return patchCount;
+    return {out, patchCount};
 }
 
 } // namespace sd

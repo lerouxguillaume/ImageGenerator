@@ -86,11 +86,13 @@ namespace sd {
     }
 
     // ── Model byte cache ──────────────────────────────────────────────────────────
-    // Base model bytes (unpatched) keyed by absolute file path.
+    // Base model bytes (unpatched, immutable) keyed by absolute file path.
     // Populated on the first LoRA run; avoids disk I/O on subsequent runs.
-    static std::unordered_map<std::string, std::vector<uint8_t>> s_modelBytesCache;
+    static std::unordered_map<std::string,
+                               std::shared_ptr<const std::vector<uint8_t>>> s_modelBytesCache;
 
-    static const std::vector<uint8_t>& cachedReadFileBytes(const std::string& path) {
+    static std::shared_ptr<const std::vector<uint8_t>>
+    cachedReadFileBytes(const std::string& path) {
         auto it = s_modelBytesCache.find(path);
         if (it != s_modelBytesCache.end()) {
             Logger::info("  Byte cache hit: " + std::filesystem::path(path).filename().string());
@@ -98,7 +100,9 @@ namespace sd {
         }
         Logger::info("  Byte cache miss (reading from disk): "
                      + std::filesystem::path(path).filename().string());
-        return s_modelBytesCache[path] = readFileBytes(path);
+        auto ptr = std::make_shared<const std::vector<uint8_t>>(readFileBytes(path));
+        s_modelBytesCache[path] = ptr;
+        return ptr;
     }
 
     // ── Session loading ───────────────────────────────────────────────────────────
@@ -214,13 +218,17 @@ namespace sd {
             // LoRA path: read each model into memory, apply patches, create session from bytes.
             Logger::info("LoRA mode: " + std::to_string(loras.size()) + " adapter(s) configured.");
 
-            // Helper: read file bytes, apply all configured LoRA adapters, return patched bytes.
-            auto makePatchedBytes = [&](const std::string& path) -> std::vector<uint8_t> {
+            // Helper: read base bytes (from cache), apply all LoRA adapters in sequence,
+            // and return a shared_ptr to the final patched buffer.
+            auto makePatchedBytes = [&](const std::string& path)
+                -> std::shared_ptr<const std::vector<uint8_t>> {
                 Logger::info("  Preparing " + std::filesystem::path(path).filename().string() + "...");
-                auto bytes = cachedReadFileBytes(path);  // copy from cache; avoids disk re-read
-                auto idx   = parseTensorIndex(bytes);
-                auto sidx  = buildSuffixIndex(idx);
-                int total  = 0;
+                auto base = cachedReadFileBytes(path);   // shared_ptr<const vector> — no disk I/O on hit
+                auto idx  = parseTensorIndex(*base);
+                auto sidx = buildSuffixIndex(idx);
+                int  total = 0;
+
+                std::shared_ptr<const std::vector<uint8_t>> current = base;
 
                 for (const auto& lo : loras) {
                     Logger::info("Applying LoRA: " + lo.path + "  scale=" + std::to_string(lo.scale));
@@ -228,8 +236,9 @@ namespace sd {
                         auto rawLoraMap = loadSafetensors(lo.path);
                         Logger::info("  LoRA tensors loaded: " + std::to_string(rawLoraMap.size()) + " key(s)");
 
-                        const int n = applyLoraToBytes(bytes, sidx, rawLoraMap, lo.scale);
-                        total += n; // accumulate patched layers
+                        auto [patched, n] = applyLoraToBytes(current, sidx, rawLoraMap, lo.scale);
+                        current = patched;   // shared_ptr<T> → shared_ptr<const T> (implicit)
+                        total  += n;
                         Logger::info("  Total layers patched for this LoRA: " + std::to_string(n));
 
                     } catch (const std::exception& e) {
@@ -238,12 +247,13 @@ namespace sd {
                 }
 
                 Logger::info("  Total LoRA patches for this model: " + std::to_string(total));
-                return bytes;
+                return current;
             };
 
-            // Helper: create an ORT session from a byte buffer.
-            auto sessionFromBytes = [&](const char* label, const std::vector<uint8_t>& bytes,
-                                         Ort::SessionOptions& opts) -> Ort::Session {
+            // Helper: create an ORT session from a shared byte buffer.
+            auto sessionFromBytes = [&](const char* label,
+                                        const std::vector<uint8_t>& bytes,
+                                        Ort::SessionOptions& opts) -> Ort::Session {
                 auto ts = Clock::now();
                 Ort::Session s(ctx.env, bytes.data(), bytes.size(), opts);
                 Logger::info("  " + std::string(label) + " session created in " + fmtMs(ts));
@@ -252,14 +262,14 @@ namespace sd {
 
             {
                 auto bytes = makePatchedBytes(modelDir + "/text_encoder.onnx");
-                ctx.text_encoder = sessionFromBytes("text_encoder", bytes, auxOpts);
+                ctx.text_encoder = sessionFromBytes("text_encoder", *bytes, auxOpts);
             }
             {
                 // UNet bytes are shared between unet and cpu_unet to avoid reading
                 // and patching the (potentially 2 GB) file twice.
                 auto unetBytes = makePatchedBytes(modelDir + "/unet.onnx");
-                ctx.unet     = sessionFromBytes("unet",     unetBytes, unetOpts);
-                ctx.cpu_unet = sessionFromBytes("cpu_unet", unetBytes, ctx.cpu_session_opts);
+                ctx.unet     = sessionFromBytes("unet",     *unetBytes, unetOpts);
+                ctx.cpu_unet = sessionFromBytes("cpu_unet", *unetBytes, ctx.cpu_session_opts);
             }
             // VAE has no LoRA layers in any known kohya-format adapter file.
             // Load from path to avoid buffering an extra ~1 GB in RAM.
@@ -270,7 +280,7 @@ namespace sd {
 #endif
             if (cfg.type == ModelType::SDXL) {
                 auto bytes = makePatchedBytes(modelDir + "/text_encoder_2.onnx");
-                ctx.text_encoder_2 = sessionFromBytes("text_encoder_2", bytes, auxOpts);
+                ctx.text_encoder_2 = sessionFromBytes("text_encoder_2", *bytes, auxOpts);
             }
         }
 

@@ -2,6 +2,7 @@
 #include "SdSafetensors.hpp"
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -40,20 +41,43 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes);
 // The returned map holds raw pointers into `index`; `index` must outlive it.
 OnnxSuffixIndex buildSuffixIndex(const OnnxTensorIndex& index);
 
-// Returns a pointer to the ONNX TensorIndex that best matches the given LoRA
-// base name (kohya prefix already stripped, e.g. "down_blocks_0_attn1_to_q").
-// Tries "<loraBase>_weight" first, then "<loraBase>_bias".
-// Returns nullptr if no match is found.
-const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
-                                const std::string&     loraBase);
+// One LoRA layer entry: down, up, and optional alpha scalar.
+struct LoraLayer {
+    const SafeTensor* down  = nullptr;
+    const SafeTensor* up    = nullptr;
+    float             alpha = 0.0f;  // 0 → default to rank
+};
 
-// Applies LoRA deltas from `lora` to the mutable ONNX bytes using the pre-built suffix index.
+// Result of grouping a SafetensorsMap into (down, up, alpha) triplets.
+struct ParsedLora {
+    std::map<std::string, LoraLayer> layers;  // key = base layer name (prefix stripped)
+};
+
+// Groups safetensors keys from `lora` into ParsedLora by stripping the kohya
+// prefix (lora_unet_, lora_te_, lora_te2_) and suffixes (.lora_down.weight, etc.).
+ParsedLora parseLoraLayers(const SafetensorsMap& lora);
+
+// Computes delta = effectiveScale * (lora_up @ lora_down), entirely in fp32.
+// lora_up:   [out_feat, rank]
+// lora_down: [rank, in_feat]
+// Returns a flat [out_feat * in_feat] vector.
+std::vector<float> computeLoraDelta(const SafeTensor& up,
+                                    const SafeTensor& down,
+                                    float             effectiveScale);
+
+// Result of applyLoraToBytes: a newly allocated patched buffer and the patch count.
+struct PatchResult {
+    std::shared_ptr<std::vector<uint8_t>> bytes;
+    int                                   patchCount = 0;
+};
+
+// Applies LoRA deltas to a copy of `onnxBytes`; the input buffer is never mutated.
 //   W_merged = W_base + (userScale * alpha / rank) * (lora_up @ lora_down)
 // Supports both fp32 and fp16 base weights; computation is always done in fp32.
-// Returns the number of initializers patched (0 is not an error).
-int applyLoraToBytes(std::vector<uint8_t>&   onnxBytes,
-                     const OnnxSuffixIndex&  suffixIndex,
-                     const SafetensorsMap&   lora,
-                     float                   userScale);
+// Returns a new buffer with the patches applied, plus the number of initializers patched.
+PatchResult applyLoraToBytes(std::shared_ptr<const std::vector<uint8_t>> onnxBytes,
+                              const OnnxSuffixIndex&                      suffixIndex,
+                              const SafetensorsMap&                       lora,
+                              float                                       userScale);
 
 } // namespace sd
