@@ -1,6 +1,7 @@
 #include "SdPipeline.hpp"
 #include "SdUtils.hpp"
 #include "SdLoader.hpp"
+#include "ModelManager.hpp"
 #include "SdScheduler.hpp"
 #include "SdTextEncoder.hpp"
 #include "SdUNet.hpp"
@@ -115,7 +116,8 @@ void runPipeline(const std::string& prompt,
     Logger::info("Prompt: " + prompt);
     Logger::info("Neg:    " + neg_prompt);
 
-    auto ctx               = loadModels(cfg, modelDir, params.loras);
+    static ModelManager s_modelManager;
+    GenerationContext& ctx = s_modelManager.get(cfg, modelDir, params.loras);
     ctx.guidance_scale     = params.guidanceScale;
     ctx.neg_guidance_scale = (params.negativeGuidanceScale > 0.0f)
                                ? params.negativeGuidanceScale

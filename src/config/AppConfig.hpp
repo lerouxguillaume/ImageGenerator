@@ -6,6 +6,8 @@
 struct LoraEntry {
     std::string path;       // path to .safetensors file (relative to working dir)
     float       scale = 1.0f;
+
+    bool operator==(const LoraEntry& o) const { return path == o.path && scale == o.scale; }
 };
 
 struct PromptEnhancerConfig {
