@@ -20,10 +20,14 @@ struct TensorIndex {
 // Value: location + metadata for in-place patching.
 using OnnxTensorIndex = std::map<std::string, TensorIndex>;
 
-// Key: every '_'-boundary suffix of a normalised ONNX name.
-// Value: pointer into the OnnxTensorIndex that was passed to buildSuffixIndex().
-// The OnnxTensorIndex must outlive this map.
-using OnnxSuffixIndex = std::unordered_map<std::string, const TensorIndex*>;
+using OnnxTensorIndexIt = OnnxTensorIndex::const_iterator;
+
+struct SuffixEntry {
+    OnnxTensorIndexIt it;
+    size_t            suffixLen;
+};
+
+using OnnxSuffixIndex = std::unordered_map<std::string, std::vector<SuffixEntry>>;
 
 // Single-pass parse of the ONNX protobuf binary.
 // Returns an index of all initializers with inline raw_data.

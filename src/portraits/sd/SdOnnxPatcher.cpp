@@ -324,28 +324,77 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
 
 OnnxSuffixIndex buildSuffixIndex(const OnnxTensorIndex& index) {
     OnnxSuffixIndex result;
-    result.reserve(index.size() * 8);  // rough upper bound: ~8 '_'-segments per name
-    for (const auto& [name, ti] : index) {
+    result.reserve(index.size() * 6); // realistic average
+
+    for (auto it = index.cbegin(); it != index.cend(); ++it) {
+        const std::string& name = it->first;
+
         size_t pos = 0;
         while (pos < name.size()) {
-            result.emplace(name.substr(pos), &ti);
+            std::string suffix = name.substr(pos);
+
+            // Count segments (avoid useless suffixes like "weight")
+            int underscoreCount = 0;
+            for (char c : suffix) if (c == '_') ++underscoreCount;
+
+            if (underscoreCount >= 1) { // keep only meaningful suffixes
+                result[suffix].push_back({
+                    it,
+                    suffix.size()
+                });
+            }
+
             const size_t next = name.find('_', pos);
-            if (next == std::string::npos) break;
+            if (next == std::string::npos)
+                break;
+
             pos = next + 1;
         }
     }
+
     return result;
 }
 
 // ── matchLoraKey ─────────────────────────────────────────────────────────────
 
-const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
-                                const std::string&     loraBase)
+    const TensorIndex* matchLoraKey(
+        const OnnxSuffixIndex& suffixIndex,
+        const std::string&     loraBase)
 {
-    auto it = suffixIndex.find(loraBase + "_weight");
-    if (it == suffixIndex.end())
-        it = suffixIndex.find(loraBase + "_bias");
-    return it != suffixIndex.end() ? it->second : nullptr;
+    // Try weight first (most common)
+    const std::string weightKey = loraBase + "_weight";
+    auto it = suffixIndex.find(weightKey);
+
+    if (it == suffixIndex.end()) {
+        // fallback to bias
+        const std::string biasKey = loraBase + "_bias";
+        it = suffixIndex.find(biasKey);
+
+        if (it == suffixIndex.end())
+            return nullptr;
+    }
+
+    const auto& candidates = it->second;
+
+    // Fast path: unique match
+    if (candidates.size() == 1)
+        return &candidates[0].it->second;
+
+    // Resolve ambiguity: pick longest suffix match
+    const SuffixEntry* best = nullptr;
+
+    for (const auto& entry : candidates) {
+        if (!best || entry.suffixLen > best->suffixLen)
+            best = &entry;
+    }
+
+    // Optional: debug log ambiguity
+    if (candidates.size() > 1) {
+        Logger::info("LoRA ambiguous match for: " + loraBase +
+                     " (" + std::to_string(candidates.size()) + " candidates)");
+    }
+
+    return best ? &best->it->second : nullptr;
 }
 
 // ── applyLoraToBytes ──────────────────────────────────────────────────────────
@@ -390,8 +439,10 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
     Logger::info("LoRA apply: " + std::to_string(completePairs) + " complete layer pair(s) in file"
                  + "  (scale=" + std::to_string(userScale) + ")");
 
-    int patchCount  = 0;
-    int missCount   = 0;
+    int patchCount    = 0;
+    int missCount     = 0;
+    int tePatchCount  = 0;
+    int unetPatchCount = 0;
 
     for (const auto& [loraBase, layer] : layers) {
         if (!layer.down || !layer.up) {
@@ -458,6 +509,8 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         }
 
         ++patchCount;
+        if (loraBase.rfind("text_model_", 0) == 0) ++tePatchCount;
+        else                                        ++unetPatchCount;
     }
 
     if (missCount > 5)
@@ -465,7 +518,9 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
                      + std::to_string(missCount) + ")");
 
     Logger::info("LoRA apply summary: " + std::to_string(patchCount) + "/" +
-                 std::to_string(completePairs) + " layers patched.");
+                 std::to_string(completePairs) + " layers patched"
+                 + "  (TE=" + std::to_string(tePatchCount)
+                 + " UNet=" + std::to_string(unetPatchCount) + ")");
     return patchCount;
 }
 
