@@ -2,6 +2,7 @@
 #include "../../managers/Logger.hpp"
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace sd {
 
@@ -21,6 +22,11 @@ namespace sd {
 //               field 2  → data_type   (varint: 1=float32, 10=float16)
 //               field 8  → name        (string)
 //               field 9  → raw_data    (bytes)
+
+static bool endsWith(const std::string& s, const std::string& suffix) {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 static uint64_t readVarint(const uint8_t* data, size_t& pos, size_t end) {
     uint64_t result = 0;
@@ -314,15 +320,38 @@ OnnxTensorIndex parseTensorIndex(const std::vector<uint8_t>& onnxBytes) {
     return result;
 }
 
-// ── applyLoraToBytes ──────────────────────────────────────────────────────────
+// ── buildSuffixIndex ─────────────────────────────────────────────────────────
 
-static bool endsWith(const std::string& s, const std::string& suffix) {
-    return s.size() >= suffix.size() &&
-           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+OnnxSuffixIndex buildSuffixIndex(const OnnxTensorIndex& index) {
+    OnnxSuffixIndex result;
+    result.reserve(index.size() * 8);  // rough upper bound: ~8 '_'-segments per name
+    for (const auto& [name, ti] : index) {
+        size_t pos = 0;
+        while (pos < name.size()) {
+            result.emplace(name.substr(pos), &ti);
+            const size_t next = name.find('_', pos);
+            if (next == std::string::npos) break;
+            pos = next + 1;
+        }
+    }
+    return result;
 }
 
+// ── matchLoraKey ─────────────────────────────────────────────────────────────
+
+const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
+                                const std::string&     loraBase)
+{
+    auto it = suffixIndex.find(loraBase + "_weight");
+    if (it == suffixIndex.end())
+        it = suffixIndex.find(loraBase + "_bias");
+    return it != suffixIndex.end() ? it->second : nullptr;
+}
+
+// ── applyLoraToBytes ──────────────────────────────────────────────────────────
+
 int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
-                     const OnnxTensorIndex& index,
+                     const OnnxSuffixIndex& suffixIndex,
                      const SafetensorsMap&  lora,
                      float                  userScale) {
     // Group safetensors keys into (down, up, alpha) triplets by base layer name.
@@ -361,31 +390,6 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
     Logger::info("LoRA apply: " + std::to_string(completePairs) + " complete layer pair(s) in file"
                  + "  (scale=" + std::to_string(userScale) + ")");
 
-    // Key mapping: LoRA base names use underscores throughout (e.g.
-    // "down_blocks_0_attn1_to_q"), while ONNX initializer names may carry an
-    // extra model-level prefix (e.g. "model_diffusion_model_") that is absent
-    // from kohya LoRA keys.  parseTensorIndex already normalised all '.' to '_'
-    // so the suffix of the ONNX key matches the LoRA base exactly.
-    //
-    // Strategy: try exact match first (fast path); if that fails, scan for any
-    // ONNX key whose suffix equals "_" + target, which tolerates any prefix.
-    // The '_' boundary check prevents partial-word false positives.
-    auto findBySuffix = [&](const std::string& target)
-            -> OnnxTensorIndex::const_iterator {
-
-        for (auto it = index.cbegin(); it != index.cend(); ++it) {
-            const auto& k = it->first;
-
-            // 🔥 relaxed match (no strict '_' boundary)
-            if (k.size() >= target.size() &&
-                k.compare(k.size() - target.size(), target.size(), target) == 0) {
-                return it;
-                }
-        }
-
-        return index.cend();
-    };
-
     int patchCount  = 0;
     int missCount   = 0;
 
@@ -395,23 +399,14 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
             continue;
         }
 
-        // Map LoRA base name to ONNX initializer:
-        //   loraBase (e.g. "down_blocks_0_attn1_to_q") + "_weight"
-        //   → ONNX key ending with "_down_blocks_0_attn1_to_q_weight"
-        // Also try "_bias" for layers that expose a bias initializer.
-        auto it = findBySuffix(loraBase + "_weight");
-        if (it == index.end())
-            it = findBySuffix(loraBase + "_bias");
-        if (it == index.end()) {
-            // Log the first few misses so the user can diagnose name-mapping issues.
+        const TensorIndex* ti = matchLoraKey(suffixIndex, loraBase);
+        if (!ti) {
             if (missCount < 5)
                 Logger::info("  LoRA no match: " + loraBase + " (_weight / _bias)");
             ++missCount;
             continue;
         }
-
-        const TensorIndex& ti = it->second;
-        if (ti.dtype != 1 && ti.dtype != 10) continue;  // only fp32 / fp16
+        if (ti->dtype != 1 && ti->dtype != 10) continue;  // only fp32 / fp16
 
         // in_feat = product of all dims after the rank dim.
         const int64_t rank     = layer.down->shape[0];
@@ -421,7 +416,7 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
 
         // Validate that the delta shape matches the base weight element count.
         int64_t baseElems = 1;
-        for (auto d : ti.shape) baseElems *= d;
+        for (auto d : ti->shape) baseElems *= d;
         if (baseElems != out_feat * in_feat) {
             Logger::info("LoRA shape mismatch: " + loraBase + " — skipping.");
             continue;
@@ -448,9 +443,9 @@ int applyLoraToBytes(std::vector<uint8_t>&  onnxBytes,
         for (float& v : delta) v *= effectiveScale;
 
         // Patch raw_data in-place (same byte count — only values change, not size).
-        uint8_t* raw = onnxBytes.data() + ti.rawDataOffset;
+        uint8_t* raw = onnxBytes.data() + ti->rawDataOffset;
 
-        if (ti.dtype == 1) {
+        if (ti->dtype == 1) {
             // float32 base
             auto* base = reinterpret_cast<float*>(raw);
             for (int64_t k = 0; k < out_feat * in_feat; ++k)

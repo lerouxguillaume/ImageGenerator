@@ -203,6 +203,7 @@ namespace sd {
                 Logger::info("  Reading " + std::filesystem::path(path).filename().string() + "...");
                 auto bytes = readFileBytes(path);
                 auto idx   = parseTensorIndex(bytes);
+                auto sidx  = buildSuffixIndex(idx);
                 int total  = 0;
 
                 for (const auto& lo : loras) {
@@ -211,9 +212,7 @@ namespace sd {
                         auto rawLoraMap = loadSafetensors(lo.path);
                         Logger::info("  LoRA tensors loaded: " + std::to_string(rawLoraMap.size()) + " key(s)");
 
-                        // applyLoraToBytes expects raw kohya keys (lora_te_/lora_unet_ prefixes)
-                        // and does its own internal suffix-based name matching.
-                        const int n = applyLoraToBytes(bytes, idx, rawLoraMap, lo.scale);
+                        const int n = applyLoraToBytes(bytes, sidx, rawLoraMap, lo.scale);
                         total += n; // accumulate patched layers
                         Logger::info("  Total layers patched for this LoRA: " + std::to_string(n));
 

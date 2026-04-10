@@ -168,6 +168,7 @@ LoRA is applied at model load time by patching the ONNX binary in memory before 
 SdLoader.cpp  makePatchedBytes()
   → readFileBytes()          — load raw ONNX bytes
   → parseTensorIndex()       — build name→{offset, length, shape, dtype} index
+  → buildSuffixIndex()       — build suffix→TensorIndex* hash map (O(1) lookup)
   → applyLoraToBytes()       — patch weights in-place
   → Ort::Session(bytes)      — create session from patched memory
 ```
@@ -176,7 +177,6 @@ Key files:
 - `sd/SdOnnxPatcher.hpp/.cpp` — ONNX protobuf parser + LoRA patcher
 - `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
 - `sd/SdLoader.cpp` `makePatchedBytes()` lambda (line ~202) — orchestrates load→patch→session
-- `sd/SdLoader.cpp` `mapLoraKeyToOnnx()` — debug-only key mapping (NOT used for actual matching)
 
 ### LoRA key format (Kohya)
 
@@ -189,15 +189,23 @@ Each layer needs a down, up, and optionally alpha tensor. `applyLoraToBytes` gro
 
 ### ONNX weight name matching
 
-`parseTensorIndex` normalises all `.` and `/` in ONNX initializer names to `_`, then builds a map. `applyLoraToBytes` strips the `lora_te_`/`lora_unet_` prefix, appends `_weight`, and searches by suffix:
+The matching pipeline has three stages:
+
+**1. Parse** — `parseTensorIndex` normalises all `.` and `/` in ONNX initializer names to `_` and builds `OnnxTensorIndex` (a `std::map<string, TensorIndex>`).
+
+**2. Index** — `buildSuffixIndex` walks every normalised ONNX name and inserts it under every `_`-boundary suffix into an `OnnxSuffixIndex` (`unordered_map<string, const TensorIndex*>`). Both steps run once per model file at load time.
+
+**3. Match** — `matchLoraKey` strips the kohya prefix (`lora_te_`, `lora_unet_`, `lora_te2_`), appends `_weight` (then `_bias` on miss), and does a direct O(1) hash map lookup:
 
 ```
 LoRA base:  text_model_encoder_layers_0_self_attn_q_proj
-ONNX key:   text_encoder_text_model_encoder_layers_0_self_attn_q_proj_weight
-                         └──────────── suffix match ─────────────────────────┘
+                          ↓  + "_weight"
+suffix key: text_model_encoder_layers_0_self_attn_q_proj_weight
+                          ↓  unordered_map::find
+ONNX entry: text_encoder_text_model_encoder_layers_0_self_attn_q_proj_weight
 ```
 
-The suffix search is relaxed (no `_` boundary requirement). This works because ONNX names include a model-level prefix absent from LoRA keys.
+The model-level prefix (`text_encoder_`) is absorbed by the suffix index — no knowledge of it is needed at match time.
 
 ### ONNX protobuf field numbers
 
