@@ -19,6 +19,36 @@ static std::vector<float> tensorToFloat(Ort::Value& tensor) {
     return out;
 }
 
+// ── Prompt pre-processing ─────────────────────────────────────────────────────
+
+// Strip A1111-style <tag:...> directives (e.g. <lora:name:0.8>, <hypernet:...>).
+// These are handled outside the text encoder (LoRAs are loaded from config) and
+// must be removed before tokenisation — CLIP has no vocabulary for them.
+static std::string stripAngleBracketTags(const std::string& prompt) {
+    std::string out;
+    out.reserve(prompt.size());
+    size_t i = 0;
+    while (i < prompt.size()) {
+        if (prompt[i] == '<') {
+            size_t end = prompt.find('>', i + 1);
+            if (end != std::string::npos) { i = end + 1; continue; }
+        }
+        out += prompt[i++];
+    }
+    // Collapse any double-spaces left behind.
+    std::string clean;
+    clean.reserve(out.size());
+    bool lastSpace = false;
+    for (char c : out) {
+        if (c == ' ') { if (!lastSpace) clean += c; lastSpace = true; }
+        else          { clean += c; lastSpace = false; }
+    }
+    // Trim leading/trailing spaces.
+    size_t s = clean.find_first_not_of(' ');
+    size_t e = clean.find_last_not_of(' ');
+    return (s == std::string::npos) ? "" : clean.substr(s, e - s + 1);
+}
+
 // ── Weighted prompt helpers ───────────────────────────────────────────────────
 
 struct WeightedSegment { std::string text; float weight = 1.0f; };
@@ -124,7 +154,7 @@ std::vector<float> encodeText(const std::string& prompt,
                               ClipTokenizer& tokenizer,
                               GenerationContext& ctx,
                               std::vector<int64_t>& out_shape) {
-    auto segs     = parseWeightedPrompt(prompt);
+    auto segs     = parseWeightedPrompt(stripAngleBracketTags(prompt));
     bool weighted = anyWeighted(segs);
     const std::string plain = weighted ? stripToPlain(segs) : prompt;
 
@@ -175,7 +205,7 @@ std::vector<float> encodeTextSDXL(const std::string& prompt,
                                   GenerationContext& ctx,
                                   std::vector<int64_t>& out_shape,
                                   std::vector<float>& out_pooled) {
-    auto segs     = parseWeightedPrompt(prompt);
+    auto segs     = parseWeightedPrompt(stripAngleBracketTags(prompt));
     bool weighted = anyWeighted(segs);
     const std::string plain = weighted ? stripToPlain(segs) : prompt;
 
