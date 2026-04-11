@@ -1,42 +1,101 @@
 #include "ModelManager.hpp"
 #include "SdLoader.hpp"
 #include "../../managers/Logger.hpp"
-#include <functional>
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <string>
+
+// Header-only xxHash — vendored so the Windows cross-compile (MinGW) doesn't
+// need a system package.  XXH_IMPLEMENTATION compiles the routines inline
+// into this single translation unit.
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_IMPLEMENTATION
+#include "../../../third_party/xxhash/xxhash.h"
 
 namespace sd {
 
-// ── ModelCacheKey equality ────────────────────────────────────────────────────
-// LoRA scales are quantized to int(scale * 1000) before comparison so that
-// floating-point representation noise cannot produce spurious cache misses.
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Round a LoRA scale to the nearest 0.001 and return it as a fixed-point int.
+// Using lround (not a plain cast) ensures 0.9995f → 1000, not 999.
+static int scaleKey(float s) noexcept {
+    return static_cast<int>(std::lround(s * 1000.0f));
+}
+
+// Normalise a filesystem path to a canonical string:
+//   • resolves "." and ".." components
+//   • removes trailing separators
+//   • does NOT require the path to exist (weakly_canonical)
+static std::string canonicalPath(const std::string& p) {
+    return std::filesystem::weakly_canonical(p).string();
+}
+
+// ── ModelCacheKey::make ───────────────────────────────────────────────────────
+// Single construction point that enforces all normalisation invariants so that
+// operator== and the hash function never need to re-derive them.
+
+ModelCacheKey ModelCacheKey::make(const ModelConfig&            cfg,
+                                   const std::string&            modelDir,
+                                   const std::vector<LoraEntry>& loras) {
+    ModelCacheKey k;
+    k.cfg      = cfg;
+    k.modelDir = canonicalPath(modelDir);
+
+    k.loras.reserve(loras.size());
+    for (const auto& lo : loras)
+        k.loras.push_back({ canonicalPath(lo.path), lo.scale });
+
+    // Sort by canonical path so {A,B} and {B,A} produce the same key.
+    // LoRA application is commutative in terms of which weights end up merged.
+    std::sort(k.loras.begin(), k.loras.end(),
+              [](const LoraEntry& a, const LoraEntry& b) { return a.path < b.path; });
+
+    return k;
+}
+
+// ── ModelCacheKey::operator== ─────────────────────────────────────────────────
+// Operates on already-normalised fields (canonical paths, sorted loras).
+// Scales are compared via scaleKey() so representation noise ≤ 0.0005 is ignored.
 
 bool ModelCacheKey::operator==(const ModelCacheKey& o) const noexcept {
-    if (modelDir  != o.modelDir)  return false;
     if (cfg.type  != o.cfg.type)  return false;
+    if (modelDir  != o.modelDir)  return false;
     if (loras.size() != o.loras.size()) return false;
     for (size_t i = 0; i < loras.size(); ++i) {
         if (loras[i].path != o.loras[i].path) return false;
-        if (int(loras[i].scale * 1000.0f) != int(o.loras[i].scale * 1000.0f)) return false;
+        if (scaleKey(loras[i].scale) != scaleKey(o.loras[i].scale)) return false;
     }
     return true;
 }
 
-// ── ModelCacheKey hash ────────────────────────────────────────────────────────
-// Combines modelDir, cfg.type, and per-LoRA (path, quantized scale) using
-// the standard boost-style hash_combine pattern.
+// ── ModelCacheKeyHash ─────────────────────────────────────────────────────────
+// Feeds a single canonical string buffer into XXH64 so the hash is:
+//   • order-independent  (loras are sorted)
+//   • path-independent   (canonical strings)
+//   • scale-stable       (fixed-point ints written as decimal)
+//
+// The buffer layout is:  "<modelDir>\0<type_int>\0<path>\0<scale_int>\0..."
+// Field separators ('\0') prevent adjacent fields from accidentally merging
+// (e.g. "ab" + "c" vs "a" + "bc").
 
 size_t ModelCacheKeyHash::operator()(const ModelCacheKey& k) const noexcept {
-    // hash_combine: h ^= hash(v) + 0x9e3779b9 + (h << 6) + (h >> 2)
-    auto combine = [](size_t h, size_t v) noexcept -> size_t {
-        return h ^ (v + 0x9e3779b9u + (h << 6) + (h >> 2));
-    };
+    std::string buf;
+    buf.reserve(k.modelDir.size() + 16 + k.loras.size() * 64);
 
-    size_t h = std::hash<std::string>{}(k.modelDir);
-    h = combine(h, std::hash<int>{}(static_cast<int>(k.cfg.type)));
+    buf += k.modelDir;
+    buf += '\0';
+    buf += std::to_string(static_cast<int>(k.cfg.type));
+    buf += '\0';
+
     for (const auto& lo : k.loras) {
-        h = combine(h, std::hash<std::string>{}(lo.path));
-        h = combine(h, std::hash<int>{}(int(lo.scale * 1000.0f)));
+        buf += lo.path;
+        buf += '\0';
+        buf += std::to_string(scaleKey(lo.scale));
+        buf += '\0';
     }
-    return h;
+
+    return static_cast<size_t>(XXH64(buf.data(), buf.size(), 0));
 }
 
 // ── ModelManager::get ─────────────────────────────────────────────────────────
@@ -44,7 +103,7 @@ size_t ModelCacheKeyHash::operator()(const ModelCacheKey& k) const noexcept {
 GenerationContext& ModelManager::get(const ModelConfig&            cfg,
                                       const std::string&            modelDir,
                                       const std::vector<LoraEntry>& loras) {
-    const ModelCacheKey key{modelDir, cfg, loras};
+    const ModelCacheKey key = ModelCacheKey::make(cfg, modelDir, loras);
 
     auto it = cache_.find(key);
     if (it == cache_.end()) {

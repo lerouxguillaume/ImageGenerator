@@ -227,7 +227,12 @@ Key files:
 
 **Session cache (`ModelManager`)** — `SdPipeline.cpp` holds a `static ModelManager`. On each `runPipeline()` call, `ModelManager::get(cfg, modelDir, loras)` looks up a `ModelCacheKey` in an `unordered_map<ModelCacheKey, ModelInstance>`. On hit the stored `ModelInstance` is reused; on miss `loadModels()` is called, a new `ModelInstance` is emplaced, and the result is returned. Multiple distinct configurations can coexist in the cache simultaneously.
 
-`ModelCacheKey` bundles `modelDir`, `cfg.type`, and `loras[]{path, scale}`. LoRA scales are compared and hashed as `int(scale * 1000)` — prevents false cache misses from floating-point representation noise while still distinguishing values that differ by ≥ 0.001.
+`ModelCacheKey` is constructed via `ModelCacheKey::make()` which enforces three invariants before the key is stored:
+- **Canonical paths** — `modelDir` and every LoRA path are passed through `std::filesystem::weakly_canonical()` so `./models/sd15` and `models/sd15` map to the same key.
+- **Sorted LoRA list** — entries are sorted by canonical path, making `{A, B}` and `{B, A}` identical keys.
+- **Fixed-point scales** — scales are compared and hashed as `int(std::lround(scale * 1000))`. `lround` rounds rather than truncating, so 0.9999f → 1000 not 999. Values within 0.0005 of each other are treated as equal.
+
+`ModelCacheKeyHash` feeds a single canonical string buffer (`modelDir\0type\0path\0scale\0...`) into **XXH64** (`libxxhash`). This avoids depending on the quality of `std::hash<std::string>` which varies across stdlibs.
 
 **Byte cache (`SdLoader.cpp`)** — `s_modelBytesCache` maps file path → `shared_ptr<const vector<uint8_t>>`. On the first LoRA run for a given model file, bytes are read from disk and stored. Every subsequent run copies from the cache (no disk I/O). The no-LoRA path is unaffected — it loads sessions directly from the file path, letting ORT memory-map the file.
 
@@ -340,7 +345,7 @@ The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons
 ```
 ModelManager: cache hit — reusing loaded sessions.
 ```
-If you changed LoRA selection but this appears, check that `loraScales[i]` was updated after editing the scale input field. The cache key uses `int(scale * 1000)` for float comparison, so changes smaller than 0.001 are intentionally treated as the same key.
+If you changed LoRA selection but this appears, check that `loraScales[i]` was updated after editing the scale input field. The cache key rounds scales to 0.001 precision (`lround(s * 1000)`), so changes smaller than 0.0005 are intentionally treated as the same key. Also verify paths are the same after `weakly_canonical` normalisation — a leading `./` difference used to cause a spurious miss before the fix.
 
 ### Optional match-level debug logging
 
