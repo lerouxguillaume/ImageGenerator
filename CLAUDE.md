@@ -108,9 +108,32 @@ Models are queried at load time for their input dtype:
 - `ctx.vaeExpectsFp32` — detected from `vae_decoder.GetInputTypeInfo(0)`
 
 SD 1.5 export: UNet = fp16, VAE = fp16  
-SDXL export: UNet = fp16, VAE = fp16 (after the fix in sdxl_export_onnx_models.py)
+SDXL export: UNet = fp16, VAE = fp16
 
 Always use the detected flag rather than hard-coding a dtype — the export scripts may change.
+
+## SDXL fp16 export: fp32 contamination
+
+Diffusers 0.37.x injects fp32 operations in three places when tracing an fp16 UNet. ORT rejects the resulting mixed-type graph at model load time with `"Type parameter (T) bound to different types"`. The export script fixes all three **before tracing** (not by patching the ONNX graph afterwards, which would risk breaking ops like `Resize` that mandate fp32 inputs):
+
+| Source | Location | Fix |
+|---|---|---|
+| `get_timestep_embedding` | `torch.arange(..., dtype=float32)` and `timesteps[:, None].float()` | `patch_fp32_upcasts_for_tracing()` replaces both with the input tensor's dtype |
+| `FP32SiLU` | `F.silu(inputs.float()).to(inputs.dtype)` in the timestep MLP | `patch_fp32_upcasts_for_tracing()` replaces its forward with plain `F.silu(inputs)` |
+| `Attention.upcast_attention/upcast_softmax` | Per-module flags that cast query/key/scores to fp32 | `disable_attention_upcasting(pipe.unet)` sets both flags to `False` on every `Attention` module before `unet.to(float16)` |
+
+`fix_fp32_constants` still runs as a post-export safety net to convert any stray scalar fp32 constants the tracer emits (GroupNorm epsilon, scalar multipliers, etc.) that are not touched by the above patches.
+
+If you add a new fp16 model family and hit `"Type parameter (T) bound to different types"` at load time: inspect the failing node name, find the diffusers source that generates the fp32 cast, and add a targeted pre-export patch — do not add a blanket Cast-node rewrite to the ONNX graph.
+
+## SDXL export: external data layout
+
+The legacy ONNX tracer writes each large tensor as a separate sidecar file (e.g. `text_encoder.text_model.encoder.layers.0.self_attn.q_proj.weight`). `export_component_to_dir` calls `ensure_external_data` after export, which:
+1. Reads the per-tensor files into memory via `load_external_data_for_model`
+2. Consolidates them into a single `<component>.onnx.data` file
+3. Deletes the individual sidecar files (identified from the model's external-data references, not by prefix heuristics)
+
+The output directory should contain exactly `<component>.onnx` + `<component>.onnx.data` after a successful export. If stale sidecar files remain, they are orphaned and safe to delete manually.
 
 ## Known DML limitations (Windows)
 
