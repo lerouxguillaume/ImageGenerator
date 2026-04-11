@@ -107,13 +107,14 @@ namespace sd {
 
     // ── Session loading ───────────────────────────────────────────────────────────
 
-    GenerationContext loadModels(const ModelConfig&            cfg,
-                                 const std::string&            modelDir,
-                                 const std::vector<LoraEntry>& loras) {
+    ModelInstance loadModels(const ModelConfig&            cfg,
+                             const std::string&            modelDir,
+                             const std::vector<LoraEntry>& loras) {
         const int latent_w = cfg.image_w / 8;
         const int latent_h = cfg.image_h / 8;
         auto t0 = Clock::now();
-        GenerationContext ctx;
+        ModelInstance result;
+        GenerationContext& ctx = result.ctx;
         ctx.model_type = cfg.type;
         const int numThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
         Logger::info("=== loadModels ===");
@@ -267,7 +268,11 @@ namespace sd {
             {
                 // UNet bytes are shared between unet and cpu_unet to avoid reading
                 // and patching the (potentially 2 GB) file twice.
-                auto unetBytes = makePatchedBytes(modelDir + "/unet.onnx");
+                // makePatchedBytes() calls cachedReadFileBytes() internally; capture
+                // base bytes first (cache hit after that call) for ModelInstance ownership.
+                auto unetBytes      = makePatchedBytes(modelDir + "/unet.onnx");
+                result.patchedBytes = unetBytes;
+                result.baseBytes    = cachedReadFileBytes(modelDir + "/unet.onnx"); // cache hit
                 ctx.unet     = sessionFromBytes("unet",     *unetBytes, unetOpts);
                 ctx.cpu_unet = sessionFromBytes("cpu_unet", *unetBytes, ctx.cpu_session_opts);
             }
@@ -332,7 +337,7 @@ namespace sd {
 
         Logger::info("All models loaded in " + fmtMs(t0));
         Logger::info("=================");
-        return ctx;
+        return result;
     }
 
 }

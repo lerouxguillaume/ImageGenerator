@@ -1,5 +1,6 @@
 #pragma once
 #include <onnxruntime_cxx_api.h>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../enum/enums.hpp"
@@ -80,6 +81,26 @@ struct GenerationContext {
         , memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
 #endif
     {}
+};
+
+// ── Loaded model instance ─────────────────────────────────────────────────────
+// Bundles everything produced by one loadModels() call: the live ORT sessions
+// (via ctx), the model schema that drove the load, and optional references to
+// the byte buffers that were used to create patched sessions under LoRA.
+//
+// Immutable after creation: sessions are not hot-swappable.
+// baseBytes / patchedBytes are null when sessions were loaded directly from
+// disk (no-LoRA path) and non-null when a patched in-memory buffer was used.
+
+struct ModelInstance {
+    GenerationContext ctx;
+
+    // Shared ownership of the raw ONNX bytes that backed the primary (UNet) session.
+    // Null for the no-LoRA path (ORT memory-maps the file directly).
+    std::shared_ptr<const std::vector<uint8_t>> baseBytes;
+    std::shared_ptr<const std::vector<uint8_t>> patchedBytes;
+
+    ModelConfig config;
 };
 
 } // namespace sd

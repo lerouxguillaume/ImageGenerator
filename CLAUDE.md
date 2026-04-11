@@ -17,15 +17,20 @@ MVC pattern per screen:
 SD pipeline (src/portraits/):
   PortraitGeneratorAi.cpp   — thin public shell; delegates to sd::runPipeline()
   sd/SdPipeline.cpp         — denoising loop + top-level orchestration
-  sd/ModelManager.cpp       — session cache; reloads only when model/LoRA config changes
+  sd/ModelManager.cpp       — multi-entry session cache keyed by ModelCacheKey
   sd/SdLoader.cpp           — model config detection + ORT session loading + byte cache
   sd/SdTextEncoder.cpp      — text encoding (SD 1.5 single, SDXL dual)
   sd/SdUNet.cpp             — CFG UNet passes + DML GPU fallback
   sd/SdVae.cpp              — VAE latent decode
   sd/SdScheduler.cpp        — DPM++ 2M Karras sigma schedule
-  sd/SdTypes.hpp            — ModelConfig + GenerationContext structs
+  sd/SdTypes.hpp            — ModelConfig + GenerationContext + ModelInstance structs
   sd/SdUtils.hpp            — inline helpers (timing, fp16, RNG, image conversion)
-  sd/SdOnnxPatcher.hpp/.cpp — ONNX protobuf parser; ParsedLora, computeLoraDelta, applyLoraToBytes
+  sd/SdOnnxPatcher.hpp      — shared types/declarations (TensorIndex, ParsedLora, PatchResult…)
+  sd/OnnxParser.cpp         — parseTensorIndex (protobuf wire-format parsing)
+  sd/OnnxIndex.cpp          — buildSuffixIndex (O(1) suffix lookup table)
+  sd/LoraParser.cpp         — parseLoraLayers (kohya key → LoraLayer grouping)
+  sd/LoraMath.cpp           — computeLoraDelta (matmul + scale in fp32)
+  sd/OnnxPatcher.cpp        — applyLoraToBytes (copy + patch loop)
   sd/SdLoraMatch.hpp/.cpp   — matchLoraKey (suffix-index O(1) lookup + ambiguity detection)
   sd/SdSafetensors.hpp      — safetensors loader + fp16/bf16 conversion helpers
   Pipeline: CLIP tokenize → text encode → DPM++ 2M Karras loop → VAE decode → cv::imwrite
@@ -50,15 +55,20 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 |---|---|
 | `src/portraits/PortraitGeneratorAi.hpp` | Public API: `GenerationParams`, `generateFromPrompt()` |
 | `src/portraits/PortraitGeneratorAi.cpp` | Thin shell — builds prompt, calls `sd::runPipeline()` |
-| `src/portraits/sd/SdTypes.hpp` | `ModelConfig` + `GenerationContext` structs |
-| `src/portraits/sd/ModelManager.hpp/.cpp` | Session cache keyed by `(modelDir, loras[])` |
-| `src/portraits/sd/SdLoader.cpp` | `loadModelConfig()`, `loadModels()`, byte cache, `logModelIO()` |
+| `src/portraits/sd/SdTypes.hpp` | `ModelConfig`, `GenerationContext`, `ModelInstance` structs |
+| `src/portraits/sd/ModelManager.hpp/.cpp` | `unordered_map<ModelCacheKey, ModelInstance>` session cache |
+| `src/portraits/sd/SdLoader.cpp` | `loadModelConfig()`, `loadModels()` → `ModelInstance`, byte cache, `logModelIO()` |
 | `src/portraits/sd/SdTextEncoder.cpp` | `encodeText()` (SD 1.5), `encodeTextSDXL()` (SDXL) |
 | `src/portraits/sd/SdUNet.cpp` | `runUNetSingle()`, `runUNetCFG()`, DML GPU fallback |
 | `src/portraits/sd/SdVae.cpp` | `decodeLatent()` |
 | `src/portraits/sd/SdScheduler.cpp` | `buildAlphasCumprod()`, `buildKarrasSchedule()`, `sigmaToTimestep()` |
 | `src/portraits/sd/SdPipeline.cpp` | `denoiseSingleLatent()`, `runPipeline()` |
-| `src/portraits/sd/SdOnnxPatcher.hpp/.cpp` | ONNX parser, `ParsedLora`, `computeLoraDelta`, `applyLoraToBytes` |
+| `src/portraits/sd/SdOnnxPatcher.hpp` | Shared types: `TensorIndex`, `OnnxSuffixIndex`, `ParsedLora`, `PatchResult` |
+| `src/portraits/sd/OnnxParser.cpp` | `parseTensorIndex()` — protobuf wire-format parser + diagnostics |
+| `src/portraits/sd/OnnxIndex.cpp` | `buildSuffixIndex()` — O(1) suffix lookup table |
+| `src/portraits/sd/LoraParser.cpp` | `parseLoraLayers()` — kohya key grouping into `LoraLayer` triplets |
+| `src/portraits/sd/LoraMath.cpp` | `computeLoraDelta()` — matmul + scale in fp32 |
+| `src/portraits/sd/OnnxPatcher.cpp` | `applyLoraToBytes()` — copy + patch loop |
 | `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchLoraKey()` — suffix-index lookup with ambiguity detection |
 | `src/portraits/sd/SdUtils.hpp` | Inline helpers: `fmtMs`, `toFp16`, `randNormal`, `latentToImage` |
 | `src/portraits/ClipTokenizer.cpp/.hpp` | BPE tokenizer (no Python dependency) |
@@ -188,31 +198,40 @@ LoRA is applied at model load time by patching the ONNX binary in memory before 
 
 ```
 SdPipeline.cpp  runPipeline()
-  → ModelManager::get()           — returns cached session or calls loadModels()
+  → ModelManager::get()           — looks up ModelCacheKey in unordered_map; calls loadModels() on miss
 
-SdLoader.cpp  loadModels() / makePatchedBytes()
+SdLoader.cpp  loadModels() → ModelInstance / makePatchedBytes()
   → cachedReadFileBytes()         — returns shared_ptr<const bytes>; reads disk only on first call
-  → parseTensorIndex()            — build name→{offset, length, shape, dtype} index
-  → buildSuffixIndex()            — build suffix→TensorIndex* hash map (O(1) lookup)
-  → applyLoraToBytes()            — copies buffer, patches the copy, returns PatchResult
-       → parseLoraLayers()        — group safetensors keys into (down, up, alpha) triplets
-       → matchLoraKey()           — O(1) suffix-index lookup (SdLoraMatch.cpp)
-       → computeLoraDelta()       — matmul + scale in fp32
+  → parseTensorIndex()            — build name→{offset, length, shape, dtype} index  [OnnxParser.cpp]
+  → buildSuffixIndex()            — build suffix→TensorIndex* hash map (O(1) lookup)  [OnnxIndex.cpp]
+  → applyLoraToBytes()            — copies buffer, patches the copy, returns PatchResult  [OnnxPatcher.cpp]
+       → parseLoraLayers()        — group safetensors keys into (down, up, alpha) triplets  [LoraParser.cpp]
+       → matchLoraKey()           — O(1) suffix-index lookup  [SdLoraMatch.cpp]
+       → computeLoraDelta()       — matmul + scale in fp32  [LoraMath.cpp]
   → Ort::Session(*patchedBytes)   — create session from patched copy
 ```
 
 Key files:
-- `sd/SdOnnxPatcher.hpp/.cpp` — ONNX parser, `ParsedLora`/`LoraLayer`, `computeLoraDelta`, `applyLoraToBytes`
-- `sd/SdLoraMatch.hpp/.cpp` — `matchLoraKey` with soft + hard ambiguity logging
+- `sd/SdOnnxPatcher.hpp` — shared types: `TensorIndex`, `OnnxSuffixIndex`, `ParsedLora`/`LoraLayer`, `PatchResult`
+- `sd/OnnxParser.cpp` — `parseTensorIndex` (protobuf wire-format parsing + field diagnostics)
+- `sd/OnnxIndex.cpp` — `buildSuffixIndex`
+- `sd/LoraParser.cpp` — `parseLoraLayers` (kohya prefix stripping + triplet grouping)
+- `sd/LoraMath.cpp` — `computeLoraDelta` (fp32 matmul)
+- `sd/OnnxPatcher.cpp` — `applyLoraToBytes` (copy + patch loop)
+- `sd/SdLoraMatch.hpp/.cpp` — `matchLoraKey` with soft + hard ambiguity logging; optional `SD_LORA_MATCH_DEBUG` flag
 - `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
 - `sd/SdLoader.cpp` `makePatchedBytes()` lambda — orchestrates cache→parse→patch→session
-- `sd/ModelManager.hpp/.cpp` — owns the live `GenerationContext`; cache key = `(modelDir, loras[])`
+- `sd/ModelManager.hpp/.cpp` — `unordered_map<ModelCacheKey, ModelInstance>` session cache
 
 ### Model and byte caching
 
-**Session cache (`ModelManager`)** — `SdPipeline.cpp` holds a `static ModelManager`. On each `runPipeline()` call, `ModelManager::get(cfg, modelDir, loras)` compares the requested `(modelDir, loras[]{path, scale})` against the cached key. On hit, the existing sessions are reused instantly. On miss, `loadModels()` is called and the result replaces the cache.
+**Session cache (`ModelManager`)** — `SdPipeline.cpp` holds a `static ModelManager`. On each `runPipeline()` call, `ModelManager::get(cfg, modelDir, loras)` looks up a `ModelCacheKey` in an `unordered_map<ModelCacheKey, ModelInstance>`. On hit the stored `ModelInstance` is reused; on miss `loadModels()` is called, a new `ModelInstance` is emplaced, and the result is returned. Multiple distinct configurations can coexist in the cache simultaneously.
+
+`ModelCacheKey` bundles `modelDir`, `cfg.type`, and `loras[]{path, scale}`. LoRA scales are compared and hashed as `int(scale * 1000)` — prevents false cache misses from floating-point representation noise while still distinguishing values that differ by ≥ 0.001.
 
 **Byte cache (`SdLoader.cpp`)** — `s_modelBytesCache` maps file path → `shared_ptr<const vector<uint8_t>>`. On the first LoRA run for a given model file, bytes are read from disk and stored. Every subsequent run copies from the cache (no disk I/O). The no-LoRA path is unaffected — it loads sessions directly from the file path, letting ORT memory-map the file.
+
+`loadModels()` returns a `ModelInstance`. For the LoRA path, `ModelInstance.baseBytes` and `ModelInstance.patchedBytes` hold shared ownership of the UNet byte buffers — `baseBytes` from the byte cache (unpatched), `patchedBytes` after all LoRA adapters have been applied.
 
 Memory during a LoRA run: cached base bytes (persistent) + patched copy (alive during session creation, then freed) + live session. Peak ≈ 2× model size.
 
@@ -267,7 +286,7 @@ delta = effectiveScale × (lora_up @ lora_down)
 
 `lora_down`: shape `[rank, in_feat]` — `lora_up`: shape `[out_feat, rank]`
 
-Implemented in `computeLoraDelta(up, down, effectiveScale)` in `SdOnnxPatcher.cpp`.
+Implemented in `computeLoraDelta(up, down, effectiveScale)` in `LoraMath.cpp`.
 
 ### Known bugs (fixed)
 
@@ -321,16 +340,17 @@ The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons
 ```
 ModelManager: cache hit — reusing loaded sessions.
 ```
-If you changed LoRA selection but this appears, the cache key comparison may have a float equality issue. Check that `loraScales[i]` was updated after editing the scale input.
+If you changed LoRA selection but this appears, check that `loraScales[i]` was updated after editing the scale input field. The cache key uses `int(scale * 1000)` for float comparison, so changes smaller than 0.001 are intentionally treated as the same key.
 
-### Temporary diagnostics in the patcher
+### Optional match-level debug logging
 
-`SdOnnxPatcher.cpp` `applyLoraToBytes()` contains:
-- Pre/post-patch NaN checks for every patched tensor (logs `LoRA WARNING`)
-- First-patch dtype + sample value logging (logs `[diag]`)
-- Delta magnitude warning for `peak > 1.0` (logs `LoRA large delta`)
+`SdLoraMatch.cpp` has a compile-time flag for verbose per-key logging:
 
-These are safe to leave enabled; they add minimal overhead relative to session creation time. Remove them when LoRA is fully stable.
+```cpp
+#define SD_LORA_MATCH_DEBUG 1   // add to compile flags: -DSD_LORA_MATCH_DEBUG=1
+```
+
+When enabled, every `matchLoraKey()` call logs the lookup key, all candidates with their suffix lengths, and the chosen winner. Off by default — produces one log line per layer (180+ lines for a full model).
 
 ## What NOT to do
 
@@ -339,4 +359,5 @@ These are safe to leave enabled; they add minimal overhead relative to session c
 - Do not call `cpu_unet` with `ctx.session_opts` — it must always use `ctx.cpu_session_opts` (no GPU EP).
 - Do not hard-code fp16 for VAE input — use `ctx.vaeExpectsFp32` to select the right type.
 - Do not reset `ctx.run_opts` manually in `runPipeline()` — `ModelManager::get()` already does this on every call before returning the context reference.
-- Do not mutate the `shared_ptr<const vector<uint8_t>>` returned by `cachedReadFileBytes()` — it is shared across runs. `applyLoraToBytes` takes a const shared_ptr and always copies before patching.
+- Do not mutate the `shared_ptr<const vector<uint8_t>>` returned by `cachedReadFileBytes()` — it is shared across runs and stored in `ModelInstance.baseBytes`. `applyLoraToBytes` takes a const shared_ptr and always copies before patching.
+- Do not use `operator[]` to insert into `ModelManager`'s internal cache — `GenerationContext` contains non-copyable ORT sessions. Always use `emplace` with `std::move`.
