@@ -182,6 +182,8 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             dynamic_axes=policy.unet_dynamic_axes(),
             exporter=policy.unet_exporter(),
             fix_fp32_constants=policy.should_fix_fp32_constants("unet"),
+            fix_attention_sqrt_cast=policy.should_fix_attention_sqrt_cast("unet"),
+            fix_resize_fp16=policy.should_fix_resize_fp16("unet"),
             force_external_data=policy.should_force_external_data("unet"),
             release_after=(unet, pipe.unet),
         ),

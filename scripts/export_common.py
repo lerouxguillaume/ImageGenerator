@@ -186,6 +186,8 @@ class ExportComponentSpec:
     do_constant_folding: bool = False
     exporter: str = "legacy"
     fix_fp32_constants: bool = False
+    fix_attention_sqrt_cast: bool = False
+    fix_resize_fp16: bool = False
     simplify: bool = False
     force_external_data: bool = False
     release_after: tuple[Any, ...] = ()
@@ -219,6 +221,12 @@ class ExportPolicy:
         return "legacy"
 
     def should_fix_fp32_constants(self, component_name: str) -> bool:
+        return False
+
+    def should_fix_attention_sqrt_cast(self, component_name: str) -> bool:
+        return False
+
+    def should_fix_resize_fp16(self, component_name: str) -> bool:
         return False
 
     def should_simplify_vae(self, requested: bool) -> bool:
@@ -267,6 +275,12 @@ class SDXLExportPolicy(ExportPolicy):
 
     def should_fix_fp32_constants(self, component_name: str) -> bool:
         return component_name in {"unet", "vae_decoder"}
+
+    def should_fix_attention_sqrt_cast(self, component_name: str) -> bool:
+        return component_name == "unet"
+
+    def should_fix_resize_fp16(self, component_name: str) -> bool:
+        return component_name == "unet"
 
     def should_simplify_vae(self, requested: bool) -> bool:
         return requested
@@ -456,8 +470,21 @@ def _convert_tensor_proto_fp16(tensor_proto) -> bool:
 
 
 def fix_fp32_constants(path: str) -> None:
-    """Convert embedded fp32 constants to fp16 without reloading external weights."""
+    """Convert embedded fp32 constants to fp16 without reloading external weights.
+
+    Handles three forms the ONNX tracer can emit for Constant nodes:
+    - attr.t (TensorProto)    — multi-element tensor constant
+    - value_float (scalar)    — e.g. attention scale 1/sqrt(d_k), traced as attr.f
+    - value_floats (list)     — fp32 list constant, traced as attr.floats
+
+    The scalar/list forms cannot be modified in-place because their proto field
+    type (FLOAT/FLOATS) differs from the replacement type (TENSOR).  They are
+    rebuilt as zero-dim / 1-D fp16 TensorProto "value" attributes and the old
+    attribute is removed from the node.
+    """
+    import numpy as np
     import onnx
+    from onnx import AttributeProto, numpy_helper
 
     model = onnx.load_model(path, load_external_data=False)
     changed = 0
@@ -469,9 +496,31 @@ def fix_fp32_constants(path: str) -> None:
     for node in model.graph.node:
         if node.op_type != "Constant":
             continue
-        for attr in node.attribute:
-            if attr.HasField("t") and _convert_tensor_proto_fp16(attr.t):
+
+        replacements: dict[int, AttributeProto] = {}
+        for i, attr in enumerate(node.attribute):
+            if attr.HasField("t"):
+                if _convert_tensor_proto_fp16(attr.t):
+                    changed += 1
+            elif attr.type == AttributeProto.FLOAT:
+                # Scalar value_float → 0-d fp16 TensorProto stored as "value"
+                tp = numpy_helper.from_array(np.array(attr.f, dtype=np.float16))
+                replacements[i] = onnx.helper.make_attribute("value", tp)
                 changed += 1
+            elif attr.type == AttributeProto.FLOATS:
+                # value_floats list → 1-D fp16 TensorProto stored as "value"
+                arr = np.array(list(attr.floats), dtype=np.float16)
+                tp = numpy_helper.from_array(arr)
+                replacements[i] = onnx.helper.make_attribute("value", tp)
+                changed += 1
+
+        if replacements:
+            new_attrs = [
+                replacements[i] if i in replacements else attr
+                for i, attr in enumerate(node.attribute)
+            ]
+            del node.attribute[:]
+            node.attribute.extend(new_attrs)
 
     if changed == 0:
         return
@@ -486,6 +535,138 @@ def fix_fp32_constants(path: str) -> None:
         convert_attribute=False,
     )
     print(f"  Fixed {changed} embedded fp32 constant(s) in-process")
+
+
+def fix_attention_sqrt_cast_fp32(path: str) -> None:
+    """Rewrite Cast(to=float32) nodes whose input is a Sqrt to Cast(to=float16).
+
+    Some diffusers attention implementations compute the attention scale as
+    `sqrt(head_dim).to(float32)`, producing a Sqrt → Cast(fp32) chain.  In an
+    fp16 UNet this causes ORT type errors (tensor(float16) vs tensor(float)) in
+    the downstream Div or Mul that consumes the scale.
+
+    The fix is very narrow: only Cast nodes whose *direct* input comes from a
+    Sqrt node are rewritten.  This pattern never appears in Resize scale paths
+    (which use literal Constant values, not computed Sqrt values), so it is safe
+    to rewrite unconditionally.
+    """
+    import onnx
+    from onnx import TensorProto
+
+    model = onnx.load_model(path, load_external_data=False)
+
+    out_to_node: dict[str, onnx.NodeProto] = {}
+    for node in model.graph.node:
+        for out in node.output:
+            out_to_node[out] = node
+
+    changed = 0
+    for node in model.graph.node:
+        if node.op_type != "Cast" or not node.input:
+            continue
+        parent = out_to_node.get(node.input[0])
+        if parent is None or parent.op_type != "Sqrt":
+            continue
+        for attr in node.attribute:
+            if attr.name == "to" and attr.i == TensorProto.FLOAT:
+                attr.i = TensorProto.FLOAT16
+                changed += 1
+
+    if changed == 0:
+        return
+
+    data_location = os.path.basename(path) + ".data"
+    onnx.save_model(
+        model, path,
+        save_as_external_data=True,
+        location=data_location,
+        all_tensors_to_one_file=True,
+        convert_attribute=False,
+    )
+    print(f"  Fixed {changed} Cast(Sqrt→float32) → Cast(Sqrt→float16)")
+
+
+def fix_resize_fp16_input(path: str) -> None:
+    """Wrap Resize data inputs with Cast(fp16→fp32) / Cast(fp32→fp16) pairs.
+
+    ORT rejects fp16 as the data type for the Resize operator on some builds
+    and execution providers.  In an fp16 UNet every Resize data input will be
+    fp16.  This function inserts explicit Cast nodes so the Resize op always
+    receives and emits fp32 data, keeping the rest of the graph in fp16.
+
+    Only Resize nodes whose data input (input[0]) is inferred to be fp16 are
+    patched.  Resize ops that already receive fp32 (e.g. a correctly-typed
+    static model) are left untouched.
+    """
+    import onnx
+    from onnx import TensorProto, helper
+
+    model = onnx.load_model(path, load_external_data=False)
+
+    # Build a set of Cast(to=fp32) outputs already wrapping a Resize data input
+    # so we can skip nodes that were patched by a previous run.
+    out_to_node: dict[str, onnx.NodeProto] = {}
+    for node in model.graph.node:
+        for out in node.output:
+            out_to_node[out] = node
+
+    to_patch: list[onnx.NodeProto] = []
+    for node in model.graph.node:
+        if node.op_type != "Resize" or not node.input:
+            continue
+        parent = out_to_node.get(node.input[0])
+        if parent is not None and parent.op_type == "Cast":
+            for attr in parent.attribute:
+                if attr.name == "to" and attr.i == TensorProto.FLOAT:
+                    break  # already wrapped — skip
+            else:
+                to_patch.append(node)
+        else:
+            to_patch.append(node)
+
+    if not to_patch:
+        return
+
+    patched_ids = {id(n) for n in to_patch}
+    final_nodes: list[onnx.NodeProto] = []
+    counter = 0
+
+    for node in model.graph.node:
+        if id(node) not in patched_ids:
+            final_nodes.append(node)
+            continue
+
+        data_in  = node.input[0]
+        data_out = node.output[0]
+        suffix   = f"_resize{counter}"
+        fp32_in  = data_in  + suffix + "_f32"
+        fp32_out = data_out + suffix + "_f32"
+        counter += 1
+
+        final_nodes.append(helper.make_node(
+            "Cast", inputs=[data_in], outputs=[fp32_in],
+            to=TensorProto.FLOAT, name=node.name + "/cast_in",
+        ))
+        node.input[0]  = fp32_in
+        node.output[0] = fp32_out
+        final_nodes.append(node)
+        final_nodes.append(helper.make_node(
+            "Cast", inputs=[fp32_out], outputs=[data_out],
+            to=TensorProto.FLOAT16, name=node.name + "/cast_out",
+        ))
+
+    del model.graph.node[:]
+    model.graph.node.extend(final_nodes)
+
+    data_location = os.path.basename(path) + ".data"
+    onnx.save_model(
+        model, path,
+        save_as_external_data=True,
+        location=data_location,
+        all_tensors_to_one_file=True,
+        convert_attribute=False,
+    )
+    print(f"  Wrapped {len(to_patch)} Resize node(s) with Cast(fp16↔fp32) pairs")
 
 
 def ensure_external_data(path: str) -> None:
@@ -614,6 +795,10 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
         )
         if spec.fix_fp32_constants:
             fix_fp32_constants(path)
+        if spec.fix_attention_sqrt_cast:
+            fix_attention_sqrt_cast_fp32(path)
+        if spec.fix_resize_fp16:
+            fix_resize_fp16_input(path)
         if spec.simplify:
             simplify_with_onnxsim(path)
         if spec.force_external_data:

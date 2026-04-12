@@ -114,7 +114,9 @@ Always use the detected flag rather than hard-coding a dtype — the export scri
 
 ## SDXL fp16 export: fp32 contamination
 
-Diffusers 0.37.x injects fp32 operations in three places when tracing an fp16 UNet. ORT rejects the resulting mixed-type graph at model load time with `"Type parameter (T) bound to different types"`. The export script fixes all three **before tracing** (not by patching the ONNX graph afterwards, which would risk breaking ops like `Resize` that mandate fp32 inputs):
+Diffusers 0.37.x injects fp32 operations in several places when tracing an fp16 UNet. ORT rejects the resulting mixed-type graph at model load time. The export pipeline applies fixes in two layers: **pre-export patches** (monkey-patch diffusers modules before tracing so the tracer never emits mixed types) and **post-export passes** (targeted ONNX graph surgery for issues that cannot be fixed before tracing).
+
+### Pre-export patches (applied in `sdxl_export_onnx_models.py` before `from_single_file`)
 
 | Source | Location | Fix |
 |---|---|---|
@@ -122,9 +124,33 @@ Diffusers 0.37.x injects fp32 operations in three places when tracing an fp16 UN
 | `FP32SiLU` | `F.silu(inputs.float()).to(inputs.dtype)` in the timestep MLP | `patch_fp32_upcasts_for_tracing()` replaces its forward with plain `F.silu(inputs)` |
 | `Attention.upcast_attention/upcast_softmax` | Per-module flags that cast query/key/scores to fp32 | `disable_attention_upcasting(pipe.unet)` sets both flags to `False` on every `Attention` module before `unet.to(float16)` |
 
-`fix_fp32_constants` still runs as a post-export safety net to convert any stray scalar fp32 constants the tracer emits (GroupNorm epsilon, scalar multipliers, etc.) that are not touched by the above patches.
+### Post-export passes (applied by `export_component_to_dir`, enabled via `ExportComponentSpec` flags)
 
-If you add a new fp16 model family and hit `"Type parameter (T) bound to different types"` at load time: inspect the failing node name, find the diffusers source that generates the fp32 cast, and add a targeted pre-export patch — do not add a blanket Cast-node rewrite to the ONNX graph.
+| Issue | ORT error | Fix function | Flag |
+|---|---|---|---|
+| Stray scalar fp32 Constant nodes | `"Type parameter (T) … bound to different types"` on Mul/Add | `fix_fp32_constants` — converts fp32 `t` (TensorProto), `value_float`, and `value_floats` attributes on Constant nodes to fp16 | `fix_fp32_constants=True` |
+| Attention scale `Sqrt → Cast(fp32)` | `"tensor(float16) and tensor(float)"` on Div in attention blocks | `fix_attention_sqrt_cast_fp32` — rewrites any `Cast(to=float32)` whose direct input is a `Sqrt` node to `Cast(to=float16)` | `fix_attention_sqrt_cast=True` |
+| Resize with fp16 data input | `"Type 'tensor(float16)' … of operator (Resize) is invalid"` | `fix_resize_fp16_input` — inserts `Cast(fp16→fp32)` before and `Cast(fp32→fp16)` after each Resize data input (input[0]) | `fix_resize_fp16=True` |
+
+All three post-export passes are enabled for the SDXL UNet via `SDXLExportPolicy`.
+
+### Why not a blanket Cast-to-fp32 rewrite?
+
+A broad pass that rewrites all `Cast(to=float32)` → `Cast(to=float16)` nodes breaks the `Resize` operator: ONNX `Resize` requires its `scales` input (input[2]) to be `float32`. The post-export passes above are each scoped to a specific structural pattern that cannot appear in Resize scale paths:
+- `fix_fp32_constants` only touches `Constant` nodes (literal values, never dynamic scale tensors)
+- `fix_attention_sqrt_cast_fp32` only touches `Cast` nodes whose immediate parent is `Sqrt` (attention scale computation, never Resize scales which come from Constant nodes)
+- `fix_resize_fp16_input` wraps the Resize *data* input (input[0]), never the scales input (input[2])
+
+### Diagnosing new fp16 type errors
+
+If a new `"Type parameter (T) bound to different types"` or `"Type … is invalid"` error appears:
+
+1. Find the failing node name in the ORT error
+2. Use `scripts/onnx_check.py` to trace both inputs back to their producing nodes and inspect dtypes
+3. Identify whether the fp32 source is a Constant node, a Cast node, or a diffusers upcast flag
+4. For Constant nodes: `fix_fp32_constants` already handles all three attribute forms (`t`, `value_float`, `value_floats`)
+5. For a Cast node: check its parent op — add a targeted rewrite function following the pattern of `fix_attention_sqrt_cast_fp32`
+6. For a diffusers upcast flag: add a pre-export monkey-patch following the pattern of `patch_fp32_upcasts_for_tracing` or `disable_attention_upcasting`
 
 ## SDXL export: external data layout
 
