@@ -1,6 +1,8 @@
 """
 Shared utilities for ONNX model export (SD 1.5 and SDXL).
 """
+from __future__ import annotations
+
 import gc
 import importlib
 import json
@@ -725,12 +727,23 @@ def simplify_with_onnxsim(path: str) -> None:
         print(f"  Warning: onnxsim failed ({e}); keeping original")
 
 
-def write_model_json(output_dir: str, model_type: str) -> None:
-    """Write model.json consumed by the C++ runtime to detect the model family."""
+def write_model_json(output_dir: str, model_type: str,
+                     specs: list[ExportComponentSpec] | None = None) -> None:
+    """Write model.json consumed by the C++ runtime."""
+    data: dict = {"type": model_type}
+    if specs:
+        components = {}
+        for spec in specs:
+            entry: dict = {"onnx": spec.filename}
+            if spec.export_lora_weights:
+                stem = os.path.splitext(spec.filename)[0]
+                entry["weights"] = f"{stem}_weights.safetensors"
+            components[spec.component_name] = entry
+        data["components"] = components
     path = os.path.join(output_dir, "model.json")
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"type": model_type}, f)
-    print(f"  Saved model.json  (type={model_type})")
+        json.dump(data, f, indent=2)
+    print(f"  Saved model.json  (type={model_type}, {len(data.get('components', {}))} component(s))")
 
 
 def consolidate_external_data(path: str) -> None:

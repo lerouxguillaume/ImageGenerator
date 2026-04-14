@@ -32,8 +32,6 @@ struct ExternalTensorMeta {
     std::string          onnxName;    // exact initializer name as stored in the ONNX graph
     std::vector<int64_t> shape;
     int32_t              dtype       = 0;   // 1=float32, 10=float16
-    int64_t              dataOffset  = 0;   // byte offset inside .onnx.data
-    int64_t              dataLength  = 0;   // byte count inside .onnx.data
 };
 
 // Key: normalised ONNX initializer name (dots/slashes → '_') for LoRA key matching.

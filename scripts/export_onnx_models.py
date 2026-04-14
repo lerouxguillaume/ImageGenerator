@@ -77,29 +77,30 @@ def export_sd15(model_file: str, output_dir: str, *,
     print("Loading SD 1.5 pipeline ...")
     pipe = StableDiffusionPipeline.from_single_file(model_file, torch_dtype=torch.float16)
 
+    all_specs = []
+
     # 1. Text encoder ─────────────────────────────────────────────────────────
     clip = CLIPTextEncoderClipSkip2(pipe.text_encoder).eval()
     dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
-    export_component_to_dir(
-        output_dir,
-        ExportComponentSpec(
-            step_name="1/3  Text encoder",
-            component_name="text_encoder",
-            filename="text_encoder.onnx",
-            model=clip,
-            dummy_inputs=dummy_ids,
-            input_names=["input_ids"],
-            output_names=["text_embeds", "hidden_latent"],
-            dynamic_axes=policy.text_encoder_dynamic_axes(
-                "input_ids",
-                ["text_embeds", "hidden_latent"],
-            ),
-            export_lora_weights=True,
-            skip_if_complete=resume,
-            validate=validate,
-            release_after=(clip, pipe.text_encoder, pipe.tokenizer),
+    te_spec = ExportComponentSpec(
+        step_name="1/3  Text encoder",
+        component_name="text_encoder",
+        filename="text_encoder.onnx",
+        model=clip,
+        dummy_inputs=dummy_ids,
+        input_names=["input_ids"],
+        output_names=["text_embeds", "hidden_latent"],
+        dynamic_axes=policy.text_encoder_dynamic_axes(
+            "input_ids",
+            ["text_embeds", "hidden_latent"],
         ),
+        export_lora_weights=True,
+        skip_if_complete=resume,
+        validate=validate,
+        release_after=(clip, pipe.text_encoder, pipe.tokenizer),
     )
+    all_specs.append(te_spec)
+    export_component_to_dir(output_dir, te_spec)
     pipe.text_encoder = None
 
     # 2. UNet ─────────────────────────────────────────────────────────────────
@@ -108,50 +109,48 @@ def export_sd15(model_file: str, output_dir: str, *,
     dummy_latent = torch.randn(1, 4, 64, 64, dtype=torch.float16)
     dummy_timestep = torch.tensor([1], dtype=torch.float16)
     dummy_embeds = torch.randn(1, 77, 768, dtype=torch.float16)
-    export_component_to_dir(
-        output_dir,
-        ExportComponentSpec(
-            step_name="2/3  UNet",
-            component_name="unet",
-            filename="unet.onnx",
-            model=unet,
-            dummy_inputs=(dummy_latent, dummy_timestep, dummy_embeds),
-            input_names=["latent", "timestep", "encoder_hidden_states"],
-            output_names=["latent_out"],
-            dynamic_axes=policy.unet_dynamic_axes(),
-            exporter=policy.unet_exporter(),
-            export_lora_weights=True,
-            skip_if_complete=resume,
-            validate=validate,
-            release_after=(unet, pipe.unet),
-        ),
+    unet_spec = ExportComponentSpec(
+        step_name="2/3  UNet",
+        component_name="unet",
+        filename="unet.onnx",
+        model=unet,
+        dummy_inputs=(dummy_latent, dummy_timestep, dummy_embeds),
+        input_names=["latent", "timestep", "encoder_hidden_states"],
+        output_names=["latent_out"],
+        dynamic_axes=policy.unet_dynamic_axes(),
+        exporter=policy.unet_exporter(),
+        export_lora_weights=True,
+        skip_if_complete=resume,
+        validate=validate,
+        release_after=(unet, pipe.unet),
     )
+    all_specs.append(unet_spec)
+    export_component_to_dir(output_dir, unet_spec)
     pipe.unet = None
 
     # 3. VAE decoder ──────────────────────────────────────────────────────────
     pipe.vae.to(torch.float16)
     vae = VAEDecoderWrapper(pipe.vae).eval()
     dummy_latent_vae = torch.randn(1, 4, 64, 64, dtype=torch.float16)
-    export_component_to_dir(
-        output_dir,
-        ExportComponentSpec(
-            step_name="3/3  VAE decoder",
-            component_name="vae_decoder",
-            filename="vae_decoder.onnx",
-            model=vae,
-            dummy_inputs=(dummy_latent_vae,),
-            input_names=["latent"],
-            output_names=["image"],
-            dynamic_axes=policy.vae_dynamic_axes(),
-            exporter=policy.vae_exporter(),
-            simplify=policy.should_simplify_vae(True),
-            skip_if_complete=resume,
-            validate=validate,
-            release_after=(vae, pipe.vae, pipe),
-        ),
+    vae_spec = ExportComponentSpec(
+        step_name="3/3  VAE decoder",
+        component_name="vae_decoder",
+        filename="vae_decoder.onnx",
+        model=vae,
+        dummy_inputs=(dummy_latent_vae,),
+        input_names=["latent"],
+        output_names=["image"],
+        dynamic_axes=policy.vae_dynamic_axes(),
+        exporter=policy.vae_exporter(),
+        simplify=policy.should_simplify_vae(True),
+        skip_if_complete=resume,
+        validate=validate,
+        release_after=(vae, pipe.vae, pipe),
     )
+    all_specs.append(vae_spec)
+    export_component_to_dir(output_dir, vae_spec)
 
-    write_model_json(output_dir, policy.model_type)
+    write_model_json(output_dir, policy.model_type, all_specs)
     print(f"\n✅ All models exported to {output_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 

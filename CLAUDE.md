@@ -330,6 +330,8 @@ Key files:
 
 `ModelCacheKeyHash` feeds a single canonical string buffer (`modelDir\0type\0path\0scale\0...`) into **XXH64** (`libxxhash`). This avoids depending on the quality of `std::hash<std::string>` which varies across stdlibs.
 
+**Persistent `LoraInjector` instances (`SdLoader.cpp`)** — `SdLoader.cpp` holds a `static std::unordered_map<std::string, LoraInjector> s_injectors` keyed by `.onnx` path. `loadModels()` obtains references (`LoraInjector& teInjector = s_injectors[teBundle.onnxPath]`) instead of creating local instances. This means the injector's metadata and base-weight caches persist across `loadModels()` calls (i.e. across LoRA config changes), so the expensive first-time setup runs only once per component per process lifetime.
+
 **`LoraInjector` internal caches** — each `LoraInjector` instance (one per component: text encoder, UNet) holds two caches:
 - `extIndex_` / `extSuffixIndex_` — populated once by `loadModelMetadata()` when the `.onnx` path is first seen; reused for every subsequent LoRA apply call on the same component.
 - `mergeCache_` — maps a FNV-1a hash of `(onnxPath, weightsPath, loras)` → `vector<CachedTensor>`. On cache miss: `ensureBaseWeights()` loads `_weights.safetensors` once, then `computeMerge()` runs the matmuls. On cache hit: `buildOverrides()` copies the pre-computed tensors into a new `LoraOverrides` (cheap memcpy).  The cache is guarded by `cacheMutex_`.
@@ -351,7 +353,7 @@ Each layer needs a down, up, and optionally alpha tensor. `parseLoraLayers()` gr
 
 The matching pipeline has three stages:
 
-**1. Parse** — `parseExternalIndex` scans the `.onnx` binary for TensorProto entries where `data_location == EXTERNAL` (field 14, value 1). It normalises all `.` and `/` in initializer names to `_` and records each tensor's `onnxName`, `shape`, `dtype`, `dataOffset`, and `dataLength` (from the `external_data` key-value pairs at field 13). Returns `OnnxExternalIndex` (a `std::map<normName, ExternalTensorMeta>`).
+**1. Parse** — `parseExternalIndex` scans the `.onnx` binary for TensorProto entries where `data_location == EXTERNAL` (field 14, value 1). It normalises all `.` and `/` in initializer names to `_` and records each tensor's `onnxName`, `shape`, and `dtype` (from the TensorProto fields). The `location`/`offset`/`length` values in `external_data` (field 13) are parsed but discarded — base weights come from the companion `_weights.safetensors`, not from `.onnx.data`. Returns `OnnxExternalIndex` (a `std::map<normName, ExternalTensorMeta>`).
 
 **2. Index** — `buildExternalSuffixIndex` walks every normalised name and inserts it under every `_`-boundary suffix into an `OnnxExternalSuffixIndex`. Runs once per model file at load time; cached inside `LoraInjector` (keyed by `.onnx` path).
 
@@ -458,6 +460,38 @@ If you changed LoRA selection but this appears, check that `loraScales[i]` was u
 
 When enabled, every `matchExternalLoraKey()` (and `matchLoraKey()`) call logs the lookup key, all candidates with their suffix lengths, and the chosen winner. Off by default — produces one log line per layer (180+ lines for a full model).
 
+## Session warmup
+
+`SdLoader.cpp` calls `warmupSession()` for every ORT session immediately after creation (`text_encoder`, `unet`, `cpu_unet` if available, `vae_decoder`, `text_encoder_2` for SDXL). The helper:
+
+1. Queries each input's shape from session metadata, replacing dynamic dims (`-1`) with `1`.
+2. Allocates zero-filled tensors with the correct dtype (float16, float32, or int64).
+3. Calls `session.Run()` once to trigger ORT's JIT kernel compilation.
+
+The warmup is **non-fatal**: any exception is caught and logged as a warning so a warmup failure never blocks model load. Without warmup, the first real inference call pays the JIT cost; with it, that cost is absorbed at load time before the user clicks Generate.
+
+Do not remove warmup calls — the latency reduction is significant for the first image after a model/LoRA change.
+
+## Model manifest validation
+
+`model.json` may include a `"components"` dict written by the export scripts:
+
+```json
+{
+  "type": "sdxl",
+  "components": {
+    "text_encoder":   { "onnx": "text_encoder.onnx",   "weights": "text_encoder_weights.safetensors" },
+    "text_encoder_2": { "onnx": "text_encoder_2.onnx",  "weights": "text_encoder_2_weights.safetensors" },
+    "unet":           { "onnx": "unet.onnx",             "weights": "unet_weights.safetensors" },
+    "vae_decoder":    { "onnx": "vae_decoder.onnx" }
+  }
+}
+```
+
+`validateManifest()` in `SdLoader.cpp` is called inside `loadModelConfig()` after JSON parse. It checks whether every declared `onnx` and `weights` file exists on disk and logs `[OK]` / `[MISSING]` for each. Missing files are flagged as warnings — load continues, so a partial or legacy model directory is tolerated, but the log makes it easy to diagnose "model loaded but LoRA has 0 patches" (companion weights missing).
+
+`write_model_json(output_dir, model_type, all_specs)` in `scripts/export_common.py` writes this layout automatically when called with the list of `ExportComponentSpec` objects. Both export scripts (`export_onnx_models.py`, `sdxl_export_onnx_models.py`) pass `all_specs` so the manifest is always up to date.
+
 ## What NOT to do
 
 - The SD 1.5 VAE export now uses `dynamic_axes` for height/width (needed for non-512 resolutions). This is safe because the VAE always loads with `cpu_session_opts` and never goes through DML. Do not remove those dynamic axes.
@@ -468,3 +502,5 @@ When enabled, every `matchExternalLoraKey()` (and `matchLoraKey()`) call logs th
 - Do not call `SessionOptions::AddExternalInitializers` on the shared `unetOpts`/`auxOpts` references — always `Clone()` first. Mutating a shared `SessionOptions` would affect every subsequent session created with it.
 - Do not destroy a `LoraOverrides` before the `Ort::Session` constructor returns — the `Ort::Value` objects hold non-owning views into `LoraOverrides::fp16Bufs`/`fp32Bufs`.
 - Do not use `operator[]` to insert into `ModelManager`'s internal cache — `GenerationContext` contains non-copyable ORT sessions. Always use `emplace` with `std::move`.
+- Do not create local `LoraInjector` instances inside `loadModels()` — always use references from the static `s_injectors` map so caches survive across LoRA config changes.
+- Do not add `dataOffset` or `dataLength` back to `ExternalTensorMeta` — those fields were removed because base weights now come from `_weights.safetensors`, not from `.onnx.data`. The C++ code never reads `.onnx.data` directly.

@@ -18,6 +18,11 @@ extern "C" OrtStatus* OrtSessionOptionsAppendExecutionProvider_DML(
 #endif
 
 namespace sd {
+    // Persistent per-component LoRA injectors keyed by .onnx path.
+    // Survives across loadModels() calls so base weights are not reloaded from
+    // disk on every LoRA config change — only the merge computation is redone.
+    static std::unordered_map<std::string, LoraInjector> s_injectors;
+
     // ── Model I/O logging ─────────────────────────────────────────────────────────
 
     static const char* kOrtTypeNames[] = {
@@ -25,6 +30,91 @@ namespace sd {
         "string", "bool", "float16", "double", "uint32", "uint64",
         "complex64", "complex128", "bfloat16"
     };
+
+    // Runs one dummy forward pass to trigger ORT JIT / kernel compilation.
+    // Queries input shapes at runtime; replaces dynamic dims (-1) with 1.
+    // Non-fatal: logs and returns on any failure.
+    static void warmupSession(const char*                       label,
+                              Ort::Session&                     session,
+                              Ort::MemoryInfo&                  memInfo,
+                              Ort::AllocatorWithDefaultOptions& allocator) {
+        auto ts = Clock::now();
+        try {
+            const size_t nIn  = session.GetInputCount();
+            const size_t nOut = session.GetOutputCount();
+
+            // Build zero-filled backing buffers, one per input.
+            struct Buf {
+                std::vector<int64_t> shape;
+                std::vector<uint8_t> raw;     // sizeof(elem) * nElems bytes, all zero
+                ONNXTensorElementDataType dtype;
+            };
+            std::vector<Buf>        bufs(nIn);
+            std::vector<Ort::Value> inputs;
+            inputs.reserve(nIn);
+
+            for (size_t i = 0; i < nIn; ++i) {
+                auto& buf        = bufs[i];
+                auto  typeInfo   = session.GetInputTypeInfo(i);
+                auto  shapeInfo  = typeInfo.GetTensorTypeAndShapeInfo();
+                buf.dtype        = shapeInfo.GetElementType();
+                buf.shape        = shapeInfo.GetShape();
+                for (auto& d : buf.shape) if (d < 0) d = 1;
+
+                int64_t nElems = 1;
+                for (auto d : buf.shape) nElems *= d;
+
+                size_t elemBytes = 4;
+                if (buf.dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)  elemBytes = 2;
+                else if (buf.dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) elemBytes = 8;
+                else if (buf.dtype != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+                    Logger::info(std::string(label) + " warmup skipped (unsupported dtype)");
+                    return;
+                }
+                buf.raw.assign(static_cast<size_t>(nElems) * elemBytes, 0u);
+
+                if (buf.dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+                    inputs.push_back(Ort::Value::CreateTensor(
+                        memInfo,
+                        reinterpret_cast<Ort::Float16_t*>(buf.raw.data()),
+                        static_cast<size_t>(nElems),
+                        buf.shape.data(), buf.shape.size()));
+                } else if (buf.dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+                    inputs.push_back(Ort::Value::CreateTensor<float>(
+                        memInfo,
+                        reinterpret_cast<float*>(buf.raw.data()),
+                        static_cast<size_t>(nElems),
+                        buf.shape.data(), buf.shape.size()));
+                } else {
+                    inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+                        memInfo,
+                        reinterpret_cast<int64_t*>(buf.raw.data()),
+                        static_cast<size_t>(nElems),
+                        buf.shape.data(), buf.shape.size()));
+                }
+            }
+
+            std::vector<std::string> inNames, outNames;
+            for (size_t i = 0; i < nIn;  ++i)
+                inNames.push_back(session.GetInputNameAllocated(i,  allocator).get());
+            for (size_t i = 0; i < nOut; ++i)
+                outNames.push_back(session.GetOutputNameAllocated(i, allocator).get());
+
+            std::vector<const char*> inPtrs, outPtrs;
+            for (const auto& n : inNames)  inPtrs.push_back(n.c_str());
+            for (const auto& n : outNames) outPtrs.push_back(n.c_str());
+
+            session.Run(Ort::RunOptions{nullptr},
+                        inPtrs.data(),  inputs.data(), nIn,
+                        outPtrs.data(), nOut);
+
+            Logger::info(std::string(label) + " warmup in " + fmtMs(ts));
+        } catch (const std::exception& e) {
+            Logger::info(std::string(label) + " warmup skipped: " + std::string(e.what()));
+        }
+    }
+
+    // ── Model I/O logging ─────────────────────────────────────────────────────────
 
     static void logModelIO(const char* label,
                            Ort::Session& session,
@@ -47,6 +137,20 @@ namespace sd {
         }
     }
 
+    static void validateManifest(const std::string& modelDir, const nlohmann::json& j) {
+        if (!j.contains("components")) return;
+        Logger::info("Validating model manifest...");
+        for (const auto& [compName, comp] : j["components"].items()) {
+            for (const std::string& key : {"onnx", "weights"}) {
+                if (!comp.contains(key)) continue;
+                const std::string file = comp[key].get<std::string>();
+                const std::string full = modelDir + "/" + file;
+                Logger::info((std::filesystem::exists(full) ? "  [OK]      " : "  [MISSING] ")
+                             + file);
+            }
+        }
+    }
+
     // ── Model config ──────────────────────────────────────────────────────────────
 
     ModelConfig loadModelConfig(const std::string& modelDir) {
@@ -59,6 +163,7 @@ namespace sd {
         try {
             std::ifstream f(jsonPath);
             const auto j = nlohmann::json::parse(f);
+            validateManifest(modelDir, j);
             const std::string type = j.value("type", "sd15");
             if (type == "sdxl") {
                 cfg.type    = ModelType::SDXL;
@@ -238,9 +343,10 @@ namespace sd {
             };
 
             // Instantiate one injector per component (owns the metadata + merge cache).
-            LoraInjector teInjector, unetInjector;
-            teInjector.loadModelMetadata(teBundle.onnxPath.string());
-            unetInjector.loadModelMetadata(unetBundle.onnxPath.string());
+            LoraInjector& teInjector   = s_injectors[teBundle.onnxPath.string()];
+            LoraInjector& unetInjector = s_injectors[unetBundle.onnxPath.string()];
+            teInjector.loadModelMetadata(teBundle.onnxPath.string());    // idempotent
+            unetInjector.loadModelMetadata(unetBundle.onnxPath.string()); // idempotent
 
             ctx.text_encoder = makeLoraSession("text_encoder", teBundle,   teInjector,   auxOpts);
             ctx.unet         = makeLoraSession("unet",         unetBundle, unetInjector, unetOpts);
@@ -260,7 +366,7 @@ namespace sd {
 
             if (cfg.type == ModelType::SDXL) {
                 auto te2Bundle = resolveBundle(mdir / "text_encoder_2.onnx");
-                LoraInjector te2Injector;
+                LoraInjector& te2Injector = s_injectors[te2Bundle.onnxPath.string()];
                 te2Injector.loadModelMetadata(te2Bundle.onnxPath.string());
                 ctx.text_encoder_2 = makeLoraSession("text_encoder_2", te2Bundle,
                                                       te2Injector, auxOpts);
@@ -312,6 +418,16 @@ namespace sd {
 
         ctx.latent_shape = {1, 4, latent_h, latent_w};
         ctx.latent_size  = 1 * 4 * latent_h * latent_w;
+
+        // Warmup: trigger ORT JIT compilation before first real inference.
+        Logger::info("Warming up sessions...");
+        warmupSession("text_encoder", ctx.text_encoder,   ctx.memory_info, ctx.allocator);
+        warmupSession("unet",         ctx.unet,            ctx.memory_info, ctx.allocator);
+        if (ctx.cpuFallbackAvailable)
+            warmupSession("cpu_unet", ctx.cpu_unet,        ctx.memory_info, ctx.allocator);
+        warmupSession("vae_decoder",  ctx.vae_decoder,     ctx.memory_info, ctx.allocator);
+        if (cfg.type == ModelType::SDXL)
+            warmupSession("text_encoder_2", ctx.text_encoder_2, ctx.memory_info, ctx.allocator);
 
         Logger::info("All models loaded in " + fmtMs(t0));
         Logger::info("=================");

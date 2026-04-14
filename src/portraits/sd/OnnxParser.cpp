@@ -183,7 +183,7 @@ OnnxExternalIndex parseExternalIndex(const OnnxModelBundle& bundle) {
             if (isExt && !name.empty() && !location.empty() && length > 0) {
                 std::string norm = name;
                 for (char& c : norm) if (c == '.' || c == '/') c = '_';
-                result[norm] = { name, shape, dtype, offset, length };
+                result[norm] = { name, shape, dtype };
             }
         }
         pos = bodyEnd;
