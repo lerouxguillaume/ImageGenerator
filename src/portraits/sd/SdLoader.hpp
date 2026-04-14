@@ -11,10 +11,12 @@ ModelConfig loadModelConfig(const std::string& modelDir);
 
 // Creates and returns a fully initialised ModelInstance for cfg.
 // Loads text encoder(s), UNet (GPU + CPU fallback), and VAE decoder.
-// If loras is non-empty, each ONNX model is read into memory, LoRA weights
-// are applied in-place, and the session is created from the patched bytes.
-// baseBytes / patchedBytes in the returned instance reference the UNet buffers
-// (LoRA path only; null for no-LoRA loads that use ORT file memory-mapping).
+// No-LoRA path: sessions are created directly from the .onnx file path so
+// ORT can memory-map the file and resolve .onnx.data natively.
+// LoRA path: external-data tensor metadata is parsed once per .onnx file,
+// LoRA deltas are applied to matched base weights, and the merged tensors are
+// injected via SessionOptions::AddExternalInitializers before session creation.
+// ORT still loads all non-patched weights natively from .onnx.data.
 ModelInstance loadModels(const ModelConfig&            cfg,
                          const std::string&            modelDir,
                          const std::vector<LoraEntry>& loras = {});

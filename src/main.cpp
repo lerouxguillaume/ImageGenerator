@@ -4,6 +4,7 @@
 #include <csignal>
 #include <exception>
 #include <filesystem>
+#include <onnxruntime_cxx_api.h>
 #include <string>
 
 #if defined(_WIN32)
@@ -72,12 +73,19 @@ int main() {
     std::signal(SIGABRT, onSignal);
     std::signal(SIGFPE,  onSignal);
 
-    Logger::info("Main started");
+    try {
+        App app;
+        app.run();
+    }
+    catch (const Ort::Exception& e) {
+        Logger::error("[ORT ERROR]: " + std::string(e.what()));
+    }
+    catch (const std::exception& e) {
+        Logger::error("[STD ERROR]: " + std::string(e.what()));
+    }
+    catch (...) {
+        Logger::error("[UNKNOWN ERROR] Unhandled exception occurred");
+    }
 
-    Logger::info("Config loaded");
-
-    App app;
-    Logger::info("Application created");
-    app.run();
     return 0;
 }

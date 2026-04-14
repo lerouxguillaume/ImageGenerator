@@ -13,4 +13,9 @@ namespace sd {
 const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
                                 const std::string&     loraBase);
 
+// Same semantics as matchLoraKey, but operates on an OnnxExternalSuffixIndex.
+// Used by the AddExternalInitializers LoRA path.
+const ExternalTensorMeta* matchExternalLoraKey(const OnnxExternalSuffixIndex& suffixIndex,
+                                               const std::string&             loraBase);
+
 } // namespace sd

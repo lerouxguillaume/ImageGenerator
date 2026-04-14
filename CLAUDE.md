@@ -18,20 +18,21 @@ SD pipeline (src/portraits/):
   PortraitGeneratorAi.cpp   — thin public shell; delegates to sd::runPipeline()
   sd/SdPipeline.cpp         — denoising loop + top-level orchestration
   sd/ModelManager.cpp       — multi-entry session cache keyed by ModelCacheKey
-  sd/SdLoader.cpp           — model config detection + ORT session loading + byte cache
+  sd/SdLoader.cpp           — model config detection + ORT session loading + external-index cache
   sd/SdTextEncoder.cpp      — text encoding (SD 1.5 single, SDXL dual)
   sd/SdUNet.cpp             — CFG UNet passes + DML GPU fallback
   sd/SdVae.cpp              — VAE latent decode
   sd/SdScheduler.cpp        — DPM++ 2M Karras sigma schedule
   sd/SdTypes.hpp            — ModelConfig + GenerationContext + ModelInstance structs
   sd/SdUtils.hpp            — inline helpers (timing, fp16, RNG, image conversion)
-  sd/SdOnnxPatcher.hpp      — shared types/declarations (TensorIndex, ParsedLora, PatchResult…)
-  sd/OnnxParser.cpp         — parseTensorIndex (protobuf wire-format parsing)
-  sd/OnnxIndex.cpp          — buildSuffixIndex (O(1) suffix lookup table)
+  sd/SdOnnxPatcher.hpp      — shared types: TensorIndex, ExternalTensorMeta, ParsedLora, PatchResult…
+  sd/OnnxParser.cpp         — parseTensorIndex + parseExternalIndex (protobuf wire-format parsing)
+  sd/OnnxIndex.cpp          — buildSuffixIndex + buildExternalSuffixIndex (O(1) suffix lookup)
   sd/LoraParser.cpp         — parseLoraLayers (kohya key → LoraLayer grouping)
   sd/LoraMath.cpp           — computeLoraDelta (matmul + scale in fp32)
-  sd/OnnxPatcher.cpp        — applyLoraToBytes (copy + patch loop)
-  sd/SdLoraMatch.hpp/.cpp   — matchLoraKey (suffix-index O(1) lookup + ambiguity detection)
+  sd/OnnxPatcher.cpp        — applyLoraToBytes (legacy inline-buffer patch loop; kept for reference)
+  sd/SdLoraMatch.hpp/.cpp   — matchLoraKey + matchExternalLoraKey (suffix-index lookup + ambiguity detection)
+  sd/SdLoraApply.hpp/.cpp   — buildLoraOverrides (reads .onnx.data + applies delta + builds Ort::Value overrides)
   sd/SdSafetensors.hpp      — safetensors loader + fp16/bf16 conversion helpers
   Pipeline: CLIP tokenize → text encode → DPM++ 2M Karras loop → VAE decode → cv::imwrite
 ```
@@ -57,19 +58,20 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/portraits/PortraitGeneratorAi.cpp` | Thin shell — builds prompt, calls `sd::runPipeline()` |
 | `src/portraits/sd/SdTypes.hpp` | `ModelConfig`, `GenerationContext`, `ModelInstance` structs |
 | `src/portraits/sd/ModelManager.hpp/.cpp` | `unordered_map<ModelCacheKey, ModelInstance>` session cache |
-| `src/portraits/sd/SdLoader.cpp` | `loadModelConfig()`, `loadModels()` → `ModelInstance`, byte cache, `logModelIO()` |
+| `src/portraits/sd/SdLoader.cpp` | `loadModelConfig()`, `loadModels()` → `ModelInstance`, external-index cache, `logModelIO()` |
 | `src/portraits/sd/SdTextEncoder.cpp` | `encodeText()` (SD 1.5), `encodeTextSDXL()` (SDXL) |
 | `src/portraits/sd/SdUNet.cpp` | `runUNetSingle()`, `runUNetCFG()`, DML GPU fallback |
 | `src/portraits/sd/SdVae.cpp` | `decodeLatent()` |
 | `src/portraits/sd/SdScheduler.cpp` | `buildAlphasCumprod()`, `buildKarrasSchedule()`, `sigmaToTimestep()` |
 | `src/portraits/sd/SdPipeline.cpp` | `denoiseSingleLatent()`, `runPipeline()` |
-| `src/portraits/sd/SdOnnxPatcher.hpp` | Shared types: `TensorIndex`, `OnnxSuffixIndex`, `ParsedLora`, `PatchResult` |
-| `src/portraits/sd/OnnxParser.cpp` | `parseTensorIndex()` — protobuf wire-format parser + diagnostics |
-| `src/portraits/sd/OnnxIndex.cpp` | `buildSuffixIndex()` — O(1) suffix lookup table |
+| `src/portraits/sd/SdOnnxPatcher.hpp` | Shared types: `TensorIndex`, `ExternalTensorMeta`, `OnnxExternalIndex`, `ParsedLora`, `PatchResult` |
+| `src/portraits/sd/OnnxParser.cpp` | `parseTensorIndex()`, `parseExternalIndex()` — protobuf wire-format parser |
+| `src/portraits/sd/OnnxIndex.cpp` | `buildSuffixIndex()`, `buildExternalSuffixIndex()` — O(1) suffix lookup tables |
 | `src/portraits/sd/LoraParser.cpp` | `parseLoraLayers()` — kohya key grouping into `LoraLayer` triplets |
 | `src/portraits/sd/LoraMath.cpp` | `computeLoraDelta()` — matmul + scale in fp32 |
-| `src/portraits/sd/OnnxPatcher.cpp` | `applyLoraToBytes()` — copy + patch loop |
-| `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchLoraKey()` — suffix-index lookup with ambiguity detection |
+| `src/portraits/sd/OnnxPatcher.cpp` | `applyLoraToBytes()` — legacy inline-buffer patch loop (kept for reference) |
+| `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchLoraKey()`, `matchExternalLoraKey()` — suffix-index lookup with ambiguity detection |
+| `src/portraits/sd/SdLoraApply.hpp/.cpp` | `buildLoraOverrides()` — reads base weights from `.onnx.data`, applies deltas, builds `Ort::Value` overrides |
 | `src/portraits/sd/SdUtils.hpp` | Inline helpers: `fmtMs`, `toFp16`, `randNormal`, `latentToImage` |
 | `src/portraits/ClipTokenizer.cpp/.hpp` | BPE tokenizer (no Python dependency) |
 | `src/portraits/PromptBuilder.hpp` | Weighted A1111-style prompt builder |
@@ -243,36 +245,38 @@ Scanning and click handling are in `ImageGeneratorController::update()` / `handl
 
 ### Architecture
 
-LoRA is applied at model load time by patching the ONNX binary in memory before creating the ORT session. No LoRA-specific code runs at inference time.
+LoRA is applied at model load time using ORT-native external data loading and `AddExternalInitializers`. No LoRA-specific code runs at inference time. No ONNX binary reconstruction is performed at runtime.
 
 ```
 SdPipeline.cpp  runPipeline()
-  → ModelManager::get()           — looks up ModelCacheKey in unordered_map; calls loadModels() on miss
+  → ModelManager::get()              — looks up ModelCacheKey in unordered_map; calls loadModels() on miss
 
-SdLoader.cpp  loadModels() → ModelInstance / makePatchedBytes()
-  → cachedReadFileBytes()         — returns shared_ptr<const bytes>; reads disk only on first call
-  → parseTensorIndex()            — build name→{offset, length, shape, dtype} index  [OnnxParser.cpp]
-  → buildSuffixIndex()            — build suffix→TensorIndex* hash map (O(1) lookup)  [OnnxIndex.cpp]
-  → applyLoraToBytes()            — copies buffer, patches the copy, returns PatchResult  [OnnxPatcher.cpp]
-       → parseLoraLayers()        — group safetensors keys into (down, up, alpha) triplets  [LoraParser.cpp]
-       → matchLoraKey()           — O(1) suffix-index lookup  [SdLoraMatch.cpp]
-       → computeLoraDelta()       — matmul + scale in fp32  [LoraMath.cpp]
-  → Ort::Session(*patchedBytes)   — create session from patched copy
+SdLoader.cpp  loadModels() → ModelInstance / makeLoraSession()
+  → cachedExternalIndex()            — parse .onnx once; cache {normName → offset/length/shape/dtype}
+       → parseExternalIndex()        — protobuf scan for field-14 EXTERNAL tensors  [OnnxParser.cpp]
+  → buildExternalSuffixIndex()       — O(1) suffix lookup over the external index  [OnnxIndex.cpp]
+  → buildLoraOverrides()             — read .onnx.data + apply delta + build Ort::Value overrides  [SdLoraApply.cpp]
+       → parseLoraLayers()           — group safetensors keys into (down, up, alpha) triplets  [LoraParser.cpp]
+       → matchExternalLoraKey()      — O(1) suffix-index lookup  [SdLoraMatch.cpp]
+       → computeLoraDelta()          — matmul + scale in fp32  [LoraMath.cpp]
+  → SessionOptions::Clone()          — clone EP opts so AddExternalInitializers doesn't pollute shared state
+  → cloned.AddExternalInitializers() — inject patched tensors; ORT loads the rest from .onnx.data
+  → Ort::Session(env, path, cloned)  — session created from .onnx path; .onnx.data resolved natively
 ```
 
 Key files:
-- `sd/SdOnnxPatcher.hpp` — shared types: `TensorIndex`, `OnnxSuffixIndex`, `ParsedLora`/`LoraLayer`, `PatchResult`
-- `sd/OnnxParser.cpp` — `parseTensorIndex` (protobuf wire-format parsing + field diagnostics)
-- `sd/OnnxIndex.cpp` — `buildSuffixIndex`
+- `sd/SdOnnxPatcher.hpp` — shared types: `ExternalTensorMeta`, `OnnxExternalIndex`, `OnnxExternalSuffixIndex`, `TensorIndex`, `ParsedLora`/`LoraLayer`, `PatchResult`
+- `sd/OnnxParser.cpp` — `parseExternalIndex` (field-14/EXTERNAL scan), `parseTensorIndex` (inline-buffer scan, kept for reference)
+- `sd/OnnxIndex.cpp` — `buildExternalSuffixIndex`, `buildSuffixIndex`
 - `sd/LoraParser.cpp` — `parseLoraLayers` (kohya prefix stripping + triplet grouping)
 - `sd/LoraMath.cpp` — `computeLoraDelta` (fp32 matmul)
-- `sd/OnnxPatcher.cpp` — `applyLoraToBytes` (copy + patch loop)
-- `sd/SdLoraMatch.hpp/.cpp` — `matchLoraKey` with soft + hard ambiguity logging; optional `SD_LORA_MATCH_DEBUG` flag
+- `sd/SdLoraMatch.hpp/.cpp` — `matchExternalLoraKey`, `matchLoraKey`; optional `SD_LORA_MATCH_DEBUG` flag
+- `sd/SdLoraApply.hpp/.cpp` — `buildLoraOverrides`: reads base weights from `.onnx.data`, applies LoRA deltas in fp32, converts back to model dtype, returns `LoraOverrides` with backing buffers + `Ort::Value` views
 - `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
-- `sd/SdLoader.cpp` `makePatchedBytes()` lambda — orchestrates cache→parse→patch→session
+- `sd/SdLoader.cpp` `makeLoraSession()` lambda — orchestrates index→match→override→session
 - `sd/ModelManager.hpp/.cpp` — `unordered_map<ModelCacheKey, ModelInstance>` session cache
 
-### Model and byte caching
+### Model and session caching
 
 **Session cache (`ModelManager`)** — `SdPipeline.cpp` holds a `static ModelManager`. On each `runPipeline()` call, `ModelManager::get(cfg, modelDir, loras)` looks up a `ModelCacheKey` in an `unordered_map<ModelCacheKey, ModelInstance>`. On hit the stored `ModelInstance` is reused; on miss `loadModels()` is called, a new `ModelInstance` is emplaced, and the result is returned. Multiple distinct configurations can coexist in the cache simultaneously.
 
@@ -283,11 +287,11 @@ Key files:
 
 `ModelCacheKeyHash` feeds a single canonical string buffer (`modelDir\0type\0path\0scale\0...`) into **XXH64** (`libxxhash`). This avoids depending on the quality of `std::hash<std::string>` which varies across stdlibs.
 
-**Byte cache (`SdLoader.cpp`)** — `s_modelBytesCache` maps file path → `shared_ptr<const vector<uint8_t>>`. On the first LoRA run for a given model file, bytes are read from disk and stored. Every subsequent run copies from the cache (no disk I/O). The no-LoRA path is unaffected — it loads sessions directly from the file path, letting ORT memory-map the file.
+**External-index cache (`SdLoader.cpp`)** — `s_extIndexCache` maps `.onnx` file path → `OnnxExternalIndex`. The first LoRA load for a given model file parses the protobuf binary once to build the metadata map (name, dtype, shape, offset, length for each external tensor). Every subsequent LoRA run (same model, different LoRA or scale) reuses the cached index — only the base-weight reads from `.onnx.data` and delta computation happen again.
 
-`loadModels()` returns a `ModelInstance`. For the LoRA path, `ModelInstance.baseBytes` and `ModelInstance.patchedBytes` hold shared ownership of the UNet byte buffers — `baseBytes` from the byte cache (unpatched), `patchedBytes` after all LoRA adapters have been applied.
+No-LoRA path: sessions are created directly from the `.onnx` file path; ORT memory-maps the file and resolves `.onnx.data` natively. No bytes are buffered in the process.
 
-Memory during a LoRA run: cached base bytes (persistent) + patched copy (alive during session creation, then freed) + live session. Peak ≈ 2× model size.
+LoRA path memory: external index (small, persistent) + per-tensor base weight reads during override construction (freed after session creation) + live session. Peak ≈ 1× model size + LoRA delta tensors (typically small).
 
 ### LoRA key format (Kohya)
 
@@ -302,11 +306,11 @@ Each layer needs a down, up, and optionally alpha tensor. `parseLoraLayers()` gr
 
 The matching pipeline has three stages:
 
-**1. Parse** — `parseTensorIndex` normalises all `.` and `/` in ONNX initializer names to `_` and builds `OnnxTensorIndex` (a `std::map<string, TensorIndex>`).
+**1. Parse** — `parseExternalIndex` scans the `.onnx` binary for TensorProto entries where `data_location == EXTERNAL` (field 14, value 1). It normalises all `.` and `/` in initializer names to `_` and records each tensor's `onnxName`, `shape`, `dtype`, `dataOffset`, and `dataLength` (from the `external_data` key-value pairs at field 13). Returns `OnnxExternalIndex` (a `std::map<normName, ExternalTensorMeta>`).
 
-**2. Index** — `buildSuffixIndex` walks every normalised ONNX name and inserts it under every `_`-boundary suffix into an `OnnxSuffixIndex` (`unordered_map<string, vector<SuffixEntry>>`). Both steps run once per model file at load time.
+**2. Index** — `buildExternalSuffixIndex` walks every normalised name and inserts it under every `_`-boundary suffix into an `OnnxExternalSuffixIndex`. Runs once per model file at load time; cached in `s_extIndexCache`.
 
-**3. Match** — `matchLoraKey` (`SdLoraMatch.cpp`) strips the kohya prefix (`lora_te_`, `lora_unet_`, `lora_te2_`), appends `_weight` (then `_bias` on miss), and does a direct O(1) hash map lookup. When multiple candidates exist, the longest suffix match wins. True ties (same suffix length) are logged as warnings.
+**3. Match** — `matchExternalLoraKey` (`SdLoraMatch.cpp`) strips the kohya prefix (`lora_te_`, `lora_unet_`, `lora_te2_`), appends `_weight` (then `_bias` on miss), and does a direct O(1) hash map lookup. When multiple candidates exist, the longest suffix match wins. True ties (same suffix length) are logged as warnings.
 
 ```
 LoRA base:  text_model_encoder_layers_0_self_attn_q_proj
@@ -320,7 +324,14 @@ The model-level prefix (`text_encoder_`) is absorbed by the suffix index — no 
 
 ### ONNX protobuf field numbers
 
-PyTorch `torch.onnx.export` places named initializers at **GraphProto field 5** (not field 6 as some tools use). The parser accepts both. The diagnostic log line `ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...` confirms this — `f5x180` = 180 named initializers. If you see `f5x0 f6x0` on a newly exported model, the model was exported without `keep_initializers_as_inputs=True` and all weights are anonymous Constant nodes — re-export with the project's scripts.
+Relevant TensorProto fields used by `parseExternalIndex`:
+- **field 1** — `dims` (repeated varint)
+- **field 2** — `data_type` (1 = float32, 10 = float16)
+- **field 8** — `name` (string)
+- **field 13** — `external_data` (repeated StringStringEntryProto: `location`, `offset`, `length`)
+- **field 14** — `data_location` (varint: DEFAULT=0, **EXTERNAL=1**)
+
+PyTorch `torch.onnx.export` places named initializers at **GraphProto field 5** (not field 6 as some tools use). `parseTensorIndex` (the legacy inline scanner) accepts both. The diagnostic log line `ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...` confirms this — `f5x180` = 180 named initializers. If you see `f5x0 f6x0`, the model was exported without `keep_initializers_as_inputs=True` — re-export with the project's scripts.
 
 ### Export requirements for LoRA to work
 
@@ -351,50 +362,41 @@ The original subnormal path used `shift = 1 + (-14 - exp32)` which was 12 too sm
 
 The log tells you everything. Check in this order:
 
-**1. Are initializers found at all?**
+**1. Are external initializers detected?**
 ```
-ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...
-ONNX patcher: indexed 397 initialisers.
+parseExternalIndex: text_encoder.onnx — 180 external initializer(s)
 ```
-`f5x0 f6x0` = no named weights. The model needs re-export.
+If you see `0 external initializer(s)`, either the model has inline weights (unsupported by this path — re-export with the project scripts) or the `.onnx` file uses a different field for `data_location` than expected (should be field 14, value 1).
 
 **2. Are weight names matching?**
 ```
+buildLoraOverrides: text_encoder.onnx — 132 patch(es), 132 miss(es)
+```
+High miss count means the ONNX weight names don't align with the LoRA key suffixes. Look for the normalised name samples in the log to compare:
+```
 ONNX weight sample: text_encoder_text_model_encoder_layers_0_mlp_fc1_weight
-LoRA patched: text_model_encoder_layers_0_mlp_fc1 [3072x768]
 ```
-If you see `LoRA no match: ...` for most layers, the ONNX weight prefix or normalisation doesn't align with the LoRA key suffix.
 
-**3. Is patching introducing NaN?**
+**3. Are tensor overrides correctly built?**
 ```
-LoRA WARNING: text_model_encoder_layers_0_mlp_fc1 has 212 NaN/Inf AFTER patching
+buildLoraOverrides: 132 tensor override(s) prepared
 ```
-This indicates a bug in the fp16 write-back path. Check `floatToFp16` in `SdSafetensors.hpp`.
+This confirms `Ort::Value`s were created for all matched tensors. A lower count than expected patches means some tensors failed shape validation or had unsupported dtypes.
 
-**4. Are base weights already corrupt?**
-```
-LoRA WARNING: base text_model_encoder_layers_0_mlp_fc1 has N NaN/Inf BEFORE patching
-```
-The ONNX file itself is corrupted or the dtype detection is wrong.
+**4. Does AddExternalInitializers succeed?**
+If ORT throws during session creation with a name or shape mismatch error, the `onnxName` stored in `ExternalTensorMeta` does not match what ORT expects. The name comes directly from TensorProto field 8 in the `.onnx` binary — verify with a hex dump or `onnx_check.py`.
 
-**5. Are delta values sane?**
-```
-[diag] first patch dtype=10  offset=80961930  pre[0..3]: 0.04 0.005 ...  delta[0..3]: 0.00002 ...
-[diag] post-patch[0..3]: 0.040192 ...
-```
-dtype should be 10 (fp16) or 1 (fp32). pre/post values should change by the delta. Huge delta values (`LoRA large delta: ... peak=15`) indicate scale or alpha issue.
-
-**6. Does the text encoder output have NaN?**
+**5. Does the text encoder output have NaN?**
 ```
 embedding stats: min=1000000000.000000  max=-1000000000.000000  mean=nan
 ```
-The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons return false). NaN propagates: text encoder → UNet cross-attention → NaN eps → black image.
+The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons return false). Check `floatToFp16` in `SdSafetensors.hpp` if the LoRA delta is being applied to fp16 weights. NaN propagates: text encoder → UNet cross-attention → NaN eps → black image.
 
-**7. Is the session cache stale?**
+**6. Is the session cache stale?**
 ```
 ModelManager: cache hit — reusing loaded sessions.
 ```
-If you changed LoRA selection but this appears, check that `loraScales[i]` was updated after editing the scale input field. The cache key rounds scales to 0.001 precision (`lround(s * 1000)`), so changes smaller than 0.0005 are intentionally treated as the same key. Also verify paths are the same after `weakly_canonical` normalisation — a leading `./` difference used to cause a spurious miss before the fix.
+If you changed LoRA selection but this appears, check that `loraScales[i]` was updated after editing the scale input field. The cache key rounds scales to 0.001 precision (`lround(s * 1000)`), so changes smaller than 0.0005 are intentionally treated as the same key. Also verify paths are the same after `weakly_canonical` normalisation.
 
 ### Optional match-level debug logging
 
@@ -404,7 +406,7 @@ If you changed LoRA selection but this appears, check that `loraScales[i]` was u
 #define SD_LORA_MATCH_DEBUG 1   // add to compile flags: -DSD_LORA_MATCH_DEBUG=1
 ```
 
-When enabled, every `matchLoraKey()` call logs the lookup key, all candidates with their suffix lengths, and the chosen winner. Off by default — produces one log line per layer (180+ lines for a full model).
+When enabled, every `matchExternalLoraKey()` (and `matchLoraKey()`) call logs the lookup key, all candidates with their suffix lengths, and the chosen winner. Off by default — produces one log line per layer (180+ lines for a full model).
 
 ## What NOT to do
 
@@ -413,5 +415,6 @@ When enabled, every `matchLoraKey()` call logs the lookup key, all candidates wi
 - Do not call `cpu_unet` with `ctx.session_opts` — it must always use `ctx.cpu_session_opts` (no GPU EP).
 - Do not hard-code fp16 for VAE input — use `ctx.vaeExpectsFp32` to select the right type.
 - Do not reset `ctx.run_opts` manually in `runPipeline()` — `ModelManager::get()` already does this on every call before returning the context reference.
-- Do not mutate the `shared_ptr<const vector<uint8_t>>` returned by `cachedReadFileBytes()` — it is shared across runs and stored in `ModelInstance.baseBytes`. `applyLoraToBytes` takes a const shared_ptr and always copies before patching.
+- Do not call `SessionOptions::AddExternalInitializers` on the shared `unetOpts`/`auxOpts` references — always `Clone()` first. Mutating a shared `SessionOptions` would affect every subsequent session created with it.
+- Do not destroy a `LoraOverrides` before the `Ort::Session` constructor returns — the `Ort::Value` objects hold non-owning views into `LoraOverrides::fp16Bufs`/`fp32Bufs`.
 - Do not use `operator[]` to insert into `ModelManager`'s internal cache — `GenerationContext` contains non-copyable ORT sessions. Always use `emplace` with `std::move`.

@@ -189,7 +189,6 @@ class ExportComponentSpec:
     fix_attention_sqrt_cast: bool = False
     fix_resize_fp16: bool = False
     simplify: bool = False
-    force_external_data: bool = False
     release_after: tuple[Any, ...] = ()
 
 
@@ -231,9 +230,6 @@ class ExportPolicy:
 
     def should_simplify_vae(self, requested: bool) -> bool:
         return requested
-
-    def should_force_external_data(self, component_name: str) -> bool:
-        return False
 
 
 class SD15ExportPolicy(ExportPolicy):
@@ -284,14 +280,6 @@ class SDXLExportPolicy(ExportPolicy):
 
     def should_simplify_vae(self, requested: bool) -> bool:
         return requested
-
-    def should_force_external_data(self, component_name: str) -> bool:
-        return component_name in {
-            "text_encoder",
-            "text_encoder_2",
-            "unet",
-            "vae_decoder",
-        }
 
 
 def _normalize_dummy_inputs(dummy_inputs: Any) -> tuple[Any, ...]:
@@ -669,65 +657,6 @@ def fix_resize_fp16_input(path: str) -> None:
     print(f"  Wrapped {len(to_patch)} Resize node(s) with Cast(fp16↔fp32) pairs")
 
 
-def ensure_external_data(path: str) -> None:
-    """Rewrite a model into <name>.onnx + <name>.onnx.data layout.
-
-    Also deletes any old per-tensor sidecar files that the model previously
-    referenced, so the output directory is left with exactly two files:
-    <name>.onnx and <name>.onnx.data.
-    """
-    import onnx
-    from onnx import external_data_helper
-
-    # Use absolute path so relative tensor file references resolve correctly
-    # regardless of the working directory the script was launched from.
-    abs_path = os.path.abspath(path)
-    base_dir = os.path.dirname(abs_path)
-    data_location = os.path.basename(abs_path) + ".data"
-
-    # First pass: record which files the model currently references so we can
-    # delete them precisely after consolidation (no prefix heuristics needed).
-    model = onnx.load_model(abs_path, load_external_data=False)
-    old_ext_files: set[str] = set()
-    for init in model.graph.initializer:
-        if init.data_location == 1:  # TensorProto.EXTERNAL
-            for kv in init.external_data:
-                if kv.key == "location":
-                    old_ext_files.add(kv.value)
-
-    # Second pass: load all tensor data into memory, inline it, then
-    # re-externalize everything into a single consolidated file.
-    external_data_helper.load_external_data_for_model(model, base_dir)
-    external_data_helper.convert_model_from_external_data(model)
-
-    data_path = os.path.join(base_dir, data_location)
-    if os.path.exists(data_path):
-        os.remove(data_path)
-
-    external_data_helper.convert_model_to_external_data(
-        model,
-        all_tensors_to_one_file=True,
-        location=data_location,
-        size_threshold=0,
-        convert_attribute=False,
-    )
-    onnx.save(model, abs_path)
-
-    # Delete the old external files (individual per-tensor sidecars or a
-    # previous .data file with a different name) that are no longer referenced.
-    removed = 0
-    for fname in old_ext_files:
-        if fname == data_location:
-            continue  # new consolidated file — keep it
-        fpath = os.path.join(base_dir, fname)
-        if os.path.isfile(fpath):
-            os.remove(fpath)
-            removed += 1
-    if removed:
-        print(f"  Removed {removed} old external tensor file(s)")
-    print(f"  Enforced external data layout: {os.path.basename(abs_path)} + {data_location}")
-
-
 def cleanup_stale_component_files(path: str) -> None:
     """Remove legacy per-tensor sidecars left by previous exports for one component."""
     directory = os.path.dirname(path)
@@ -753,15 +682,31 @@ def cleanup_stale_component_files(path: str) -> None:
 
 
 def simplify_with_onnxsim(path: str) -> None:
-    """Run onnxsim to fold remaining dynamic shape ops."""
+    """Run onnxsim to fold remaining dynamic shape ops.
+
+    Preserves the .onnx.data layout if the model was already consolidated.
+    """
     try:
         import onnx
         import onnxsim
 
-        model = onnx.load(path)
+        model = onnx.load(path)  # loads all data so onnxsim can run inference
         model_sim, ok = onnxsim.simplify(model)
         if ok:
-            onnx.save(model_sim, path)
+            data_path = path + ".data"
+            if os.path.exists(data_path):
+                # Re-save with external data so we don't produce an inline-only
+                # file that may exceed the protobuf 2 GB limit.
+                onnx.save_model(
+                    model_sim,
+                    path,
+                    save_as_external_data=True,
+                    all_tensors_to_one_file=True,
+                    location=os.path.basename(data_path),
+                    size_threshold=0,
+                )
+            else:
+                onnx.save(model_sim, path)
             print(f"  Simplified {os.path.basename(path)} with onnxsim")
         else:
             print("  Warning: onnxsim check failed; keeping original")
@@ -779,10 +724,188 @@ def write_model_json(output_dir: str, model_type: str) -> None:
     print(f"  Saved model.json  (type={model_type})")
 
 
+def consolidate_external_data(path: str) -> None:
+    """Consolidate per-tensor sidecar files into a single <name>.onnx.data file.
+
+    The legacy torch.onnx.export tracer writes one sidecar file per tensor when
+    the model exceeds the protobuf 2 GB limit.  This function merges them all
+    into a single .onnx.data file by copying raw bytes — no tensor
+    deserialisation, no numpy — so it runs in seconds rather than minutes.
+
+    Idempotent: if the model is already in <name>.onnx + <name>.onnx.data
+    layout, or has no external data at all, this is a no-op.
+    """
+    import onnx
+    from onnx import TensorProto
+
+    abs_path = os.path.abspath(path)
+    base_dir = os.path.dirname(abs_path)
+    data_location = os.path.basename(abs_path) + ".data"
+    data_full_path = os.path.join(base_dir, data_location)
+
+    model = onnx.load_model(abs_path, load_external_data=False)
+
+    # Collect all external initializers and their current file locations
+    external: list[tuple] = []
+    for init in model.graph.initializer:
+        if init.data_location == TensorProto.EXTERNAL:
+            info = {kv.key: kv.value for kv in init.external_data}
+            if "location" in info:
+                external.append((init, info))
+
+    if not external:
+        # Model is fully inline — no external data at all.  Force it into the
+        # <name>.onnx + <name>.onnx.data layout for consistency.  Models that
+        # fit inline are small (< 2 GB protobuf limit), so the full load+resave
+        # here is fast (a few seconds) compared with the large-model path above.
+        model_full = onnx.load(abs_path)  # loads tensor data for inline model
+        onnx.save_model(
+            model_full,
+            abs_path,
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location=data_location,
+            size_threshold=0,
+        )
+        print(f"  Forced external layout: {os.path.basename(abs_path)} + {data_location}")
+        return
+
+    locations = {info["location"] for _, info in external}
+    if locations == {data_location}:
+        return  # already in the target single-file layout
+
+    print(f"  Consolidating {len(locations)} external file(s) -> {data_location} ...")
+
+    # Write the consolidated .data file and update tensor references in-place.
+    # Use a temp file so a crash mid-write doesn't leave a half-written .data.
+    tmp = data_full_path + ".tmp"
+    try:
+        with open(tmp, "wb") as out_f:
+            for init, info in external:
+                src_path = os.path.join(base_dir, info["location"])
+                offset = int(info.get("offset", 0))
+                length_str = info.get("length")
+                length = int(length_str) if length_str is not None else -1
+
+                with open(src_path, "rb") as src_f:
+                    if offset:
+                        src_f.seek(offset)
+                    data = src_f.read(length if length >= 0 else None)
+
+                # Align to 8 bytes (onnx convention)
+                cur = out_f.tell()
+                rem = cur % 8
+                if rem:
+                    out_f.write(b"\x00" * (8 - rem))
+
+                new_offset = out_f.tell()
+                out_f.write(data)
+
+                # Update the tensor proto's external_data references
+                del init.external_data[:]
+                for k, v in [
+                    ("location", data_location),
+                    ("offset", str(new_offset)),
+                    ("length", str(len(data))),
+                ]:
+                    kv = init.external_data.add()
+                    kv.key = k
+                    kv.value = v
+
+        if os.path.exists(data_full_path):
+            os.remove(data_full_path)
+        os.rename(tmp, data_full_path)
+
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+    # Serialize the updated graph structure (no tensor bytes — those stay in
+    # the .data file we just wrote).
+    with open(abs_path, "wb") as f:
+        f.write(model.SerializeToString())
+
+    # Remove old per-tensor sidecar files
+    removed = 0
+    for loc in locations:
+        if loc == data_location:
+            continue
+        fpath = os.path.join(base_dir, loc)
+        if os.path.isfile(fpath):
+            os.remove(fpath)
+            removed += 1
+    if removed:
+        print(f"  Removed {removed} old sidecar file(s)")
+
+
+def verify_export(
+    path: str,
+    *,
+    expected_inputs: list[str],
+    expected_outputs: list[str],
+) -> None:
+    """Verify a completed export is usable by the C++ ORT pipeline.
+
+    Checks (without loading tensor data):
+    - <name>.onnx exists
+    - <name>.onnx.data exists (guaranteed by consolidate_external_data)
+    - Named initializers are present (required for LoRA patching)
+    - Expected input and output names are all present in the graph
+
+    Raises RuntimeError on any failure so the export aborts early rather than
+    producing a silently broken model that only crashes in C++.
+    """
+    import onnx
+
+    data_path = path + ".data"
+    name = os.path.basename(path)
+
+    if not os.path.exists(path):
+        raise RuntimeError(f"verify: {name} was not created")
+    if not os.path.exists(data_path):
+        raise RuntimeError(
+            f"verify: {name}.data was not created — external data consolidation failed"
+        )
+
+    # Load graph structure only (no tensor bytes) for all remaining checks
+    model = onnx.load_model(path, load_external_data=False)
+
+    n_init = len(model.graph.initializer)
+    if n_init == 0:
+        raise RuntimeError(
+            f"verify: {name} has 0 named initializers.\n"
+            f"The model was likely exported without keep_initializers_as_inputs=True "
+            f"or with do_constant_folding=True, which collapses weights into anonymous "
+            f"Constant nodes.  LoRA patching will not work.  Re-export with the project "
+            f"scripts."
+        )
+
+    graph_inputs  = {i.name for i in model.graph.input}
+    graph_outputs = {o.name for o in model.graph.output}
+
+    missing_in  = [n for n in expected_inputs  if n not in graph_inputs]
+    missing_out = [n for n in expected_outputs if n not in graph_outputs]
+    if missing_in or missing_out:
+        raise RuntimeError(
+            f"verify: {name} has unexpected graph interface.\n"
+            + (f"  Missing inputs:  {missing_in}\n"  if missing_in  else "")
+            + (f"  Missing outputs: {missing_out}\n" if missing_out else "")
+            + f"  Actual inputs:   {sorted(graph_inputs)}\n"
+            + f"  Actual outputs:  {sorted(graph_outputs)}"
+        )
+
+    print(f"  Verified {name}: {n_init} initializers, "
+          f"inputs={sorted(graph_inputs)}, outputs={sorted(graph_outputs)}")
+
+
 def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
     with export_step(spec.step_name):
         path = os.path.join(output_dir, spec.filename)
+
         cleanup_stale_component_files(path)
+
+        # 1. Export
         onnx_export(
             spec.model,
             spec.dummy_inputs,
@@ -793,17 +916,38 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
             do_constant_folding=spec.do_constant_folding,
             exporter=spec.exporter,
         )
+
+        # 2. Consolidate per-tensor sidecar files into a single .onnx.data file.
+        #    Raw byte copy — no tensor deserialisation.  No-op for dynamo-exported
+        #    models and for models small enough to have no external data.
+        consolidate_external_data(path)
+
+        # 3. Optional graph fixes (ONLY if explicitly enabled).
+        #    Each pass loads with load_external_data=False and saves only the
+        #    graph structure, leaving the .onnx.data file untouched.
         if spec.fix_fp32_constants:
             fix_fp32_constants(path)
+
         if spec.fix_attention_sqrt_cast:
             fix_attention_sqrt_cast_fp32(path)
+
         if spec.fix_resize_fp16:
             fix_resize_fp16_input(path)
-        if spec.simplify:
-            simplify_with_onnxsim(path)
-        if spec.force_external_data:
-            ensure_external_data(path)
-            cleanup_stale_component_files(path)
+
+        # 4. Optional simplify (LAST)
+        # if spec.simplify:
+        #     simplify_with_onnxsim(path)
+
+        cleanup_stale_component_files(path)
+
+        # 5. Verify: file layout, named initializers, and graph interface.
+        #    Fails loudly here rather than silently in the C++ ORT session.
+        verify_export(
+            path,
+            expected_inputs=spec.input_names,
+            expected_outputs=spec.output_names,
+        )
+
         if spec.release_after:
             free(*spec.release_after)
 

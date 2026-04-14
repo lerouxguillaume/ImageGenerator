@@ -39,9 +39,10 @@ struct GenerationContext {
     Ort::MemoryInfo       memory_info;
     Ort::AllocatorWithDefaultOptions allocator;
 
-    bool dmlFailed       = false;
-    bool unetExpectsFp32 = false;  // queried at load time
-    bool vaeExpectsFp32  = false;  // queried at load time
+    bool dmlFailed            = false;
+    bool cpuFallbackAvailable = false;  // true only if cpu_unet was loaded successfully
+    bool unetExpectsFp32      = false;  // queried at load time
+    bool vaeExpectsFp32       = false;  // queried at load time
 
     ModelType model_type = ModelType::SD15;
 
@@ -85,22 +86,15 @@ struct GenerationContext {
 
 // ── Loaded model instance ─────────────────────────────────────────────────────
 // Bundles everything produced by one loadModels() call: the live ORT sessions
-// (via ctx), the model schema that drove the load, and optional references to
-// the byte buffers that were used to create patched sessions under LoRA.
+// (via ctx) and the model schema that drove the load.
 //
 // Immutable after creation: sessions are not hot-swappable.
-// baseBytes / patchedBytes are null when sessions were loaded directly from
-// disk (no-LoRA path) and non-null when a patched in-memory buffer was used.
+// Both the no-LoRA and LoRA paths load sessions from the .onnx file path;
+// ORT resolves .onnx.data natively.  No byte buffers are held here.
 
 struct ModelInstance {
     GenerationContext ctx;
-
-    // Shared ownership of the raw ONNX bytes that backed the primary (UNet) session.
-    // Null for the no-LoRA path (ORT memory-maps the file directly).
-    std::shared_ptr<const std::vector<uint8_t>> baseBytes;
-    std::shared_ptr<const std::vector<uint8_t>> patchedBytes;
-
-    ModelConfig config;
+    ModelConfig       config;
 };
 
 } // namespace sd

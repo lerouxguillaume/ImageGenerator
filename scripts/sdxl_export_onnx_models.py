@@ -131,7 +131,6 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             input_names=["input_ids"],
             output_names=["hidden_states"],
             dynamic_axes=policy.text_encoder_dynamic_axes("input_ids", ["hidden_states"]),
-            force_external_data=policy.should_force_external_data("text_encoder"),
             release_after=(clip_l, pipe.text_encoder, pipe.tokenizer),
         ),
     )
@@ -154,7 +153,6 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 "input_ids",
                 ["hidden_states", "text_embeds"],
             ),
-            force_external_data=policy.should_force_external_data("text_encoder_2"),
             release_after=(clip_g, pipe.text_encoder_2, pipe.tokenizer_2),
         ),
     )
@@ -184,7 +182,6 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             fix_fp32_constants=policy.should_fix_fp32_constants("unet"),
             fix_attention_sqrt_cast=policy.should_fix_attention_sqrt_cast("unet"),
             fix_resize_fp16=policy.should_fix_resize_fp16("unet"),
-            force_external_data=policy.should_force_external_data("unet"),
             release_after=(unet, pipe.unet),
         ),
     )
@@ -208,7 +205,6 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             exporter=policy.vae_exporter(),
             fix_fp32_constants=policy.should_fix_fp32_constants("vae_decoder"),
             simplify=policy.should_simplify_vae(simplify_vae),
-            force_external_data=policy.should_force_external_data("vae_decoder"),
             release_after=(vae, pipe.vae, pipe),
         ),
     )

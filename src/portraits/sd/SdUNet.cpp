@@ -107,8 +107,11 @@ std::vector<float> runUNetSingle(const std::vector<float>& x_t,
         return decodeOutput(output);
     };
 
-    if (ctx.dmlFailed)
+    if (ctx.dmlFailed) {
+        if (!ctx.cpuFallbackAvailable)
+            throw std::runtime_error("GPU UNet failed and no CPU fallback session is loaded");
         return runOnCpu();
+    }
 
     std::vector<Ort::Value> gpu_inputs;
     pushMain(gpu_inputs, latent_fp32, latent_fp16, latent_shape);
@@ -122,6 +125,10 @@ std::vector<float> runUNetSingle(const std::vector<float>& x_t,
         return decodeOutput(output);
     } catch (const Ort::Exception& e) {
         ctx.dmlFailed = true;
+        if (!ctx.cpuFallbackAvailable) {
+            Logger::info(std::string("GPU unet failed (no CPU fallback): ") + e.what());
+            throw;
+        }
         Logger::info(std::string("GPU unet failed, switching to CPU for remaining steps: ") + e.what());
         return runOnCpu();
     }
