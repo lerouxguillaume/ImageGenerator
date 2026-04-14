@@ -32,7 +32,6 @@ SD pipeline (src/portraits/):
   sd/LoraMath.cpp           — computeLoraDelta (matmul + scale in fp32)
   sd/SdLoraMatch.hpp/.cpp   — matchExternalLoraKey (suffix-index lookup + ambiguity detection)
   sd/LoraInjector.hpp/.cpp  — LoraInjector: loads companion _weights.safetensors, applies deltas, caches merged tensors
-  sd/SdLoraApply.hpp/.cpp   — DEPRECATED (LegacyLoraOverrides / buildLoraOverrides); kept for reference only
   sd/SdSafetensors.hpp      — safetensors loader + fp16/bf16 conversion helpers
   Pipeline: CLIP tokenize → text encode → DPM++ 2M Karras loop → VAE decode → cv::imwrite
 ```
@@ -71,7 +70,6 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/portraits/sd/LoraMath.cpp` | `computeLoraDelta()` — matmul + scale in fp32 |
 | `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchExternalLoraKey()` — suffix-index lookup with ambiguity detection |
 | `src/portraits/sd/LoraInjector.hpp/.cpp` | `LoraInjector` — loads `_weights.safetensors`, applies deltas, caches merged tensors, injects via `AddExternalInitializers` |
-| `src/portraits/sd/SdLoraApply.hpp/.cpp` | DEPRECATED (`LegacyLoraOverrides` / `buildLoraOverrides`) — kept for reference, not called |
 | `src/portraits/sd/SdUtils.hpp` | Inline helpers: `fmtMs`, `toFp16`, `randNormal`, `latentToImage` |
 | `src/portraits/ClipTokenizer.cpp/.hpp` | BPE tokenizer (no Python dependency) |
 | `src/portraits/PromptBuilder.hpp` | Weighted A1111-style prompt builder |
@@ -317,7 +315,6 @@ Key files:
 - `sd/LoraMath.cpp` — `computeLoraDelta` (fp32 matmul)
 - `sd/SdLoraMatch.hpp/.cpp` — `matchExternalLoraKey`, `matchLoraKey`; optional `SD_LORA_MATCH_DEBUG` flag
 - `sd/LoraInjector.hpp/.cpp` — `LoraInjector`: metadata loading, base weight caching, delta computation, merged-tensor cache (FNV-1a keyed), NaN/Inf guard, `LoraOverrides` output
-- `sd/SdLoraApply.hpp/.cpp` — DEPRECATED: `LegacyLoraOverrides` / `buildLoraOverrides`; no longer called
 - `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
 - `sd/SdLoader.cpp` `makeLoraSession()` lambda — orchestrates injector→clone→session
 - `sd/ModelManager.hpp/.cpp` — `unordered_map<ModelCacheKey, ModelInstance>` session cache
@@ -379,7 +376,7 @@ Relevant TensorProto fields used by `parseExternalIndex`:
 - **field 13** — `external_data` (repeated StringStringEntryProto: `location`, `offset`, `length`)
 - **field 14** — `data_location` (varint: DEFAULT=0, **EXTERNAL=1**)
 
-PyTorch `torch.onnx.export` places named initializers at **GraphProto field 5** (not field 6 as some tools use). `parseTensorIndex` (the legacy inline scanner) accepts both. The diagnostic log line `ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...` confirms this — `f5x180` = 180 named initializers. If you see `f5x0 f6x0`, the model was exported without `keep_initializers_as_inputs=True` — re-export with the project's scripts.
+PyTorch `torch.onnx.export` places named initializers at **GraphProto field 5** (not field 6 as some tools use). The diagnostic log line `ONNX graph fields (ALL): f1x969 f2x1 f5x180 ...` confirms this — `f5x180` = 180 named initializers. If you see `f5x0 f6x0`, the model was exported without `keep_initializers_as_inputs=True` — re-export with the project's scripts.
 
 ### Export requirements for LoRA to work
 
