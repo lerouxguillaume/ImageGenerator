@@ -10,8 +10,8 @@
 
 namespace sd {
 
-const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
-                                const std::string&     loraBase) {
+const ExternalTensorMeta* matchExternalLoraKey(const OnnxExternalSuffixIndex& suffixIndex,
+                                               const std::string&             loraBase) {
     // Try weight first (most common), then bias as fallback.
     const std::string weightKey = loraBase + "_weight";
     auto it = suffixIndex.find(weightKey);
@@ -28,8 +28,7 @@ const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
         Logger::info("[LoraMatch] fallback lookup: '" + biasKey + "'  found=" + (it != suffixIndex.end() ? "yes" : "no"));
 #endif
 
-        if (it == suffixIndex.end())
-            return nullptr;
+        if (it == suffixIndex.end()) return nullptr;
     }
 
     const auto& candidates = it->second;
@@ -43,7 +42,7 @@ const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
     }
 
     // Resolve ambiguity: pick the candidate with the longest suffix match.
-    const SuffixEntry* best = nullptr;
+    const ExternalSuffixEntry* best = nullptr;
     for (const auto& entry : candidates) {
         if (!best || entry.suffixLen > best->suffixLen)
             best = &entry;
@@ -73,43 +72,6 @@ const TensorIndex* matchLoraKey(const OnnxSuffixIndex& suffixIndex,
                          + "  suffixLen=" + std::to_string(e.suffixLen));
     }
 #endif
-
-    return best ? &best->it->second : nullptr;
-}
-
-const ExternalTensorMeta* matchExternalLoraKey(const OnnxExternalSuffixIndex& suffixIndex,
-                                               const std::string&             loraBase) {
-    const std::string weightKey = loraBase + "_weight";
-    auto it = suffixIndex.find(weightKey);
-
-#if SD_LORA_MATCH_DEBUG
-    Logger::info("[LoraMatch] ext lookup: '" + weightKey + "'  found=" + (it != suffixIndex.end() ? "yes" : "no"));
-#endif
-
-    if (it == suffixIndex.end()) {
-        const std::string biasKey = loraBase + "_bias";
-        it = suffixIndex.find(biasKey);
-        if (it == suffixIndex.end()) return nullptr;
-    }
-
-    const auto& candidates = it->second;
-    if (candidates.size() == 1) return &candidates[0].it->second;
-
-    const ExternalSuffixEntry* best = nullptr;
-    for (const auto& entry : candidates) {
-        if (!best || entry.suffixLen > best->suffixLen)
-            best = &entry;
-    }
-
-    int tieCount = 0;
-    for (const auto& entry : candidates)
-        if (entry.suffixLen == best->suffixLen) ++tieCount;
-
-    if (tieCount > 1) {
-        Logger::info("LoRA truly ambiguous (tie at suffix length "
-                     + std::to_string(best->suffixLen) + "): " + loraBase
-                     + " (" + std::to_string(tieCount) + " tied candidates)");
-    }
 
     return best ? &best->it->second : nullptr;
 }

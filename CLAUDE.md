@@ -25,13 +25,12 @@ SD pipeline (src/portraits/):
   sd/SdScheduler.cpp        — DPM++ 2M Karras sigma schedule
   sd/SdTypes.hpp            — ModelConfig + GenerationContext + ModelInstance structs
   sd/SdUtils.hpp            — inline helpers (timing, fp16, RNG, image conversion)
-  sd/SdOnnxPatcher.hpp      — shared types: TensorIndex, ExternalTensorMeta, ParsedLora, PatchResult…
-  sd/OnnxParser.cpp         — parseTensorIndex + parseExternalIndex (protobuf wire-format parsing)
-  sd/OnnxIndex.cpp          — buildSuffixIndex + buildExternalSuffixIndex (O(1) suffix lookup)
+  sd/SdOnnxPatcher.hpp      — shared types: OnnxModelBundle, ExternalTensorMeta, OnnxExternalIndex, ParsedLora…
+  sd/OnnxParser.cpp         — resolveBundle + parseExternalIndex (protobuf wire-format parsing)
+  sd/OnnxIndex.cpp          — buildExternalSuffixIndex (O(1) suffix lookup table)
   sd/LoraParser.cpp         — parseLoraLayers (kohya key → LoraLayer grouping)
   sd/LoraMath.cpp           — computeLoraDelta (matmul + scale in fp32)
-  sd/OnnxPatcher.cpp        — applyLoraToBytes (legacy inline-buffer patch loop; kept for reference)
-  sd/SdLoraMatch.hpp/.cpp   — matchLoraKey + matchExternalLoraKey (suffix-index lookup + ambiguity detection)
+  sd/SdLoraMatch.hpp/.cpp   — matchExternalLoraKey (suffix-index lookup + ambiguity detection)
   sd/SdLoraApply.hpp/.cpp   — buildLoraOverrides (reads .onnx.data + applies delta + builds Ort::Value overrides)
   sd/SdSafetensors.hpp      — safetensors loader + fp16/bf16 conversion helpers
   Pipeline: CLIP tokenize → text encode → DPM++ 2M Karras loop → VAE decode → cv::imwrite
@@ -64,13 +63,12 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/portraits/sd/SdVae.cpp` | `decodeLatent()` |
 | `src/portraits/sd/SdScheduler.cpp` | `buildAlphasCumprod()`, `buildKarrasSchedule()`, `sigmaToTimestep()` |
 | `src/portraits/sd/SdPipeline.cpp` | `denoiseSingleLatent()`, `runPipeline()` |
-| `src/portraits/sd/SdOnnxPatcher.hpp` | Shared types: `TensorIndex`, `ExternalTensorMeta`, `OnnxExternalIndex`, `ParsedLora`, `PatchResult` |
-| `src/portraits/sd/OnnxParser.cpp` | `parseTensorIndex()`, `parseExternalIndex()` — protobuf wire-format parser |
-| `src/portraits/sd/OnnxIndex.cpp` | `buildSuffixIndex()`, `buildExternalSuffixIndex()` — O(1) suffix lookup tables |
+| `src/portraits/sd/SdOnnxPatcher.hpp` | Shared types: `OnnxModelBundle`, `ExternalTensorMeta`, `OnnxExternalIndex`, `ParsedLora` |
+| `src/portraits/sd/OnnxParser.cpp` | `resolveBundle()`, `parseExternalIndex()` — filesystem probe + protobuf wire-format parser |
+| `src/portraits/sd/OnnxIndex.cpp` | `buildExternalSuffixIndex()` — O(1) suffix lookup table |
 | `src/portraits/sd/LoraParser.cpp` | `parseLoraLayers()` — kohya key grouping into `LoraLayer` triplets |
 | `src/portraits/sd/LoraMath.cpp` | `computeLoraDelta()` — matmul + scale in fp32 |
-| `src/portraits/sd/OnnxPatcher.cpp` | `applyLoraToBytes()` — legacy inline-buffer patch loop (kept for reference) |
-| `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchLoraKey()`, `matchExternalLoraKey()` — suffix-index lookup with ambiguity detection |
+| `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchExternalLoraKey()` — suffix-index lookup with ambiguity detection |
 | `src/portraits/sd/SdLoraApply.hpp/.cpp` | `buildLoraOverrides()` — reads base weights from `.onnx.data`, applies deltas, builds `Ort::Value` overrides |
 | `src/portraits/sd/SdUtils.hpp` | Inline helpers: `fmtMs`, `toFp16`, `randNormal`, `latentToImage` |
 | `src/portraits/ClipTokenizer.cpp/.hpp` | BPE tokenizer (no Python dependency) |

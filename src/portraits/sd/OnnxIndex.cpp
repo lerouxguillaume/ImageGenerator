@@ -1,44 +1,11 @@
-// buildSuffixIndex: secondary O(1) lookup table over an OnnxTensorIndex.
+// buildExternalSuffixIndex: O(1) suffix lookup table over an OnnxExternalIndex.
 #include "SdOnnxPatcher.hpp"
 
 namespace sd {
 
-OnnxSuffixIndex buildSuffixIndex(const OnnxTensorIndex& index) {
-    OnnxSuffixIndex result;
-    result.reserve(index.size() * 6); // realistic average
-
-    for (auto it = index.cbegin(); it != index.cend(); ++it) {
-        const std::string& name = it->first;
-
-        size_t pos = 0;
-        while (pos < name.size()) {
-            std::string suffix = name.substr(pos);
-
-            // Count segments (avoid useless suffixes like "weight")
-            int underscoreCount = 0;
-            for (char c : suffix) if (c == '_') ++underscoreCount;
-
-            if (underscoreCount >= 1) { // keep only meaningful suffixes
-                result[suffix].push_back({
-                    it,
-                    suffix.size()
-                });
-            }
-
-            const size_t next = name.find('_', pos);
-            if (next == std::string::npos)
-                break;
-
-            pos = next + 1;
-        }
-    }
-
-    return result;
-}
-
 OnnxExternalSuffixIndex buildExternalSuffixIndex(const OnnxExternalIndex& index) {
     OnnxExternalSuffixIndex result;
-    result.reserve(index.size() * 6);
+    result.reserve(index.size() * 6); // realistic average suffixes per name
 
     for (auto it = index.cbegin(); it != index.cend(); ++it) {
         const std::string& name = it->first;
@@ -47,6 +14,8 @@ OnnxExternalSuffixIndex buildExternalSuffixIndex(const OnnxExternalIndex& index)
         while (pos < name.size()) {
             std::string suffix = name.substr(pos);
 
+            // Only index suffixes that contain at least one '_' — single-segment
+            // tokens like "weight" or "bias" produce too many false matches.
             int underscoreCount = 0;
             for (char c : suffix) if (c == '_') ++underscoreCount;
 
