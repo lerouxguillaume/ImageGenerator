@@ -31,7 +31,8 @@ SD pipeline (src/portraits/):
   sd/LoraParser.cpp         — parseLoraLayers (kohya key → LoraLayer grouping)
   sd/LoraMath.cpp           — computeLoraDelta (matmul + scale in fp32)
   sd/SdLoraMatch.hpp/.cpp   — matchExternalLoraKey (suffix-index lookup + ambiguity detection)
-  sd/SdLoraApply.hpp/.cpp   — buildLoraOverrides (reads .onnx.data + applies delta + builds Ort::Value overrides)
+  sd/LoraInjector.hpp/.cpp  — LoraInjector: loads companion _weights.safetensors, applies deltas, caches merged tensors
+  sd/SdLoraApply.hpp/.cpp   — DEPRECATED (LegacyLoraOverrides / buildLoraOverrides); kept for reference only
   sd/SdSafetensors.hpp      — safetensors loader + fp16/bf16 conversion helpers
   Pipeline: CLIP tokenize → text encode → DPM++ 2M Karras loop → VAE decode → cv::imwrite
 ```
@@ -69,7 +70,8 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/portraits/sd/LoraParser.cpp` | `parseLoraLayers()` — kohya key grouping into `LoraLayer` triplets |
 | `src/portraits/sd/LoraMath.cpp` | `computeLoraDelta()` — matmul + scale in fp32 |
 | `src/portraits/sd/SdLoraMatch.hpp/.cpp` | `matchExternalLoraKey()` — suffix-index lookup with ambiguity detection |
-| `src/portraits/sd/SdLoraApply.hpp/.cpp` | `buildLoraOverrides()` — reads base weights from `.onnx.data`, applies deltas, builds `Ort::Value` overrides |
+| `src/portraits/sd/LoraInjector.hpp/.cpp` | `LoraInjector` — loads `_weights.safetensors`, applies deltas, caches merged tensors, injects via `AddExternalInitializers` |
+| `src/portraits/sd/SdLoraApply.hpp/.cpp` | DEPRECATED (`LegacyLoraOverrides` / `buildLoraOverrides`) — kept for reference, not called |
 | `src/portraits/sd/SdUtils.hpp` | Inline helpers: `fmtMs`, `toFp16`, `randNormal`, `latentToImage` |
 | `src/portraits/ClipTokenizer.cpp/.hpp` | BPE tokenizer (no Python dependency) |
 | `src/portraits/PromptBuilder.hpp` | Weighted A1111-style prompt builder |
@@ -77,8 +79,10 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/enum/enums.hpp` | All enums (`ModelType`, `Race`, `Gender`, …) |
 | `src/enum/constants.hpp` | Colour palette (`Col::`) and layout constants |
 | `src/views/ImageGeneratorView.hpp` | All generation state including atomics |
-| `scripts/export_onnx_models.py` | SD 1.5 → ONNX export |
-| `scripts/sdxl_export_onnx_models.py` | SDXL → ONNX export |
+| `scripts/export_onnx_models.py` | SD 1.5 → ONNX export (`--resume`, `--validate`) |
+| `scripts/sdxl_export_onnx_models.py` | SDXL → ONNX export (`--resume`, `--validate`) |
+| `scripts/export_common.py` | Shared export utilities: `ExportComponentSpec`, policies, graph fixes, ORT validation |
+| `scripts/check_lora_compat.py` | LoRA ↔ ONNX compatibility checker (no inference required) |
 
 ## Model detection
 
@@ -152,12 +156,50 @@ If a new `"Type parameter (T) bound to different types"` or `"Type … is invali
 5. For a Cast node: check its parent op — add a targeted rewrite function following the pattern of `fix_attention_sqrt_cast_fp32`
 6. For a diffusers upcast flag: add a pre-export monkey-patch following the pattern of `patch_fp32_upcasts_for_tracing` or `disable_attention_upcasting`
 
+## Export script features
+
+### Resume (`--resume`)
+
+Both export scripts accept `--resume`. If all output files for a component already exist (`<name>.onnx`, `<name>.onnx.data`, and `<name>_weights.safetensors` when applicable), that component is skipped. Use this to continue an interrupted export without re-running already-completed components.
+
+```bash
+python scripts/export_onnx_models.py model.safetensors --resume
+```
+
+### ORT validation (`--validate`)
+
+After exporting each component, loads the ONNX file in ORT on CPU and runs a forward pass with the same dummy inputs used for export. Catches dtype mismatches, missing external data, and output shape errors before they surface in the C++ pipeline. Slow for large models (SDXL UNet loads all weights and may take several minutes).
+
+```bash
+python scripts/sdxl_export_onnx_models.py model.safetensors --validate
+```
+
+### LoRA companion weights
+
+`ExportComponentSpec(export_lora_weights=True)` saves `<name>_weights.safetensors` alongside the ONNX file. Contains all 2-D (linear) parameters from `model.named_parameters()`, which match ONNX initializer names exactly when exported with `keep_initializers_as_inputs=True`. Required for `LoraInjector` to function.
+
+### LoRA compatibility checker
+
+```bash
+python scripts/check_lora_compat.py <lora.safetensors> <model_dir> [--verbose]
+```
+
+Runs the same suffix-matching logic as the C++ `LoraInjector` and reports how many layer triplets would be applied per component. Each LoRA key is counted once globally — matched if any component claims it, missed if none do. Use `--verbose` to see unmatched keys grouped by Kohya prefix.
+
+```
+  text_encoder.onnx  :  66 matched  (180 initializers)
+  unet.onnx          : 192 matched  (686 initializers)
+  vae_decoder.onnx   :   0 matched  (expected — VAE has no LoRA targets)
+
+✅  258/264 unique layers matched (97%)
+```
+
 ## SDXL export: external data layout
 
-The legacy ONNX tracer writes each large tensor as a separate sidecar file (e.g. `text_encoder.text_model.encoder.layers.0.self_attn.q_proj.weight`). `export_component_to_dir` calls `ensure_external_data` after export, which:
-1. Reads the per-tensor files into memory via `load_external_data_for_model`
+The legacy ONNX tracer writes each large tensor as a separate sidecar file (e.g. `text_encoder.text_model.encoder.layers.0.self_attn.q_proj.weight`). `export_component_to_dir` calls `consolidate_external_data` after export, which:
+1. Reads the per-tensor sidecar files and copies raw bytes (no tensor deserialisation)
 2. Consolidates them into a single `<component>.onnx.data` file
-3. Deletes the individual sidecar files (identified from the model's external-data references, not by prefix heuristics)
+3. Deletes the individual sidecar files
 
 The output directory should contain exactly `<component>.onnx` + `<component>.onnx.data` after a successful export. If stale sidecar files remain, they are orphaned and safe to delete manually.
 
@@ -247,31 +289,37 @@ LoRA is applied at model load time using ORT-native external data loading and `A
 
 ```
 SdPipeline.cpp  runPipeline()
-  → ModelManager::get()              — looks up ModelCacheKey in unordered_map; calls loadModels() on miss
+  → ModelManager::get()                — looks up ModelCacheKey in unordered_map; calls loadModels() on miss
 
 SdLoader.cpp  loadModels() → ModelInstance / makeLoraSession()
-  → cachedExternalIndex()            — parse .onnx once; cache {normName → offset/length/shape/dtype}
-       → parseExternalIndex()        — protobuf scan for field-14 EXTERNAL tensors  [OnnxParser.cpp]
-  → buildExternalSuffixIndex()       — O(1) suffix lookup over the external index  [OnnxIndex.cpp]
-  → buildLoraOverrides()             — read .onnx.data + apply delta + build Ort::Value overrides  [SdLoraApply.cpp]
-       → parseLoraLayers()           — group safetensors keys into (down, up, alpha) triplets  [LoraParser.cpp]
-       → matchExternalLoraKey()      — O(1) suffix-index lookup  [SdLoraMatch.cpp]
-       → computeLoraDelta()          — matmul + scale in fp32  [LoraMath.cpp]
-  → SessionOptions::Clone()          — clone EP opts so AddExternalInitializers doesn't pollute shared state
-  → cloned.AddExternalInitializers() — inject patched tensors; ORT loads the rest from .onnx.data
-  → Ort::Session(env, path, cloned)  — session created from .onnx path; .onnx.data resolved natively
+  → LoraInjector::loadModelMetadata()  — parse .onnx once; cache external-tensor index  [LoraInjector.cpp]
+       → parseExternalIndex()          — protobuf scan for field-14 EXTERNAL tensors  [OnnxParser.cpp]
+       → buildExternalSuffixIndex()    — O(1) suffix lookup over the external index  [OnnxIndex.cpp]
+  → LoraInjector::applyLoras()         — load _weights.safetensors + compute merged tensors (cached)
+       → ensureBaseWeights()           — load <name>_weights.safetensors once per model file
+       → computeMerge()                — for each LoRA: parseLoraLayers → matchExternalLoraKey → computeLoraDelta
+            → parseLoraLayers()        — group safetensors keys into (down, up, alpha) triplets  [LoraParser.cpp]
+            → matchExternalLoraKey()   — O(1) suffix-index lookup  [SdLoraMatch.cpp]
+            → computeLoraDelta()       — matmul + scale in fp32  [LoraMath.cpp]
+       → buildOverrides()              — copy CachedTensors → LoraOverrides backing buffers + Ort::Value views
+  → SessionOptions::Clone()            — clone EP opts so AddExternalInitializers doesn't pollute shared state
+  → cloned.AddExternalInitializers()   — inject patched tensors; ORT loads the rest from .onnx.data natively
+  → Ort::Session(env, path, cloned)    — session created from .onnx path
 ```
 
+Base weights come from `<name>_weights.safetensors` written by the export scripts.  The C++ code never reads `.onnx.data` directly — ORT remains the sole component responsible for loading external tensor data.
+
 Key files:
-- `sd/SdOnnxPatcher.hpp` — shared types: `ExternalTensorMeta`, `OnnxExternalIndex`, `OnnxExternalSuffixIndex`, `TensorIndex`, `ParsedLora`/`LoraLayer`, `PatchResult`
-- `sd/OnnxParser.cpp` — `parseExternalIndex` (field-14/EXTERNAL scan), `parseTensorIndex` (inline-buffer scan, kept for reference)
+- `sd/SdOnnxPatcher.hpp` — shared types: `ExternalTensorMeta`, `OnnxExternalIndex`, `OnnxExternalSuffixIndex`, `ParsedLora`/`LoraLayer`
+- `sd/OnnxParser.cpp` — `parseExternalIndex` (field-14/EXTERNAL scan)
 - `sd/OnnxIndex.cpp` — `buildExternalSuffixIndex`, `buildSuffixIndex`
 - `sd/LoraParser.cpp` — `parseLoraLayers` (kohya prefix stripping + triplet grouping)
 - `sd/LoraMath.cpp` — `computeLoraDelta` (fp32 matmul)
 - `sd/SdLoraMatch.hpp/.cpp` — `matchExternalLoraKey`, `matchLoraKey`; optional `SD_LORA_MATCH_DEBUG` flag
-- `sd/SdLoraApply.hpp/.cpp` — `buildLoraOverrides`: reads base weights from `.onnx.data`, applies LoRA deltas in fp32, converts back to model dtype, returns `LoraOverrides` with backing buffers + `Ort::Value` views
+- `sd/LoraInjector.hpp/.cpp` — `LoraInjector`: metadata loading, base weight caching, delta computation, merged-tensor cache (FNV-1a keyed), NaN/Inf guard, `LoraOverrides` output
+- `sd/SdLoraApply.hpp/.cpp` — DEPRECATED: `LegacyLoraOverrides` / `buildLoraOverrides`; no longer called
 - `sd/SdSafetensors.hpp` — safetensors loader + fp16/bf16 conversion helpers
-- `sd/SdLoader.cpp` `makeLoraSession()` lambda — orchestrates index→match→override→session
+- `sd/SdLoader.cpp` `makeLoraSession()` lambda — orchestrates injector→clone→session
 - `sd/ModelManager.hpp/.cpp` — `unordered_map<ModelCacheKey, ModelInstance>` session cache
 
 ### Model and session caching
@@ -285,11 +333,13 @@ Key files:
 
 `ModelCacheKeyHash` feeds a single canonical string buffer (`modelDir\0type\0path\0scale\0...`) into **XXH64** (`libxxhash`). This avoids depending on the quality of `std::hash<std::string>` which varies across stdlibs.
 
-**External-index cache (`SdLoader.cpp`)** — `s_extIndexCache` maps `.onnx` file path → `OnnxExternalIndex`. The first LoRA load for a given model file parses the protobuf binary once to build the metadata map (name, dtype, shape, offset, length for each external tensor). Every subsequent LoRA run (same model, different LoRA or scale) reuses the cached index — only the base-weight reads from `.onnx.data` and delta computation happen again.
+**`LoraInjector` internal caches** — each `LoraInjector` instance (one per component: text encoder, UNet) holds two caches:
+- `extIndex_` / `extSuffixIndex_` — populated once by `loadModelMetadata()` when the `.onnx` path is first seen; reused for every subsequent LoRA apply call on the same component.
+- `mergeCache_` — maps a FNV-1a hash of `(onnxPath, weightsPath, loras)` → `vector<CachedTensor>`. On cache miss: `ensureBaseWeights()` loads `_weights.safetensors` once, then `computeMerge()` runs the matmuls. On cache hit: `buildOverrides()` copies the pre-computed tensors into a new `LoraOverrides` (cheap memcpy).  The cache is guarded by `cacheMutex_`.
 
 No-LoRA path: sessions are created directly from the `.onnx` file path; ORT memory-maps the file and resolves `.onnx.data` natively. No bytes are buffered in the process.
 
-LoRA path memory: external index (small, persistent) + per-tensor base weight reads during override construction (freed after session creation) + live session. Peak ≈ 1× model size + LoRA delta tensors (typically small).
+LoRA path memory: external index (small, persistent) + base weights in `baseWeights_` (persistent, ~model-size) + `mergeCache_` entry (persistent, ~patched-tensor-count × tensor-size). Peak during first run ≈ 2× model size (base weights + merge accumulator); subsequent runs reuse the cache and skip the accumulator.
 
 ### LoRA key format (Kohya)
 
@@ -306,7 +356,7 @@ The matching pipeline has three stages:
 
 **1. Parse** — `parseExternalIndex` scans the `.onnx` binary for TensorProto entries where `data_location == EXTERNAL` (field 14, value 1). It normalises all `.` and `/` in initializer names to `_` and records each tensor's `onnxName`, `shape`, `dtype`, `dataOffset`, and `dataLength` (from the `external_data` key-value pairs at field 13). Returns `OnnxExternalIndex` (a `std::map<normName, ExternalTensorMeta>`).
 
-**2. Index** — `buildExternalSuffixIndex` walks every normalised name and inserts it under every `_`-boundary suffix into an `OnnxExternalSuffixIndex`. Runs once per model file at load time; cached in `s_extIndexCache`.
+**2. Index** — `buildExternalSuffixIndex` walks every normalised name and inserts it under every `_`-boundary suffix into an `OnnxExternalSuffixIndex`. Runs once per model file at load time; cached inside `LoraInjector` (keyed by `.onnx` path).
 
 **3. Match** — `matchExternalLoraKey` (`SdLoraMatch.cpp`) strips the kohya prefix (`lora_te_`, `lora_unet_`, `lora_te2_`), appends `_weight` (then `_bias` on miss), and does a direct O(1) hash map lookup. When multiple candidates exist, the longest suffix match wins. True ties (same suffix length) are logged as warnings.
 
@@ -366,31 +416,36 @@ parseExternalIndex: text_encoder.onnx — 180 external initializer(s)
 ```
 If you see `0 external initializer(s)`, either the model has inline weights (unsupported by this path — re-export with the project scripts) or the `.onnx` file uses a different field for `data_location` than expected (should be field 14, value 1).
 
-**2. Are weight names matching?**
+**2. Is the companion weights file present?**
 ```
-buildLoraOverrides: text_encoder.onnx — 132 patch(es), 132 miss(es)
+LoraInjector: loading base weights from text_encoder_weights.safetensors
+LoraInjector: loaded 132 base weight tensor(s)
 ```
-High miss count means the ONNX weight names don't align with the LoRA key suffixes. Look for the normalised name samples in the log to compare:
-```
-ONNX weight sample: text_encoder_text_model_encoder_layers_0_mlp_fc1_weight
-```
+If you see `companion weights file not found`, the model was exported without `export_lora_weights=True`. Re-export with the project scripts.  LoRA injection is silently disabled for that component.
 
-**3. Are tensor overrides correctly built?**
+**3. Are weight names matching?**
 ```
-buildLoraOverrides: 132 tensor override(s) prepared
+LoraInjector: total 132 patch(es), 0 miss(es)
 ```
-This confirms `Ort::Value`s were created for all matched tensors. A lower count than expected patches means some tensors failed shape validation or had unsupported dtypes.
+High miss count means the LoRA key suffixes don't align with the ONNX initializer names.  Use `scripts/check_lora_compat.py --verbose` to diagnose without running inference.
 
-**4. Does AddExternalInitializers succeed?**
+**4. Are tensor overrides correctly built?**
+```
+LoraInjector: 132 tensor override(s) ready
+LoraInjector: injected 132 override(s) into session options
+```
+This confirms `Ort::Value`s were created and registered. A lower count than expected patches means some tensors failed shape validation, had unsupported dtypes, or triggered the NaN/Inf guard.
+
+**5. Does AddExternalInitializers succeed?**
 If ORT throws during session creation with a name or shape mismatch error, the `onnxName` stored in `ExternalTensorMeta` does not match what ORT expects. The name comes directly from TensorProto field 8 in the `.onnx` binary — verify with a hex dump or `onnx_check.py`.
 
-**5. Does the text encoder output have NaN?**
+**6. Does the text encoder output have NaN?**
 ```
 embedding stats: min=1000000000.000000  max=-1000000000.000000  mean=nan
 ```
 The sentinel values `min=1e9, max=-1e9` mean ALL values are NaN (NaN comparisons return false). Check `floatToFp16` in `SdSafetensors.hpp` if the LoRA delta is being applied to fp16 weights. NaN propagates: text encoder → UNet cross-attention → NaN eps → black image.
 
-**6. Is the session cache stale?**
+**7. Is the session cache stale?**
 ```
 ModelManager: cache hit — reusing loaded sessions.
 ```
