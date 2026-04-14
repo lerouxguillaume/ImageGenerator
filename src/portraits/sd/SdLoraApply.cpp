@@ -17,15 +17,15 @@
 
 namespace sd {
 
-LoraOverrides::LoraOverrides()
+LegacyLoraOverrides::LegacyLoraOverrides()
     : memInfo(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
 {}
 
-LoraOverrides buildLoraOverrides(const OnnxModelBundle&          bundle,
+LegacyLoraOverrides buildLoraOverrides(const OnnxModelBundle&          bundle,
                                  const OnnxExternalIndex&        extIndex,
                                  const OnnxExternalSuffixIndex&  extSuffixIndex,
                                  const std::vector<LoraEntry>&   loras) {
-    LoraOverrides result;
+    LegacyLoraOverrides result;
 
     if (extIndex.empty()) {
         Logger::info("  buildLoraOverrides: no external tensors in "

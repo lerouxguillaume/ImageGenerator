@@ -10,6 +10,7 @@
 /scripts/*/*
 /models/*/*.onnx
 /models/*/*.data
+/models/*/*.safetensors
 /image-generation-windows.zip
 /image-generation-windows-cuda.zip
 /image-generation-windows-cuda-genai.zip

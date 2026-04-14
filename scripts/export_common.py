@@ -189,6 +189,9 @@ class ExportComponentSpec:
     fix_attention_sqrt_cast: bool = False
     fix_resize_fp16: bool = False
     simplify: bool = False
+    export_lora_weights: bool = False  # if True, saves <stem>_weights.safetensors
+    skip_if_complete: bool = False     # skip export if all output files already exist
+    validate: bool = False             # run ORT forward pass after export to catch runtime errors
     release_after: tuple[Any, ...] = ()
 
 
@@ -243,11 +246,17 @@ class SD15ExportPolicy(ExportPolicy):
             "latent_out": {0: "batch", 2: "height", 3: "width"},
         }
 
-    def vae_dynamic_axes(self) -> dict[str, dict[int, str]]:
-        return {
-            "latent": {0: "batch", 2: "height", 3: "width"},
-            "image": {0: "batch", 2: "height", 3: "width"},
-        }
+    def vae_dynamic_axes(self) -> None:
+        # Static shape (1, 4, 64, 64) → (1, 3, 512, 512).
+        # Dynamic H/W caused torch.onnx.export to hang for 1+ hour due to the
+        # shape-propagation overhead of the many upsampling ops in the legacy
+        # tracer.  SD 1.5 is fixed at 512×512 in the C++ config anyway.
+        return None
+
+    def vae_exporter(self) -> str:
+        # Dynamo writes external_data=True during export, bypassing the slow
+        # inline-protobuf consolidation round-trip that legacy requires.
+        return "dynamo"
 
 
 class SDXLExportPolicy(ExportPolicy):
@@ -899,9 +908,119 @@ def verify_export(
           f"inputs={sorted(graph_inputs)}, outputs={sorted(graph_outputs)}")
 
 
+def _export_lora_weights(model: torch.nn.Module, output_path: str) -> None:
+    """Save 2-D (linear-layer) parameters as safetensors for use as LoRA base weights.
+
+    Keys are the PyTorch parameter paths (e.g. ``unet.down_blocks.0...weight``),
+    which match the ONNX initializer names produced by the legacy tracer when
+    ``keep_initializers_as_inputs=True``.  The C++ ``LoraInjector`` uses an exact
+    lookup by ONNX name to retrieve these weights at inference time.
+
+    Only rank-2 tensors are saved: LoRA adapters target linear-projection and
+    MLP weights, all of which are 2-D.  Embedding tables (also 2-D) are included
+    so that exotic LoRAs that target them still work.
+
+    Tensors are written in their current dtype (fp16 for UNet/VAE, fp32 for text
+    encoders), keeping the file as compact as possible.
+    """
+    try:
+        from safetensors.torch import save_file
+    except ImportError:
+        print("  Warning: safetensors not installed — skipping LoRA base-weight export")
+        return
+
+    weights = {
+        name: param.data.contiguous().cpu()
+        for name, param in model.named_parameters()
+        if param.ndim == 2
+    }
+
+    if not weights:
+        print("  Warning: no 2-D parameters found — skipping LoRA base-weight export")
+        return
+
+    save_file(weights, output_path)
+    size_mb = sum(t.nbytes for t in weights.values()) / 1e6
+    print(f"  Saved {len(weights)} LoRA base weights ({size_mb:.0f} MB)"
+          f" → {os.path.basename(output_path)}")
+
+
+def _is_component_complete(path: str, spec: ExportComponentSpec) -> bool:
+    """Return True if all output files for a component already exist on disk."""
+    if not os.path.exists(path):
+        return False
+    if not os.path.exists(path + ".data"):
+        return False
+    if spec.export_lora_weights:
+        weights = os.path.splitext(path)[0] + "_weights.safetensors"
+        if not os.path.exists(weights):
+            return False
+    return True
+
+
+def validate_with_ort(
+    path: str,
+    dummy_inputs: Any,
+    input_names: list[str],
+) -> None:
+    """Run a forward pass through the exported model using ORT on CPU.
+
+    Loads the session, feeds the same dummy inputs used for export, and
+    checks that the model runs without errors.  Catches dtype mismatches,
+    missing external data, and shape errors before the C++ pipeline does.
+
+    Warning: for large models (SDXL UNet) this loads all weights into RAM
+    and can take several minutes on first run.
+    """
+    try:
+        import numpy as np
+        import onnxruntime as ort
+    except ImportError:
+        print("  Warning: onnxruntime Python package not installed — skipping ORT validation")
+        return
+
+    print("  ORT validation: creating session ...")
+    t0 = time.time()
+    try:
+        sess_opts = ort.SessionOptions()
+        sess_opts.log_severity_level = 3  # suppress INFO/WARNING spam
+        sess = ort.InferenceSession(
+            path,
+            sess_options=sess_opts,
+            providers=["CPUExecutionProvider"],
+        )
+    except Exception as e:
+        raise RuntimeError(f"ORT validation: session creation failed — {e}") from e
+
+    inputs = _normalize_dummy_inputs(dummy_inputs)
+    feed: dict[str, Any] = {}
+    for name, tensor in zip(input_names, inputs):
+        if isinstance(tensor, torch.Tensor):
+            feed[name] = tensor.detach().cpu().numpy()
+        else:
+            import numpy as np
+            feed[name] = np.array(tensor)
+
+    print("  ORT validation: running forward pass ...")
+    try:
+        outputs = sess.run(None, feed)
+    except Exception as e:
+        raise RuntimeError(f"ORT validation: forward pass failed — {e}") from e
+
+    print(f"  ORT validation passed in {time.time() - t0:.1f}s  "
+          f"({len(outputs)} output(s))")
+
+
 def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
     with export_step(spec.step_name):
         path = os.path.join(output_dir, spec.filename)
+
+        # Resume: skip re-exporting components that are already complete on disk.
+        if spec.skip_if_complete and _is_component_complete(path, spec):
+            print(f"  Already complete — skipping")
+            if spec.release_after:
+                free(*spec.release_after)
+            return
 
         cleanup_stale_component_files(path)
 
@@ -947,6 +1066,16 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
             expected_inputs=spec.input_names,
             expected_outputs=spec.output_names,
         )
+
+        # 6. Optional ORT validation: full session load + forward pass on CPU.
+        #    Catches dtype errors, EP-specific issues, and output shape regressions.
+        #    Slow for large models — enable with --validate.
+        if spec.validate:
+            validate_with_ort(path, spec.dummy_inputs, spec.input_names)
+
+        if spec.export_lora_weights:
+            weights_path = os.path.splitext(path)[0] + "_weights.safetensors"
+            _export_lora_weights(spec.model, weights_path)
 
         if spec.release_after:
             free(*spec.release_after)

@@ -2,7 +2,7 @@
 #include "SdUtils.hpp"
 #include "SdSafetensors.hpp"
 #include "SdOnnxPatcher.hpp"
-#include "SdLoraApply.hpp"
+#include "LoraInjector.hpp"
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -72,28 +72,6 @@ namespace sd {
             Logger::info(std::string("model.json parse error, defaulting to SD 1.5: ") + e.what());
         }
         return cfg;
-    }
-
-    // ── External index cache ──────────────────────────────────────────────────────
-    // Maps absolute .onnx path → parsed external-data index.
-    // Used exclusively by the LoRA path (no-LoRA path loads sessions from the
-    // file path directly; ORT resolves .onnx.data natively).
-
-    static std::unordered_map<std::string, OnnxExternalIndex> s_extIndexCache;
-
-    static const OnnxExternalIndex&
-    cachedExternalIndex(const OnnxModelBundle& bundle) {
-        const std::string key = bundle.onnxPath.string();
-        auto it = s_extIndexCache.find(key);
-        if (it != s_extIndexCache.end()) {
-            Logger::info("  Ext-index cache hit: " + bundle.onnxPath.filename().string());
-            return it->second;
-        }
-        Logger::info("  Ext-index cache miss — parsing: "
-                     + bundle.onnxPath.filename().string());
-        auto [ins, ok] = s_extIndexCache.emplace(key, parseExternalIndex(bundle));
-        (void)ok;
-        return ins->second;
     }
 
     // ── Session loading ───────────────────────────────────────────────────────────
@@ -217,51 +195,64 @@ namespace sd {
             // ── LoRA path ─────────────────────────────────────────────────────────
             // Uses ORT-native external data loading + AddExternalInitializers.
             //
-            // For each model component:
-            //   1. parseExternalIndex(): parse .onnx to get {normName → offset/length} map
-            //   2. buildExternalSuffixIndex(): build O(1) suffix lookup
-            //   3. buildLoraOverrides(): read matched base weights from .onnx.data,
-            //      apply LoRA deltas in fp32, convert back to model dtype
-            //   4. SessionOptions::AddExternalInitializers(): inject patched tensors
-            //   5. Ort::Session(env, path, opts): ORT loads non-patched weights natively
+            // For each LoRA-capable component:
+            //   1. LoraInjector::loadModelMetadata() — parse .onnx for initializer metadata
+            //   2. LoraInjector::applyLoras()        — load base weights from companion
+            //        <stem>_weights.safetensors, compute W_merged = W_base + Σ deltas,
+            //        validate, inject via AddExternalInitializers, return backing store
+            //   3. Ort::Session(env, path, cloned)   — ORT loads non-patched weights natively
+            //   4. backing store (LoraOverrides) destroyed after session is constructed
             Logger::info("LoRA mode: " + std::to_string(loras.size()) + " adapter(s)");
 
-            auto makeLoraSession = [&](const char* label,
+            // Helper: companion weights file path for a given .onnx bundle.
+            auto weightsPath = [](const OnnxModelBundle& b) -> std::string {
+                return (b.onnxPath.parent_path()
+                        / (b.onnxPath.stem().string() + "_weights.safetensors"))
+                       .string();
+            };
+
+            // Helper: apply LoRA injection and create session.
+            // If no overrides matched (missing companion file, no LoRA keys for this
+            // component, etc.) falls back to plain loadSession — same result, no injection.
+            auto makeLoraSession = [&](const char*            label,
                                        const OnnxModelBundle& bundle,
-                                       Ort::SessionOptions& baseOpts) -> Ort::Session {
+                                       LoraInjector&          injector,
+                                       Ort::SessionOptions&   baseOpts) -> Ort::Session {
                 Logger::info("  Preparing " + std::string(label) + " with LoRA...");
-                const OnnxExternalIndex&  extIdx    = cachedExternalIndex(bundle);
-                const OnnxExternalSuffixIndex extSufIdx = buildExternalSuffixIndex(extIdx);
-                LoraOverrides overrides = buildLoraOverrides(bundle, extIdx, extSufIdx, loras);
+
+                Ort::SessionOptions cloned   = baseOpts.Clone();
+                LoraOverrides       overrides =
+                    injector.applyLoras(cloned, weightsPath(bundle), loras);
 
                 if (overrides.empty()) {
-                    // No LoRA layers matched this model component — load natively.
                     Logger::info("  No LoRA matches for " + std::string(label)
                                  + " — loading from path");
                     return loadSession(label, bundle.onnxPath, baseOpts);
                 }
 
-                // Clone session options so AddExternalInitializers doesn't mutate the
-                // shared opts (which is reused across components and runs).
-                Ort::SessionOptions cloned = baseOpts.Clone();
-                cloned.AddExternalInitializers(overrides.names, overrides.values);
                 // overrides (backing buffers) must stay alive until session is constructed.
-                Logger::info("  Creating " + std::string(label) + " session with "
-                             + std::to_string(overrides.names.size()) + " override(s)...");
                 auto ts = Clock::now();
                 Ort::Session s(ctx.env, bundle.onnxPath.c_str(), cloned);
                 Logger::info("  " + std::string(label) + " loaded in " + fmtMs(ts));
                 return s;
             };
 
-            ctx.text_encoder = makeLoraSession("text_encoder", teBundle,   auxOpts);
-            ctx.unet         = makeLoraSession("unet",         unetBundle, unetOpts);
+            // Instantiate one injector per component (owns the metadata + merge cache).
+            LoraInjector teInjector, unetInjector;
+            teInjector.loadModelMetadata(teBundle.onnxPath.string());
+            unetInjector.loadModelMetadata(unetBundle.onnxPath.string());
+
+            ctx.text_encoder = makeLoraSession("text_encoder", teBundle,   teInjector,   auxOpts);
+            ctx.unet         = makeLoraSession("unet",         unetBundle, unetInjector, unetOpts);
 #ifndef USE_CUDA
             try {
-                ctx.cpu_unet = makeLoraSession("cpu_unet", unetBundle, ctx.cpu_session_opts);
+                // cpu_unet reuses unetInjector — second call is a cache hit.
+                ctx.cpu_unet = makeLoraSession("cpu_unet", unetBundle, unetInjector,
+                                               ctx.cpu_session_opts);
                 ctx.cpuFallbackAvailable = true;
             } catch (const std::exception& e) {
-                Logger::info(std::string("cpu_unet load failed — GPU fallback disabled: ") + e.what());
+                Logger::info(std::string("cpu_unet load failed — GPU fallback disabled: ")
+                             + e.what());
             }
 #endif
             // VAE has no LoRA layers in any known kohya adapter — load natively.
@@ -269,7 +260,10 @@ namespace sd {
 
             if (cfg.type == ModelType::SDXL) {
                 auto te2Bundle = resolveBundle(mdir / "text_encoder_2.onnx");
-                ctx.text_encoder_2 = makeLoraSession("text_encoder_2", te2Bundle, auxOpts);
+                LoraInjector te2Injector;
+                te2Injector.loadModelMetadata(te2Bundle.onnxPath.string());
+                ctx.text_encoder_2 = makeLoraSession("text_encoder_2", te2Bundle,
+                                                      te2Injector, auxOpts);
             }
         }
 

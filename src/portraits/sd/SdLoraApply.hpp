@@ -7,12 +7,12 @@
 
 namespace sd {
 
-// ── LoraOverrides ─────────────────────────────────────────────────────────────
-// Owns the merged-weight tensors produced by buildLoraOverrides().
-// Must remain alive for the entire duration of Ort::Session construction;
-// it can be destroyed immediately afterwards.
+// ── LegacyLoraOverrides ───────────────────────────────────────────────────────
+// Deprecated: superseded by LoraInjector / LoraOverrides in LoraInjector.hpp.
+// Kept for reference; buildLoraOverrides() still compiles but is no longer
+// called by SdLoader.  Do not use in new code.
 
-struct LoraOverrides {
+struct LegacyLoraOverrides {
     std::vector<std::string>           names;     // ONNX initializer names (for AddExternalInitializers)
     std::vector<Ort::Value>            values;    // non-owning views into the backing buffers below
 
@@ -23,17 +23,12 @@ struct LoraOverrides {
 
     Ort::MemoryInfo memInfo;
 
-    LoraOverrides();
+    LegacyLoraOverrides();
     bool empty() const noexcept { return names.empty(); }
 };
 
-// Reads base weights for all LoRA-matched tensors from bundle.dataPath,
-// applies the LoRA delta (W_merged = W_base + scale * alpha/rank * up @ down),
-// and returns a LoraOverrides ready to pass to SessionOptions::AddExternalInitializers.
-//
-// Only tensors that have at least one LoRA match are included in the result.
-// Tensors with no LoRA match are left for ORT to load natively from .onnx.data.
-LoraOverrides buildLoraOverrides(const OnnxModelBundle&          bundle,
+// Deprecated — see LoraInjector.hpp.
+LegacyLoraOverrides buildLoraOverrides(const OnnxModelBundle&          bundle,
                                  const OnnxExternalIndex&        extIndex,
                                  const OnnxExternalSuffixIndex&  extSuffixIndex,
                                  const std::vector<LoraEntry>&   loras);

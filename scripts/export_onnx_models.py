@@ -62,7 +62,8 @@ class UNetWrapper(torch.nn.Module):
 
 # ── Export pipeline ───────────────────────────────────────────────────────────
 
-def export_sd15(model_file: str, output_dir: str) -> None:
+def export_sd15(model_file: str, output_dir: str, *,
+                resume: bool = False, validate: bool = False) -> None:
     policy = SD15ExportPolicy()
     check_dependencies(
         required=["torch", "diffusers", "transformers", "onnx"],
@@ -75,7 +76,6 @@ def export_sd15(model_file: str, output_dir: str) -> None:
     t_total = time.time()
     print("Loading SD 1.5 pipeline ...")
     pipe = StableDiffusionPipeline.from_single_file(model_file, torch_dtype=torch.float16)
-    pipe.enable_attention_slicing()
 
     # 1. Text encoder ─────────────────────────────────────────────────────────
     clip = CLIPTextEncoderClipSkip2(pipe.text_encoder).eval()
@@ -94,6 +94,9 @@ def export_sd15(model_file: str, output_dir: str) -> None:
                 "input_ids",
                 ["text_embeds", "hidden_latent"],
             ),
+            export_lora_weights=True,
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(clip, pipe.text_encoder, pipe.tokenizer),
         ),
     )
@@ -117,6 +120,9 @@ def export_sd15(model_file: str, output_dir: str) -> None:
             output_names=["latent_out"],
             dynamic_axes=policy.unet_dynamic_axes(),
             exporter=policy.unet_exporter(),
+            export_lora_weights=True,
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(unet, pipe.unet),
         ),
     )
@@ -139,6 +145,8 @@ def export_sd15(model_file: str, output_dir: str) -> None:
             dynamic_axes=policy.vae_dynamic_axes(),
             exporter=policy.vae_exporter(),
             simplify=policy.should_simplify_vae(True),
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(vae, pipe.vae, pipe),
         ),
     )
@@ -155,6 +163,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("model_file", help="Path to the .safetensors checkpoint")
     parser.add_argument("--name", help="Output directory name (default: checkpoint stem)")
     parser.add_argument("--output-dir", help="Override output directory path")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip components whose output files already exist (resume an interrupted export)",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run ORT forward pass after each component export to catch runtime errors (slow)",
+    )
     return parser.parse_args()
 
 
@@ -164,7 +182,7 @@ if __name__ == "__main__":
     out  = args.output_dir or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "models", name)
     try:
-        export_sd15(args.model_file, out)
+        export_sd15(args.model_file, out, resume=args.resume, validate=args.validate)
     except (FileNotFoundError, ImportError) as e:
         print(f"\n❌ {e}", file=sys.stderr)
         sys.exit(1)

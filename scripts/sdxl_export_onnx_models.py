@@ -91,7 +91,8 @@ class UNetWrapper(torch.nn.Module):
 # ── Export pipeline ───────────────────────────────────────────────────────────
 
 def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = False,
-                simplify_vae: bool = False) -> None:
+                simplify_vae: bool = False, resume: bool = False,
+                validate: bool = False) -> None:
     policy = SDXLExportPolicy()
     check_dependencies(
         required=["torch", "diffusers", "transformers", "onnx"],
@@ -131,6 +132,9 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             input_names=["input_ids"],
             output_names=["hidden_states"],
             dynamic_axes=policy.text_encoder_dynamic_axes("input_ids", ["hidden_states"]),
+            export_lora_weights=True,
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(clip_l, pipe.text_encoder, pipe.tokenizer),
         ),
     )
@@ -153,6 +157,9 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 "input_ids",
                 ["hidden_states", "text_embeds"],
             ),
+            export_lora_weights=True,
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(clip_g, pipe.text_encoder_2, pipe.tokenizer_2),
         ),
     )
@@ -182,6 +189,9 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             fix_fp32_constants=policy.should_fix_fp32_constants("unet"),
             fix_attention_sqrt_cast=policy.should_fix_attention_sqrt_cast("unet"),
             fix_resize_fp16=policy.should_fix_resize_fp16("unet"),
+            export_lora_weights=True,
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(unet, pipe.unet),
         ),
     )
@@ -205,6 +215,8 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
             exporter=policy.vae_exporter(),
             fix_fp32_constants=policy.should_fix_fp32_constants("vae_decoder"),
             simplify=policy.should_simplify_vae(simplify_vae),
+            skip_if_complete=resume,
+            validate=validate,
             release_after=(vae, pipe.vae, pipe),
         ),
     )
@@ -231,6 +243,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run onnxsim on vae_decoder.onnx after export (slower)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip components whose output files already exist (resume an interrupted export)",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run ORT forward pass after each component export to catch runtime errors (slow)",
+    )
     return parser.parse_args()
 
 
@@ -245,6 +267,8 @@ if __name__ == "__main__":
             out,
             optimize_memory=args.optimize_memory,
             simplify_vae=args.simplify_vae,
+            resume=args.resume,
+            validate=args.validate,
         )
     except (FileNotFoundError, ImportError) as e:
         print(f"\n❌ {e}", file=sys.stderr)
