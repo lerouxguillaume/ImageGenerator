@@ -9,64 +9,11 @@
 
 using namespace Helpers;
 
-static constexpr float FIELD_W       = 700.f;
-static constexpr float FIELD_H       = 86.f;   // 4 visible lines × 17px + 18px padding
-static constexpr float FIELD_PAD_X   = 8.f;
-static constexpr float FIELD_PAD_Y   = 6.f;
-static constexpr float FIELD_LINE_H  = 17.f;   // font size 13 + 4px leading
-static constexpr int   FIELD_VISIBLE = 4;
-static constexpr unsigned FIELD_FONT = 13;
-static constexpr float LEFT_X   = (WIN_W - FIELD_W) / 2.f;
-static constexpr float cx       = WIN_W / 2.f;
-
-// Compute pixel-accurate word-wrapped line layout for a prompt string.
-// Returns a list of [start, end) byte index pairs, one per visual line.
-using VisualLine = ImageGeneratorView::VisualLine;
-static std::vector<VisualLine> computeLines(
-    const std::string& s, sf::Font& font, unsigned charSize, float maxW)
-{
-    std::vector<VisualLine> lines;
-    if (s.empty()) { lines.push_back({0, 0}); return lines; }
-
-    sf::Text t;
-    t.setFont(font);
-    t.setCharacterSize(charSize);
-
-    // Build word list with original byte offsets
-    struct Word { int start, end; std::string text; };
-    std::vector<Word> words;
-    int i = 0;
-    const int n = static_cast<int>(s.size());
-    while (i < n) {
-        while (i < n && s[i] == ' ') ++i;
-        if (i >= n) break;
-        const int ws = i;
-        while (i < n && s[i] != ' ') ++i;
-        words.push_back({ws, i, s.substr(ws, i - ws)});
-    }
-
-    if (words.empty()) { lines.push_back({0, 0}); return lines; }
-
-    int lineStart = words[0].start;
-    int lineEnd   = words[0].end;
-    std::string lineText = words[0].text;
-
-    for (int wi = 1; wi < static_cast<int>(words.size()); ++wi) {
-        const std::string test = lineText + " " + words[wi].text;
-        t.setString(test);
-        if (t.getLocalBounds().width > maxW) {
-            lines.push_back({lineStart, lineEnd});
-            lineStart = words[wi].start;
-            lineEnd   = words[wi].end;
-            lineText  = words[wi].text;
-        } else {
-            lineEnd  = words[wi].end;
-            lineText = test;
-        }
-    }
-    lines.push_back({lineStart, lineEnd});
-    return lines;
-}
+static constexpr float FIELD_W      = 700.f;
+static constexpr float FIELD_H      = 86.f;   // 4 visible lines × 17px + 18px padding
+static constexpr float FIELD_H_SM   = 46.f;   // 2 visible lines × 17px + 12px padding
+static constexpr float LEFT_X  = (WIN_W - FIELD_W) / 2.f;
+static constexpr float cx      = WIN_W / 2.f;
 
 void ImageGeneratorView::render(sf::RenderWindow& win) {
     float y = static_cast<float>(PAD) * 2.f;
@@ -102,18 +49,26 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     // Positive prompt
     drawText(win, font, "Positive prompt:", Col::Muted, LEFT_X, y, 12);
     y += 18.f;
-    positiveField = {LEFT_X, y, FIELD_W, FIELD_H};
-    drawPromptField(win, positiveField, positivePrompt, positiveCursor,
-                    positiveActive, positiveAllSelected, Col::Text, positiveLines, positiveScrollLine);
+    positiveArea.setRect({LEFT_X, y, FIELD_W, FIELD_H});
+    positiveArea.render(win, font);
     y += FIELD_H + static_cast<float>(PAD) * 2.f;
 
     // Negative prompt
     drawText(win, font, "Negative prompt:", Col::Muted, LEFT_X, y, 12);
     y += 18.f;
-    negativeField = {LEFT_X, y, FIELD_W, FIELD_H};
-    drawPromptField(win, negativeField, negativePrompt, negativeCursor,
-                    negativeActive, negativeAllSelected, Col::Muted, negativeLines, negativeScrollLine);
+    negativeArea.setRect({LEFT_X, y, FIELD_W, FIELD_H});
+    negativeArea.setTextColor(Col::Muted);
+    negativeArea.render(win, font);
     y += FIELD_H + static_cast<float>(PAD) * 2.f;
+
+    // Instruction field — only rendered when a LLM model is ready or loading
+    if (promptEnhancerAvailable || llmLoading) {
+        drawText(win, font, "Instruction (optional):", Col::Muted, LEFT_X, y, 12);
+        y += 18.f;
+        instructionArea.setRect({LEFT_X, y, FIELD_W, FIELD_H_SM});
+        instructionArea.render(win, font);
+        y += FIELD_H_SM + static_cast<float>(PAD);
+    }
 
     // Advanced toggle + optional Enhance button on the same row
     const std::string toggleLabel = showAdvancedParams ? "v Advanced" : "> Advanced";
@@ -291,70 +246,6 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
 
     if (showSettings)
         drawSettingsModal(win);
-}
-
-void ImageGeneratorView::drawPromptField(
-    sf::RenderWindow& win,
-    const sf::FloatRect& field,
-    const std::string& text,
-    int cursor, bool active, bool allSelected,
-    sf::Color textColor,
-    std::vector<VisualLine>& outLines,
-    int& scrollLine)
-{
-    drawRect(win, field, Col::Panel2, active ? Col::BorderHi : Col::Border, 1.f);
-
-    // Selection highlight (drawn before text so text renders on top)
-    if (active && allSelected) {
-        sf::RectangleShape sel({field.width - 2.f, field.height - 2.f});
-        sel.setPosition(field.left + 1.f, field.top + 1.f);
-        sel.setFillColor(sf::Color(42, 85, 138, 110));
-        win.draw(sel);
-    }
-
-    const float maxW = field.width - FIELD_PAD_X * 2.f - 6.f; // reserve 6px for scrollbar
-    outLines = computeLines(text, font, FIELD_FONT, maxW);
-
-    // Find cursor's visual line (cursor on line l if cursor < next line's start)
-    int cursorLine = static_cast<int>(outLines.size()) - 1;
-    for (int l = 0; l + 1 < static_cast<int>(outLines.size()); ++l) {
-        if (cursor < outLines[l + 1].start) { cursorLine = l; break; }
-    }
-
-    // Auto-scroll so cursor stays visible when field is active
-    if (active) {
-        if (cursorLine < scrollLine) scrollLine = cursorLine;
-        if (cursorLine >= scrollLine + FIELD_VISIBLE) scrollLine = cursorLine - FIELD_VISIBLE + 1;
-    }
-    scrollLine = std::clamp(scrollLine, 0,
-                            std::max(0, static_cast<int>(outLines.size()) - FIELD_VISIBLE));
-
-    // Draw visible lines
-    const int last = std::min(static_cast<int>(outLines.size()), scrollLine + FIELD_VISIBLE);
-    for (int l = scrollLine; l < last; ++l) {
-        const auto [lStart, lEnd] = outLines[l];
-        std::string lineText = text.substr(static_cast<size_t>(lStart),
-                                           static_cast<size_t>(lEnd - lStart));
-        if (active && !allSelected && l == cursorLine) {
-            const int col = std::clamp(cursor - lStart, 0, static_cast<int>(lineText.size()));
-            lineText.insert(static_cast<size_t>(col), "|");
-        }
-        const float ly = field.top + FIELD_PAD_Y + static_cast<float>(l - scrollLine) * FIELD_LINE_H;
-        drawText(win, font, lineText, textColor, field.left + FIELD_PAD_X, ly, FIELD_FONT);
-    }
-
-    // Scrollbar (only when content overflows)
-    if (static_cast<int>(outLines.size()) > FIELD_VISIBLE) {
-        const float trackH = field.height - FIELD_PAD_Y * 2.f;
-        const float ratio  = static_cast<float>(FIELD_VISIBLE) / static_cast<float>(outLines.size());
-        const float thumbH = std::max(8.f, trackH * ratio);
-        const float thumbY = field.top + FIELD_PAD_Y
-                           + trackH * static_cast<float>(scrollLine)
-                                     / static_cast<float>(outLines.size());
-        const float trackX = field.left + field.width - FIELD_PAD_X + 1.f;
-        drawRect(win, {trackX, field.top + FIELD_PAD_Y, 4.f, trackH}, Col::Panel);
-        drawRect(win, {trackX, thumbY, 4.f, thumbH}, Col::Border);
-    }
 }
 
 void ImageGeneratorView::drawSlider(sf::RenderWindow& win,

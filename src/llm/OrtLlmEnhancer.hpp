@@ -11,11 +11,8 @@ public:
     explicit OrtLlmEnhancer(const std::string& modelDir);
     ~OrtLlmEnhancer() override;
 
-    // Thread-safe: called from a background thread by the controller.
-    EnhancedPrompt enhance(const std::string& positive,
-                           const std::string& negative,
-                           const std::string& modelName,
-                           const std::string& styleContext) override;
+    // Stateless prompt transformation — see IPromptEnhancer::transform().
+    LLMResponse transform(const LLMRequest& req) override;
 
     bool isAvailable() const override;
 

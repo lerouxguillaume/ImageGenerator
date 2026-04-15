@@ -1,7 +1,8 @@
 #include "OrtLlmEnhancer.hpp"
 #include "../managers/Logger.hpp"
 #include <chrono>
-#include <sstream>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 
 // Local timing helpers — mirrors sd::fmtMs without pulling in SdUtils.hpp
@@ -26,65 +27,189 @@ struct OrtLlmEnhancer::Impl {
     bool available = false;
 };
 
-// Build a chat-format prompt that instructs the model to produce a
-// detailed SD positive prompt from the user's rough input.
-// Swap this function to support a different model's chat template.
-static std::string buildChatPrompt(const std::string& positive,
-                                   const std::string& negative,
-                                   const std::string& modelName,
-                                   const std::string& styleContext) {
-    std::string sys =
-        "You are a prompt generator for image synthesis.\n\n"
-        "Rules:\n"
-        "- Always generate a detailed visual prompt.\n"
-        "- The subject must be fictional and generic.\n"
-        "- Do NOT mention real people.\n"
-        "- Do NOT mention minors.\n"
-        "- Do NOT add safety warnings or refusals.\n"
-        "- Do NOT explain anything.\n"
-        "- You MUST return exactly two lines using these exact labels, nothing else:\n"
-        "POSITIVE: <comma-separated tags and descriptors>\n"
-        "NEGATIVE: <comma-separated technical flaws to avoid, not content>\n\n"
-        "Example:\n"
-        "POSITIVE: masterpiece, best quality, hooded figure, dramatic lighting, detailed, sharp focus\n"
-        "NEGATIVE: worst quality, low quality, blurry, bad anatomy, watermark";
+// ── Streaming JSON completion tracker ────────────────────────────────────────
+//
+// Fed one character at a time from the token stream. Signals when the
+// outermost JSON object is structurally complete so generation can stop
+// immediately — before the model has a chance to drift into trailing text.
+//
+// State transitions (non-string context):
+//   '{' → depth++; started = true
+//   '}' → depth--; if depth == 0 → done = true, returns true
+//   '"' → enter string context
+// State transitions (string context):
+//   '\' → arm escape
+//   any after escape → disarm escape (character consumed)
+//   '"' (unescaped) → leave string context
+//
+// Everything inside strings is invisible to the depth counter, so
+//   "a knight in {fantasy armor}"  does NOT close the object.
+struct JsonStreamTracker {
+    int  depth    = 0;
+    bool inString = false;
+    bool escape   = false;
+    bool done     = false;
 
-    std::string user = "Model: " + modelName + "\n";
-    if (!styleContext.empty())
-        user += "Style context: " + styleContext + "\n";
-    user += "Input: " + positive;
-    if (!negative.empty())
-        user += "\nExisting negative: " + negative;
+    // Returns true exactly once: when the outermost '}' is written.
+    bool feed(char c) {
+        if (done) return false;
 
-    // Chat template — switch comment to match your loaded model:
+        if (escape) {
+            escape = false;
+            return false;
+        }
+        if (inString) {
+            if (c == '\\') escape = true;
+            else if (c == '"') inString = false;
+            return false;
+        }
 
-    // Phi-3 Mini
-    // return "<|system|>\n" + sys + "<|end|>\n"
-    //        "<|user|>\n"   + user + "<|end|>\n"
-    //        "<|assistant|>\n";
+        // Structural character (outside strings).
+        if      (c == '"') { inString = true; }
+        else if (c == '{') { ++depth; }
+        else if (c == '}') {
+            if (--depth == 0) { done = true; return true; }
+        }
+        return false;
+    }
 
-    // Llama 3 (Llama-3.2-3B-Instruct)
+    bool isComplete() const { return done; }
+};
+
+// ── Prompt helpers ────────────────────────────────────────────────────────────
+
+static std::string modelTypeGuidance(ModelType model) {
+    if (model == ModelType::SDXL)
+        return "STYLE: SDXL — write natural-language descriptive sentences forming a coherent "
+               "scene. Avoid bare keyword lists.";
+    return "STYLE: SD 1.5 — write short comma-separated keywords and tags. Avoid long sentences.";
+}
+
+static std::string strengthGuidance(float strength) {
+    if (strength <= 0.3f)
+        return "STRENGTH: minimal — fix grammar and add 1-2 quality tags only.";
+    if (strength <= 0.7f)
+        return "STRENGTH: moderate — improve detail, lighting, and composition "
+               "while keeping the subject and intent unchanged.";
+    return "STRENGTH: strong — substantially enhance style, atmosphere, and "
+           "technical quality; preserve the core subject and intent.";
+}
+
+// Build a Llama 3 single-turn chat prompt.
+//
+// The assistant turn is pre-filled with '{' so the model continues directly
+// inside a JSON object — it cannot emit a preamble even if it tries.
+//
+// The prompt also shows one VALID and one INVALID example so the model has
+// a concrete negative signal against wrapping the output in prose or markdown.
+static std::string buildTransformPrompt(const std::string& prompt,
+                                        const std::string& instruction,
+                                        ModelType          model,
+                                        float              strength) {
+    const std::string sys =
+        "You are a JSON generator function for Stable Diffusion prompts. "
+        "You do NOT chat, explain, or reason. "
+        "You output exactly one JSON object and stop immediately.\n\n"
+        + modelTypeGuidance(model) + "\n"
+        + strengthGuidance(strength) + "\n\n"
+        "RULES:\n"
+        "- Preserve the subject and original intent.\n"
+        "- Do not add elements unrelated to the subject or instruction.\n"
+        "- Do not remove key elements from the original prompt.\n"
+        "- Avoid repeating the same words.\n"
+        "- negative_prompt must include: worst quality, low quality, blurry, bad anatomy.\n\n"
+        "STRICT COMPLETION RULE:\n"
+        "- Output exactly one JSON object.\n"
+        "- Stop immediately after the closing brace.\n"
+        "- No markdown, no code fences, no explanations, no text before or after.\n"
+        "- Do not output multiple JSON objects.\n\n"
+        "VALID output (the only acceptable form):\n"
+        "{\"prompt\":\"a knight in shining armour, dramatic lighting, oil painting style\","
+        "\"negative_prompt\":\"worst quality, low quality, blurry, bad anatomy, watermark\"}\n\n"
+        "INVALID output (will be rejected — do NOT produce this):\n"
+        "Here is the improved prompt: "
+        "{\"prompt\":\"...\",\"negative_prompt\":\"...\"}";
+
+    const std::string effectiveInstruction =
+        instruction.empty() ? "Improve the prompt quality and detail" : instruction;
+
+    const std::string user =
+        "ORIGINAL PROMPT: " + prompt +
+        "\nINSTRUCTION: " + effectiveInstruction;
+
     return "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
            + sys + "<|eot_id|>"
            "<|start_header_id|>user<|end_header_id|>\n"
            + user + "<|eot_id|>"
-           "<|start_header_id|>assistant<|end_header_id|>\n";
+           "<|start_header_id|>assistant<|end_header_id|>\n"
+           "{";   // assistant turn pre-filled: model must continue from inside the JSON object
 }
 
-// Extract the value after a "LABEL: " prefix from a multi-line string.
-// Returns an empty string if the label is not found.
-static std::string extractLabel(const std::string& text, const std::string& label) {
-    const std::string prefix = label + ": ";
-    const auto pos = text.find(prefix);
-    if (pos == std::string::npos) return {};
-    const auto start = pos + prefix.size();
-    const auto end   = text.find('\n', start);
-    std::string value = (end == std::string::npos) ? text.substr(start)
-                                                    : text.substr(start, end - start);
-    // Trim trailing whitespace
-    const auto last = value.find_last_not_of(" \t\r");
-    return (last == std::string::npos) ? "" : value.substr(0, last + 1);
+// ── Extraction and validation ─────────────────────────────────────────────────
+
+// Forward balanced-brace extractor.
+// Starting at startPos (must be '{'), walks forward counting depth while
+// respecting quoted strings and escape sequences.  Returns the complete
+// substring [startPos, matching '}'] or nullopt if the object is unclosed.
+static std::optional<std::string> extractJsonObject(const std::string& s, size_t startPos) {
+    int  depth    = 0;
+    bool inString = false;
+    bool escape   = false;
+    for (size_t i = startPos; i < s.size(); ++i) {
+        const char c = s[i];
+        if (escape)                { escape = false; continue; }
+        if (c == '\\' && inString) { escape = true;  continue; }
+        if (c == '"')              { inString = !inString; continue; }
+        if (inString)              { continue; }
+        if      (c == '{')         { ++depth; }
+        else if (c == '}') {
+            if (--depth == 0)
+                return s.substr(startPos, i - startPos + 1);
+        }
+    }
+    return std::nullopt;
 }
+
+// Strict schema validator.
+// Requires:
+//   • exactly two keys: "prompt" and "negative_prompt"
+//   • both must be non-empty strings
+//   • no extra keys allowed
+static std::optional<LLMResponse> validateSchema(const std::string& candidate) {
+    try {
+        const auto j = nlohmann::json::parse(candidate);
+        if (!j.is_object())                       return std::nullopt;
+        if (j.size() != 2)                        return std::nullopt;
+        if (!j.contains("prompt"))                return std::nullopt;
+        if (!j.contains("negative_prompt"))       return std::nullopt;
+        if (!j.at("prompt").is_string())          return std::nullopt;
+        if (!j.at("negative_prompt").is_string()) return std::nullopt;
+        const std::string p  = j.at("prompt").get<std::string>();
+        const std::string np = j.at("negative_prompt").get<std::string>();
+        if (p.empty() || np.empty())              return std::nullopt;
+        return LLMResponse{p, np};
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// Scan raw for JSON objects and return the FIRST one that passes strict schema
+// validation.  "First" is correct here: with the '{' prefill the model cannot
+// emit preamble before the object, so the first valid object is the intended
+// output.  Returning immediately also avoids being fooled by any trailing
+// garbage the model may have appended before EOS.
+static std::optional<LLMResponse> extractFirstValidResponse(const std::string& raw) {
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] != '{') continue;
+        const auto candidate = extractJsonObject(raw, i);
+        if (!candidate) continue;
+        if (auto r = validateSchema(*candidate))
+            return r;  // first valid object wins — do not scan further
+    }
+    return std::nullopt;
+}
+
+// ── Constructor / destructor ──────────────────────────────────────────────────
 
 OrtLlmEnhancer::OrtLlmEnhancer(const std::string& modelDir)
     : impl_(std::make_unique<Impl>())
@@ -110,27 +235,31 @@ bool OrtLlmEnhancer::isAvailable() const {
     return impl_ && impl_->available;
 }
 
-EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
-                                        const std::string& negative,
-                                        const std::string& modelName,
-                                        const std::string& styleContext)
+LLMResponse OrtLlmEnhancer::transform(const LLMRequest& req)
 {
+    const std::string defaultNeg =
+        "worst quality, low quality, blurry, bad anatomy, watermark, text, signature";
+
     if (!isAvailable()) {
-        Logger::info("OrtLlmEnhancer::enhance: skipped — model not available");
-        return {positive, negative};
+        Logger::info("OrtLlmEnhancer::transform: skipped — model not available");
+        return {req.prompt, defaultNeg};
     }
 
-    Logger::info("=== OrtLlmEnhancer::enhance ===");
-    Logger::info("  sdModel:      " + (modelName.empty() ? "(none)" : modelName));
-    Logger::info("  styleContext: " + (styleContext.empty() ? "(none)" : styleContext));
-    Logger::info("  positive: " + positive);
-    Logger::info("  negative: " + negative);
+    const std::string modelLabel =
+        (req.model == ModelType::SDXL) ? "SDXL" : "SD1.5";
+
+    Logger::info("=== OrtLlmEnhancer::transform ===");
+    Logger::info("  model:       " + modelLabel);
+    Logger::info("  strength:    " + std::to_string(req.strength));
+    Logger::info("  instruction: " + (req.instruction.empty() ? "(none)" : req.instruction));
+    Logger::info("  prompt:      " + req.prompt);
 
     try {
         auto tTotal = Clock::now();
 
-        // ── Build prompt ──────────────────────────────────────────────────────
-        const std::string chatPrompt = buildChatPrompt(positive, negative, modelName, styleContext);
+        // ── Build prompt (assistant turn pre-filled with '{') ─────────────────
+        const std::string chatPrompt =
+            buildTransformPrompt(req.prompt, req.instruction, req.model, req.strength);
         Logger::info("  chat prompt:\n" + chatPrompt);
 
         // ── Tokenise ──────────────────────────────────────────────────────────
@@ -142,85 +271,94 @@ EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
                      + fmtMs(tTok) + ")");
 
         // ── Generation params ─────────────────────────────────────────────────
-        // max_length is total tokens (input + output) — set high enough to leave
-        // room for a full response after the prompt.
+        //
+        // temperature=0.15: near-greedy sampling — structural tokens (quotes,
+        //   colons, commas, braces) are highly deterministic; content inside
+        //   values still varies enough for prompt quality.
+        // No min_length: forcing tokens past natural EOS can corrupt a clean
+        //   JSON close.
         auto genParams = OgaGeneratorParams::Create(*impl_->model);
-        genParams->SetSearchOption("max_length",         600.0);
-        genParams->SetSearchOption("min_length",           5.0);
-        genParams->SetSearchOption("temperature",          0.7);
+        genParams->SetSearchOption("max_length",         800.0);
+        genParams->SetSearchOption("temperature",          0.15);
         genParams->SetSearchOption("top_p",                0.9);
-        genParams->SetSearchOption("repetition_penalty",   1.1);
-        Logger::info("  search options: max_length=600  min_length=5  temperature=0.7  top_p=0.9  repetition_penalty=1.1");
+        genParams->SetSearchOption("repetition_penalty",   1.05);
 
-        // ── Generate ──────────────────────────────────────────────────────────
-        // ort-genai 0.4+: input sequences are added to the generator (not params),
-        // and ComputeLogits() was merged into GenerateNextToken().
-        auto tGen = Clock::now();
-        auto generator  = OgaGenerator::Create(*impl_->model, *genParams);
+        // ── Generate with streaming completion detection ───────────────────────
+        //
+        // The tracker is fed one character at a time from the decoded token
+        // stream.  It signals the instant the outermost JSON object is closed
+        // so we break before the model can emit any trailing text.
+        //
+        // The prefilled '{' that ends the chat prompt counts as the first
+        // character of the object — it is fed to the tracker before the loop
+        // so the tracker starts at depth=1.
+        //
+        // Fallback: if no valid completion is detected, the loop runs to natural
+        // EOS (IsDone()) or max_length; extractFirstValidResponse() then does a
+        // post-hoc scan of whatever was collected.
+        auto tGen      = Clock::now();
+        auto generator = OgaGenerator::Create(*impl_->model, *genParams);
         generator->AppendTokenSequences(*sequences);
-        auto tokStream  = OgaTokenizerStream::Create(*impl_->tokenizer);
+        auto tokStream = OgaTokenizerStream::Create(*impl_->tokenizer);
+
+        JsonStreamTracker tracker;
+        tracker.feed('{');  // account for the '{' pre-filled in the prompt
+
         std::string result;
-        int tokenCount  = 0;
+        int  tokenCount         = 0;
+        bool completedInStream  = false;
 
         while (!generator->IsDone()) {
             generator->GenerateNextToken();
             const auto seqLen   = generator->GetSequenceCount(0);
             const auto newToken = generator->GetSequenceData(0)[seqLen - 1];
-            result += tokStream->Decode(newToken);
+            const std::string decoded = tokStream->Decode(newToken);
+            result += decoded;
             ++tokenCount;
 
-            // Stop as soon as the NEGATIVE line is complete — avoids the model
-            // rambling beyond the two required labels.
-            const auto negPos = result.find("NEGATIVE:");
-            if (negPos != std::string::npos &&
-                result.find('\n', negPos) != std::string::npos)
-                break;
+            // Feed every character of this (possibly multi-char) token.
+            // If the tracker fires we break immediately — any characters decoded
+            // in the same token beyond the closing '}' are harmless trailing
+            // bytes that extractJsonObject() will ignore via depth counting.
+            for (const char c : decoded) {
+                if (tracker.feed(c)) {
+                    completedInStream = true;
+                    break;
+                }
+            }
+            if (completedInStream) break;
         }
 
-        // Strip model-specific EOS tokens that may leak into the output.
+        const std::string stopReason = completedInStream ? "JSON complete" : "EOS/max_length";
+        Logger::info("  generated " + std::to_string(tokenCount) + " tokens  stop=" + stopReason
+                     + "  (" + fmtMs(tGen) + ")");
+
+        // Strip model-specific EOS tokens that may appear on EOS/max_length paths.
         for (const char* tok : {"<|eot_id|>", "</s>", "<|end|>", "<eos>"}) {
-            std::string t(tok);
+            const std::string t(tok);
             for (auto p = result.find(t); p != std::string::npos; p = result.find(t))
                 result.erase(p, t.size());
         }
 
-        Logger::info("  generated " + std::to_string(tokenCount) + " tokens in " + fmtMs(tGen));
-        Logger::info("  raw output: [" + result + "]");
+        // Re-attach the prefilled '{' — the generation loop only captures tokens
+        // produced after it, so the opening brace must be prepended.
+        const std::string full = "{" + result;
+        Logger::info("  raw output: [" + full + "]");
 
-        // ── Parse POSITIVE / NEGATIVE labels ──────────────────────────────────
-        std::string newPositive = extractLabel(result, "POSITIVE");
-        std::string newNegative = extractLabel(result, "NEGATIVE");
-
-        // Fallback: if labels are missing, treat the first two non-empty lines
-        // as positive and negative respectively.
-        if (newPositive.empty()) {
-            Logger::info("  POSITIVE label not found — trying line-based fallback");
-            std::istringstream ss(result);
-            std::string line;
-            while (std::getline(ss, line)) {
-                const auto f = line.find_first_not_of(" \t\r");
-                const auto l = line.find_last_not_of(" \t\r");
-                if (f == std::string::npos) continue;
-                const std::string trimmed = line.substr(f, l - f + 1);
-                if (newPositive.empty())      newPositive = trimmed;
-                else if (newNegative.empty()) { newNegative = trimmed; break; }
-            }
+        // ── Extract and validate ───────────────────────────────────────────────
+        if (auto parsed = extractFirstValidResponse(full)) {
+            Logger::info("  parsed prompt:    [" + parsed->prompt + "]");
+            Logger::info("  parsed negative:  [" + parsed->negative_prompt + "]");
+            Logger::info("  total time: " + fmtMs(tTotal));
+            return *parsed;
         }
 
-        if (newPositive.empty()) {
-            Logger::info("  could not parse output — falling back to original prompts");
-            return {positive, negative};
-        }
-
-        const std::string outNeg = newNegative.empty() ? negative : newNegative;
-        Logger::info("  positive: [" + newPositive + "]");
-        Logger::info("  negative: [" + outNeg + "]");
-        Logger::info("  total time: " + fmtMs(tTotal));
-        return {newPositive, outNeg};
+        Logger::info("  JSON extraction failed — falling back to original prompt");
+        return {req.prompt, defaultNeg};
 
     } catch (const std::exception& e) {
         Logger::info(std::string("  EXCEPTION: ") + e.what() + " — falling back to original prompt");
-        return {positive, negative};
+        return {req.prompt, defaultNeg};
     }
 }
 
@@ -239,11 +377,8 @@ OrtLlmEnhancer::OrtLlmEnhancer(const std::string& modelDir)
 OrtLlmEnhancer::~OrtLlmEnhancer() = default;
 bool OrtLlmEnhancer::isAvailable() const { return false; }
 
-EnhancedPrompt OrtLlmEnhancer::enhance(const std::string& positive,
-                                        const std::string& negative,
-                                        const std::string&,
-                                        const std::string&) {
-    return {positive, negative};
+LLMResponse OrtLlmEnhancer::transform(const LLMRequest& req) {
+    return {req.prompt, "worst quality, low quality, blurry, bad anatomy, watermark, text, signature"};
 }
 
 #endif

@@ -14,6 +14,14 @@ MVC pattern per screen:
   Controller (src/controllers/) — input dispatch, per-frame update
   Presenter  (src/presenters/)  — stateless state mutations on the view
 
+UI widgets (src/ui/widgets/):
+  MultiLineTextArea.hpp/.cpp — self-contained text area widget (cursor, word-wrap, copy/paste, scroll)
+
+LLM prompt transform (src/llm/):
+  IPromptEnhancer.hpp        — pure interface: LLMRequest/LLMResponse, transform(), isAvailable()
+  OrtLlmEnhancer.hpp/.cpp    — ORT GenAI-backed implementation (compiled with -DUSE_GENAI)
+  NullPromptEnhancer.hpp     — no-op stub when LLM is disabled
+
 SD pipeline (src/portraits/):
   PortraitGeneratorAi.cpp   — thin public shell; delegates to sd::runPipeline()
   sd/SdPipeline.cpp         — denoising loop + top-level orchestration
@@ -76,7 +84,11 @@ Windows cross-compile from Linux: uses `cmake/mingw-w64.cmake` toolchain.
 | `src/config/AppConfig.hpp/.cpp` | `AppConfig` (modelBaseDir, outputDir, loraBaseDir, …) + JSON load/save |
 | `src/enum/enums.hpp` | All enums (`ModelType`, `Race`, `Gender`, …) |
 | `src/enum/constants.hpp` | Colour palette (`Col::`) and layout constants |
-| `src/views/ImageGeneratorView.hpp` | All generation state including atomics |
+| `src/views/ImageGeneratorView.hpp` | All generation state including atomics; holds `positiveArea`, `negativeArea`, `instructionArea` |
+| `src/llm/IPromptEnhancer.hpp` | `LLMRequest`, `LLMResponse`, `IPromptEnhancer` interface |
+| `src/llm/OrtLlmEnhancer.hpp/.cpp` | ORT GenAI LLM backend; `transform()`, `isAvailable()` |
+| `src/llm/NullPromptEnhancer.hpp` | Passthrough stub when LLM is disabled |
+| `src/ui/widgets/MultiLineTextArea.hpp/.cpp` | Reusable text area widget: cursor, word-wrap, copy/paste, scroll |
 | `scripts/export_onnx_models.py` | SD 1.5 → ONNX export (`--resume`, `--validate`) |
 | `scripts/sdxl_export_onnx_models.py` | SDXL → ONNX export (`--resume`, `--validate`) |
 | `scripts/export_common.py` | Shared export utilities: `ExportComponentSpec`, policies, graph fixes, ORT validation |
@@ -492,6 +504,131 @@ Do not remove warmup calls — the latency reduction is significant for the firs
 
 `write_model_json(output_dir, model_type, all_specs)` in `scripts/export_common.py` writes this layout automatically when called with the list of `ExportComponentSpec` objects. Both export scripts (`export_onnx_models.py`, `sdxl_export_onnx_models.py`) pass `all_specs` so the manifest is always up to date.
 
+## LLM prompt transform
+
+The `src/llm/` subsystem provides optional, local LLM-backed prompt improvement. Compiled with `-DUSE_GENAI` to enable; without it everything degrades to passthrough stubs.
+
+### Interface
+
+```cpp
+// LLMRequest — passed to transform()
+struct LLMRequest {
+    std::string prompt;       // original positive prompt
+    std::string instruction;  // e.g. "make it cinematic"; empty → transform() uses generic quality default
+    ModelType   model;        // SD15 or SDXL — drives output style guidance
+    float       strength;     // 0.0–1.0: how strongly to apply the transformation
+};
+
+// LLMResponse — returned by transform()
+struct LLMResponse {
+    std::string prompt;
+    std::string negative_prompt;
+};
+```
+
+`IPromptEnhancer` has two virtual methods: `transform(req)` and `isAvailable()`. There is no `enhance()` — stateless single-turn transform is the only mode.
+
+### Implementations
+
+| Class | File | Behaviour |
+|---|---|---|
+| `OrtLlmEnhancer` | `OrtLlmEnhancer.hpp/.cpp` | Full implementation via ORT GenAI. `#ifdef USE_GENAI` required. |
+| `NullPromptEnhancer` | `NullPromptEnhancer.hpp` | No-op; returns original prompt + fixed negative. Always `isAvailable() == false`. |
+
+The controller holds a `std::unique_ptr<IPromptEnhancer>` and swaps implementations depending on whether an LLM model directory was configured.
+
+### Prompt construction (`OrtLlmEnhancer.cpp`)
+
+`buildTransformPrompt()` assembles a Llama 3 single-turn chat prompt with three guidance paragraphs injected into the system message:
+
+- **`modelTypeGuidance(model)`** — SD 1.5: "write short comma-separated keywords"; SDXL: "write natural-language descriptive sentences"
+- **`strengthGuidance(strength)`** — three tiers: ≤0.3 minimal, ≤0.7 moderate, >0.7 strong
+- **Instruction** — `effectiveInstruction` from controller: user input > per-model `llmHint` from `AppConfig` > empty (transform() substitutes "Improve the prompt quality and detail")
+
+Output format instructed as strict JSON:
+```json
+{ "prompt": "...", "negative_prompt": "..." }
+```
+
+Generation stops as soon as `}` appears in the output (avoids the model rambling past the JSON close).
+
+### JSON parsing (`parseJsonTransform`)
+
+Three-stage fallback:
+1. Parse the full raw string.
+2. Extract the substring between the first `{` and last `}`, then parse.
+3. Return `nullopt` → caller uses original prompt + default negative.
+
+### `inferModelType()` (controller)
+
+`ImageGeneratorController.cpp` contains a local `inferModelType(modelDir)` helper that reads `<modelDir>/model.json` and returns `ModelType::SDXL` if `"type": "sdxl"` is found, `ModelType::SD15` otherwise. Called once per enhance click to pass the correct `ModelType` into `LLMRequest`.
+
+### Instruction field
+
+`view.instructionArea` is a 500-char, 2-visible-line `MultiLineTextArea`. It is only rendered and only accepts clicks when `view.promptEnhancerAvailable` (or `llmLoading`) is true. When the user leaves it empty, `effectiveInstruction` falls back to the per-model `llmHint` from `AppConfig`, and if that is also empty the transform() implementation applies its own generic default.
+
+---
+
+## UI widgets
+
+### `MultiLineTextArea`
+
+A self-contained text area widget in `src/ui/widgets/MultiLineTextArea.hpp/.cpp`. Owns all text state and input handling; the view and controller do not manipulate cursor/scroll directly.
+
+**Constructor:**
+```cpp
+explicit MultiLineTextArea(int charLimit = 2000, int visibleLines = 4);
+```
+`visibleLines` drives rendering height and scroll bounds — the positive/negative areas use 4 lines; the instruction area uses 2.
+
+**Ownership model:**
+- Text content, cursor byte offset, all-selected flag
+- Word-wrap layout (`VisualLine = {start, end}` byte ranges) — rebuilt each `render()` call
+- Vertical scroll position
+- Active/focus state
+
+**Key methods:**
+```cpp
+void render(sf::RenderWindow& win, sf::Font& font) override;  // call setRect() first
+void setRect(const sf::FloatRect& rect) override;
+bool handleEvent(const sf::Event& e);   // returns true if consumed
+void handleScroll(float delta);         // +1 = scroll down, -1 = up
+void handleClick(sf::Vector2f pos);     // activates self if pos inside rect
+void setText(const std::string& t);
+const std::string& getText() const;
+bool isActive() const;
+void setActive(bool active);            // true → cursor moves to end of text
+void setTextColor(sf::Color c);
+```
+
+**Keyboard handling (inside `handleEvent`):**
+- Arrow keys: Left/Right by character; Up/Down using the word-wrap line layout
+- Home/End: jump to start/end of current visual line
+- Backspace/Delete: remove character; clears all-selected text first
+- Ctrl+A: select all; next keystroke replaces
+- Ctrl+C: copy full field text to clipboard
+- Ctrl+V: paste from clipboard, filtered to ASCII ≥ 32, capped at `charLimit_`
+- TextEntered: filtered to ASCII ≥ 32, enforces `charLimit_`
+
+**Focus / Tab cycle (in controller):**
+
+Tab cycles among the three fields in order: positive → negative → instruction (when LLM available) → positive. Mutual exclusion is enforced by calling `setActive(false)` on all three before activating the next.
+
+**`setRect()` at render time:**
+
+The view calls `setRect({LEFT_X, y, FIELD_W, FIELD_H})` immediately before each `render()` call. Layout constants `FIELD_W=700`, `FIELD_H=86` (4-line fields), `FIELD_H_SM=46` (2-line instruction field) live in `ImageGeneratorView.cpp`.
+
+**View fields:**
+```cpp
+MultiLineTextArea positiveArea{2000};       // 4 visible lines, 2000 char limit
+MultiLineTextArea negativeArea{2000};       // 4 visible lines, 2000 char limit
+MultiLineTextArea instructionArea{500, 2};  // 2 visible lines, 500 char limit
+```
+
+The old 8 parallel view fields (`positivePrompt`, `negativePrompt`, `positiveCursor`, `negativeCursor`, `positiveActive`, `negativeActive`, `positiveLines`, `negativeLines`, `positiveScrollLine`, `negativeScrollLine`, `positiveAllSelected`, `negativeAllSelected`, `positiveField`, `negativeField`) and the `VisualLine` inner struct and `drawPromptField()` private method have all been removed.
+
+---
+
 ## What NOT to do
 
 - The SD 1.5 VAE export now uses `dynamic_axes` for height/width (needed for non-512 resolutions). This is safe because the VAE always loads with `cpu_session_opts` and never goes through DML. Do not remove those dynamic axes.
@@ -504,3 +641,7 @@ Do not remove warmup calls — the latency reduction is significant for the firs
 - Do not use `operator[]` to insert into `ModelManager`'s internal cache — `GenerationContext` contains non-copyable ORT sessions. Always use `emplace` with `std::move`.
 - Do not create local `LoraInjector` instances inside `loadModels()` — always use references from the static `s_injectors` map so caches survive across LoRA config changes.
 - Do not add `dataOffset` or `dataLength` back to `ExternalTensorMeta` — those fields were removed because base weights now come from `_weights.safetensors`, not from `.onnx.data`. The C++ code never reads `.onnx.data` directly.
+- Do not add an `enhance()` method back to `IPromptEnhancer` — the stateless `transform()` is the only mode. Empty `instruction` is the signal for generic improvement; the implementation handles it internally.
+- Do not render or route clicks to `instructionArea` when `promptEnhancerAvailable` is false — the field only exists in the UI when an LLM model is loaded.
+- Do not call `computeLines()` or `drawPromptField()` directly — those functions have been removed; all word-wrap and rendering is owned by `MultiLineTextArea`.
+- Do not manipulate `MultiLineTextArea` cursor/scroll fields directly from the view or controller — use the public API (`setText`, `setActive`, `handleEvent`, `handleScroll`, `handleClick`).

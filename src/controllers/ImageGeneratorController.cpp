@@ -1,6 +1,7 @@
 #include "ImageGeneratorController.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../managers/Logger.hpp"
+#include "../enum/enums.hpp"
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <string>
 #include <thread>
@@ -86,6 +88,19 @@ static std::string browseForFolder(const std::string& startPath) {
 
 #endif
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Quickly determine whether a model directory is SDXL by peeking at model.json.
+// Falls back to SD15 if the file is absent or unreadable.
+static ModelType inferModelType(const std::string& modelDir) {
+    if (modelDir.empty()) return ModelType::SD15;
+    std::ifstream f(modelDir + "/model.json");
+    if (!f.is_open()) return ModelType::SD15;
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    return (content.find("\"sdxl\"") != std::string::npos) ? ModelType::SDXL : ModelType::SD15;
+}
+
 // ── Model defaults ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
@@ -99,13 +114,13 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
             md = &it->second;
     }
 
-    view.positivePrompt = (md && !md->positivePrompt.empty())
-        ? md->positivePrompt : config.defaultPositivePrompt;
-    view.positiveCursor = static_cast<int>(view.positivePrompt.size());
+    view.positiveArea.setText((md && !md->positivePrompt.empty())
+        ? md->positivePrompt : config.defaultPositivePrompt);
+    view.positiveArea.setActive(true);
 
-    view.negativePrompt = (md && !md->negativePrompt.empty())
-        ? md->negativePrompt : config.defaultNegativePrompt;
-    view.negativeCursor = static_cast<int>(view.negativePrompt.size());
+    view.negativeArea.setText((md && !md->negativePrompt.empty())
+        ? md->negativePrompt : config.defaultNegativePrompt);
+    view.negativeArea.setActive(false);
 
     view.generationParams.numSteps = (md && md->numSteps > 0)
         ? md->numSteps : config.defaultNumSteps;
@@ -210,12 +225,12 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 
     // Mouse-wheel scrolling on text areas
     if (e.type == sf::Event::MouseWheelScrolled && !view.generating) {
-        const sf::Vector2f pos = win.mapPixelToCoords({e.mouseWheelScroll.x, e.mouseWheelScroll.y});
-        const int delta = (e.mouseWheelScroll.delta > 0) ? -1 : 1;
-        if (view.positiveField.contains(pos))
-            view.positiveScrollLine = std::max(0, view.positiveScrollLine + delta);
-        else if (view.negativeField.contains(pos))
-            view.negativeScrollLine = std::max(0, view.negativeScrollLine + delta);
+        const sf::Vector2f pos   = win.mapPixelToCoords({e.mouseWheelScroll.x, e.mouseWheelScroll.y});
+        const float        delta = e.mouseWheelScroll.delta > 0 ? -1.f : 1.f;
+        if (view.positiveArea.getRect().contains(pos))
+            view.positiveArea.handleScroll(delta);
+        else if (view.negativeArea.getRect().contains(pos))
+            view.negativeArea.handleScroll(delta);
     }
 
     // Settings modal keyboard input
@@ -358,95 +373,30 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             return; // don't forward to prompt fields
         }
 
-        if (e.type == sf::Event::KeyPressed) {
-            std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
-            int& cursor      = view.positiveActive ? view.positiveCursor      : view.negativeCursor;
-            bool& allSel     = view.positiveActive ? view.positiveAllSelected : view.negativeAllSelected;
-            const bool anyActive = view.positiveActive || view.negativeActive;
-
-            // Helper: find cursor's visual line index
-            auto findLine = [](const std::vector<ImageGeneratorView::VisualLine>& lines, int cur) {
-                int l = static_cast<int>(lines.size()) - 1;
-                for (int i = 0; i + 1 < static_cast<int>(lines.size()); ++i)
-                    if (cur < lines[i + 1].start) { l = i; break; }
-                return l;
-            };
-
-            if (!anyActive) {
-                // nothing
-            } else if (e.key.code == sf::Keyboard::Left) {
-                allSel = false;
-                if (cursor > 0) --cursor;
-            } else if (e.key.code == sf::Keyboard::Right) {
-                allSel = false;
-                if (cursor < static_cast<int>(activeField.size())) ++cursor;
-            } else if (e.key.code == sf::Keyboard::Up) {
-                allSel = false;
-                auto& lines = view.positiveActive ? view.positiveLines : view.negativeLines;
-                if (!lines.empty()) {
-                    const int l = findLine(lines, cursor);
-                    if (l > 0) {
-                        const int col     = cursor - lines[l].start;
-                        const int prevLen = lines[l - 1].end - lines[l - 1].start;
-                        cursor = lines[l - 1].start + std::min(col, prevLen);
-                    }
-                }
-            } else if (e.key.code == sf::Keyboard::Down) {
-                allSel = false;
-                auto& lines = view.positiveActive ? view.positiveLines : view.negativeLines;
-                if (!lines.empty()) {
-                    const int l = findLine(lines, cursor);
-                    if (l + 1 < static_cast<int>(lines.size())) {
-                        const int col     = cursor - lines[l].start;
-                        const int nextLen = lines[l + 1].end - lines[l + 1].start;
-                        cursor = lines[l + 1].start + std::min(col, nextLen);
-                    }
-                }
-            } else if (e.key.code == sf::Keyboard::Home) {
-                allSel = false; cursor = 0;
-            } else if (e.key.code == sf::Keyboard::End) {
-                allSel = false; cursor = static_cast<int>(activeField.size());
-            } else if (e.key.code == sf::Keyboard::BackSpace) {
-                if (allSel) {
-                    activeField.clear(); cursor = 0; allSel = false;
-                } else if (!activeField.empty() && cursor > 0) {
-                    --cursor;
-                    activeField.erase(static_cast<size_t>(cursor), 1);
-                }
-            } else if (e.key.code == sf::Keyboard::Delete) {
-                if (allSel) {
-                    activeField.clear(); cursor = 0; allSel = false;
-                } else if (cursor < static_cast<int>(activeField.size())) {
-                    activeField.erase(static_cast<size_t>(cursor), 1);
-                }
-            } else if (e.key.control && e.key.code == sf::Keyboard::V) {
-                if (allSel) { activeField.clear(); cursor = 0; allSel = false; }
-                const std::string clip = sf::Clipboard::getString().toAnsiString();
-                for (char c : clip) {
-                    if (static_cast<unsigned char>(c) >= 32 && activeField.size() < 2000) {
-                        activeField.insert(static_cast<size_t>(cursor), 1, c);
-                        ++cursor;
-                    }
-                }
-            } else if (e.key.control && e.key.code == sf::Keyboard::C) {
-                sf::Clipboard::setString(activeField);
-            } else if (e.key.control && e.key.code == sf::Keyboard::A) {
-                allSel = true;
+        // Tab: cycle focus — positive → negative → instruction (if visible) → positive
+        if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab) {
+            if (view.positiveArea.isActive()) {
+                view.positiveArea.setActive(false);
+                view.negativeArea.setActive(true);
+            } else if (view.negativeArea.isActive()) {
+                view.negativeArea.setActive(false);
+                if (view.promptEnhancerAvailable)
+                    view.instructionArea.setActive(true);
+                else
+                    view.positiveArea.setActive(true);
+            } else if (view.instructionArea.isActive()) {
+                view.instructionArea.setActive(false);
+                view.positiveArea.setActive(true);
             }
         }
-        if (e.type == sf::Event::TextEntered) {
-            const auto c = e.text.unicode;
-            if (c >= 32 && c < 127) {
-                std::string& activeField = view.positiveActive ? view.positivePrompt : view.negativePrompt;
-                int& cursor  = view.positiveActive ? view.positiveCursor      : view.negativeCursor;
-                bool& allSel = view.positiveActive ? view.positiveAllSelected : view.negativeAllSelected;
-                if ((view.positiveActive || view.negativeActive) && activeField.size() < 2000) {
-                    if (allSel) { activeField.clear(); cursor = 0; allSel = false; }
-                    activeField.insert(static_cast<size_t>(cursor), 1, static_cast<char>(c));
-                    ++cursor;
-                }
-            }
-        }
+
+        // Delegate all other input to whichever field is active
+        if (view.positiveArea.isActive())
+            view.positiveArea.handleEvent(e);
+        else if (view.negativeArea.isActive())
+            view.negativeArea.handleEvent(e);
+        else if (view.instructionArea.isActive())
+            view.instructionArea.handleEvent(e);
     }
 }
 
@@ -527,12 +477,8 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
 
     // Collect enhancement result when the background thread finishes.
     if (view.enhancing && view.enhanceDone.load()) {
-        view.positivePrompt = view.enhancedPositive;
-        view.positiveCursor = static_cast<int>(view.positivePrompt.size());
-        view.negativePrompt = view.enhancedNegative;
-        view.negativeCursor = static_cast<int>(view.negativePrompt.size());
-        view.positiveScrollLine = 0;
-        view.negativeScrollLine = 0;
+        view.positiveArea.setText(view.enhancedPositive);
+        view.negativeArea.setText(view.enhancedNegative);
         view.enhancing = false;
         view.enhanceDone.store(false);
     }
@@ -676,21 +622,35 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         return;
     }
 
-    if (view.positiveField.contains(pos)) {
-        presenter.activatePositive(view);
+    if (view.positiveArea.getRect().contains(pos)) {
+        view.positiveArea.setActive(true);
+        view.negativeArea.setActive(false);
+        view.instructionArea.setActive(false);
         view.seedInputActive = false;
         return;
     }
 
-    if (view.negativeField.contains(pos)) {
-        presenter.activateNegative(view);
+    if (view.negativeArea.getRect().contains(pos)) {
+        view.negativeArea.setActive(true);
+        view.positiveArea.setActive(false);
+        view.instructionArea.setActive(false);
+        view.seedInputActive = false;
+        return;
+    }
+
+    if (view.promptEnhancerAvailable
+        && view.instructionArea.getRect().contains(pos)) {
+        view.instructionArea.setActive(true);
+        view.positiveArea.setActive(false);
+        view.negativeArea.setActive(false);
         view.seedInputActive = false;
         return;
     }
 
     if (view.showAdvancedParams && view.seedField.contains(pos)) {
-        view.positiveActive  = false;
-        view.negativeActive  = false;
+        view.positiveArea.setActive(false);
+        view.negativeArea.setActive(false);
+        view.instructionArea.setActive(false);
         view.seedInputActive = true;
         return;
     }
@@ -705,31 +665,38 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         view.enhancing = true;
         view.enhanceDone.store(false);
 
-        const std::string posCapture  = view.positivePrompt;
-        const std::string negCapture  = view.negativePrompt;
-        const std::string modelName   = view.availableModels.empty() ? std::string{}
-            : std::filesystem::path(view.availableModels[
-                static_cast<size_t>(view.selectedModelIdx)]).filename().string();
+        const std::string posCapture  = view.positiveArea.getText();
+        const std::string instruction = view.instructionArea.getText();
+        const std::string modelDir     = view.availableModels.empty()
+            ? std::string{} : view.availableModels[static_cast<size_t>(view.selectedModelIdx)];
+        const std::string modelName    = modelDir.empty()
+            ? std::string{}
+            : std::filesystem::path(modelDir).filename().string();
 
-        // Build style context: prefer explicit llmHint, fall back to the
-        // model's default positive prompt as a style example.
-        std::string styleContext;
-        const auto it = config.modelConfigs.find(modelName);
-        if (it != config.modelConfigs.end()) {
-            styleContext = !it->second.llmHint.empty()
-                ? it->second.llmHint
-                : it->second.positivePrompt;
+        // Resolve effective instruction: user's text > llmHint > empty (transform() defaults to quality improvement)
+        std::string effectiveInstruction = instruction;
+        if (effectiveInstruction.empty()) {
+            const auto it = config.modelConfigs.find(modelName);
+            if (it != config.modelConfigs.end() && !it->second.llmHint.empty())
+                effectiveInstruction = it->second.llmHint;
         }
+
+        const ModelType modelType = inferModelType(modelDir);
 
         std::atomic<bool>* done   = &view.enhanceDone;
         std::string*       outPos = &view.enhancedPositive;
         std::string*       outNeg = &view.enhancedNegative;
-        IPromptEnhancer*   enh   = enhancer.get();
+        IPromptEnhancer*   enh    = enhancer.get();
 
-        std::thread([posCapture, negCapture, modelName, styleContext, done, outPos, outNeg, enh]() {
-            auto result = enh->enhance(posCapture, negCapture, modelName, styleContext);
-            *outPos = result.positive;
-            *outNeg = result.negative;
+        std::thread([posCapture, effectiveInstruction, modelType, done, outPos, outNeg, enh]() {
+            LLMRequest req;
+            req.prompt      = posCapture;
+            req.instruction = effectiveInstruction; // empty → transform() uses "Improve quality" default
+            req.model       = modelType;
+            req.strength    = 0.5f;
+            const LLMResponse result = enh->transform(req);
+            *outPos = result.prompt;
+            *outNeg = result.negative_prompt;
             done->store(true);
         }).detach();
         return;
@@ -758,8 +725,8 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
 
         const int myId = ++view.generationId;
 
-        const std::string prompt      = view.positivePrompt;
-        const std::string negPrompt   = view.negativePrompt;
+        const std::string prompt      = view.positiveArea.getText();
+        const std::string negPrompt   = view.negativeArea.getText();
         const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
         GenerationParams params = view.generationParams;
         params.seed = view.seedInput.empty() ? -1 : std::stoll(view.seedInput);

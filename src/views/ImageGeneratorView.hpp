@@ -6,6 +6,7 @@
 #include "Screen.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../ui/SliderTypes.hpp"
+#include "../ui/widgets/MultiLineTextArea.hpp"
 
 // All mutable state for the image generator screen.
 // The controller reads and writes this struct; the render() method only reads it.
@@ -13,23 +14,11 @@
 class ImageGeneratorView : public Screen {
 public:
     // ── Prompt text fields ────────────────────────────────────────────────────
-    std::string positivePrompt;
-    std::string negativePrompt;
-    int  positiveCursor = 0;  // Byte offset of the text cursor in positivePrompt
-    int  negativeCursor = 0;  // Byte offset of the text cursor in negativePrompt
-    bool positiveActive = true;  // Whether the positive field has keyboard focus
-    bool negativeActive = false;
-
-    // Soft-wrapped line layout cache, rebuilt every render frame from the prompt
-    // string and the current field width. Used to map cursor positions to screen
-    // coordinates and to implement vertical scrolling.
-    struct VisualLine { int start, end; }; // [start, end) byte range in the prompt string
-    std::vector<VisualLine> positiveLines;
-    std::vector<VisualLine> negativeLines;
-    int  positiveScrollLine  = 0; // Index of the first visible wrapped line
-    int  negativeScrollLine  = 0;
-    bool positiveAllSelected = false; // Ctrl+A selection state
-    bool negativeAllSelected = false;
+    MultiLineTextArea positiveArea{2000};    // positive prompt — has keyboard focus by default
+    MultiLineTextArea negativeArea{2000};    // negative prompt
+    // Instruction for the LLM transform ("make it cinematic", etc.).
+    // Shown only when a LLM model is available; passed to transform() on enhance.
+    MultiLineTextArea instructionArea{500, 2}; // 500 chars, 2 visible lines
 
     // ── Generation parameters ─────────────────────────────────────────────────
     GenerationParams generationParams;
@@ -85,8 +74,7 @@ public:
 
     // ── Hit rects (written during render, read by controller) ─────────────────
     // Laid out by render(); the controller checks mouse positions against these.
-    sf::FloatRect positiveField;
-    sf::FloatRect negativeField;
+    // positiveArea.getRect() / negativeArea.getRect() replace the old positiveField / negativeField.
     sf::FloatRect btnGenerate;
     sf::FloatRect btnBack;
     sf::FloatRect btnAdvanced;
@@ -134,14 +122,6 @@ public:
     void render(sf::RenderWindow& win) override;
 
 private:
-    void drawPromptField(sf::RenderWindow& win,
-                         const sf::FloatRect& field,
-                         const std::string& text,
-                         int cursor, bool active, bool allSelected,
-                         sf::Color textColor,
-                         std::vector<VisualLine>& outLines,
-                         int& scrollLine);
-
     void drawSlider(sf::RenderWindow& win,
                     const sf::FloatRect& track, float normalised,
                     const std::string& label, const std::string& valueStr);

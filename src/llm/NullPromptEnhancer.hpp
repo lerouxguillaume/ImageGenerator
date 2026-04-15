@@ -4,11 +4,9 @@
 // Passthrough enhancer used when enhancement is disabled or no model is loaded.
 class NullPromptEnhancer final : public IPromptEnhancer {
 public:
-    EnhancedPrompt enhance(const std::string& positive,
-                           const std::string& negative,
-                           const std::string&,
-                           const std::string&) override {
-        return {positive, negative};
+    LLMResponse transform(const LLMRequest& req) override {
+        return {req.prompt, "worst quality, low quality, blurry, bad anatomy, watermark"};
     }
+
     bool isAvailable() const override { return false; }
 };
