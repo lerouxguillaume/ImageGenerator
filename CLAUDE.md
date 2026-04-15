@@ -132,7 +132,7 @@ Diffusers 0.37.x injects fp32 operations in several places when tracing an fp16 
 |---|---|---|---|
 | Stray scalar fp32 Constant nodes | `"Type parameter (T) … bound to different types"` on Mul/Add | `fix_fp32_constants` — converts fp32 `t` (TensorProto), `value_float`, and `value_floats` attributes on Constant nodes to fp16 | `fix_fp32_constants=True` |
 | Attention scale `Sqrt → Cast(fp32)` | `"tensor(float16) and tensor(float)"` on Div in attention blocks | `fix_attention_sqrt_cast_fp32` — rewrites any `Cast(to=float32)` whose direct input is a `Sqrt` node to `Cast(to=float16)` | `fix_attention_sqrt_cast=True` |
-| Resize with fp16 data input | `"Type 'tensor(float16)' … of operator (Resize) is invalid"` | `fix_resize_fp16_input` — inserts `Cast(fp16→fp32)` before and `Cast(fp32→fp16)` after each Resize data input (input[0]) | `fix_resize_fp16=True` |
+| Resize with fp16 data or scales input | `"Type 'tensor(float16)' … of operator (Resize) is invalid"` | `fix_resize_fp16_input` — (1) wraps data input (input[0]) with `Cast(fp16→fp32)` + `Cast(fp32→fp16)`; (2) wraps dynamic scales input (input[2]) with `Cast(fp16→fp32)` when non-empty (ONNX Resize requires scales to be fp32) | `fix_resize_fp16=True` |
 
 All three post-export passes are enabled for the SDXL UNet via `SDXLExportPolicy`.
 
@@ -141,7 +141,7 @@ All three post-export passes are enabled for the SDXL UNet via `SDXLExportPolicy
 A broad pass that rewrites all `Cast(to=float32)` → `Cast(to=float16)` nodes breaks the `Resize` operator: ONNX `Resize` requires its `scales` input (input[2]) to be `float32`. The post-export passes above are each scoped to a specific structural pattern that cannot appear in Resize scale paths:
 - `fix_fp32_constants` only touches `Constant` nodes (literal values, never dynamic scale tensors)
 - `fix_attention_sqrt_cast_fp32` only touches `Cast` nodes whose immediate parent is `Sqrt` (attention scale computation, never Resize scales which come from Constant nodes)
-- `fix_resize_fp16_input` wraps the Resize *data* input (input[0]), never the scales input (input[2])
+- `fix_resize_fp16_input` wraps the Resize *data* input (input[0]) with Cast(fp16↔fp32) and, when present, wraps the *scales* input (input[2]) with Cast(fp16→fp32) — dynamic scale tensors produced by Concat/Shape ops in fp16 UNets also need this treatment
 
 ### Diagnosing new fp16 type errors
 

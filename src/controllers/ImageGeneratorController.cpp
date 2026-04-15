@@ -735,16 +735,6 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         return;
     }
 
-    if (view.btnResolutionPrev.contains(pos)) {
-        view.selectedResolutionIdx = (view.selectedResolutionIdx - 1 + ImageGeneratorView::kNumResolutions)
-                                     % ImageGeneratorView::kNumResolutions;
-        return;
-    }
-    if (view.btnResolutionNext.contains(pos)) {
-        view.selectedResolutionIdx = (view.selectedResolutionIdx + 1) % ImageGeneratorView::kNumResolutions;
-        return;
-    }
-
     if (view.showAdvancedParams) {
         if (view.stepsSliderTrack.contains(pos)) {
             view.draggingSlider = DraggingSlider::Steps;
@@ -773,9 +763,6 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
         GenerationParams params = view.generationParams;
         params.seed = view.seedInput.empty() ? -1 : std::stoll(view.seedInput);
-        const auto [rw, rh] = ImageGeneratorView::kResolutions[view.selectedResolutionIdx];
-        params.width  = rw;
-        params.height = rh;
         const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
         for (size_t i = 0; i < view.availableLoras.size(); ++i) {
             if (i < view.loraSelected.size() && view.loraSelected[i])

@@ -99,23 +99,6 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     }
     y += 28.f;
 
-    // Resolution selector
-    {
-        constexpr float arrowW = 24.f;
-        constexpr float arrowH = 22.f;
-        const auto [rw, rh] = kResolutions[selectedResolutionIdx];
-        char resBuf[16];
-        std::snprintf(resBuf, sizeof(resBuf), "%dx%d", rw, rh);
-        drawText(win, font, "Resolution:", Col::Muted, LEFT_X, y + 4.f, 12);
-        const float arrowX = LEFT_X + 86.f;
-        btnResolutionPrev = {arrowX, y, arrowW, arrowH};
-        drawButton(win, btnResolutionPrev, "<", Col::Panel2, Col::Muted, false, 12, font);
-        drawText(win, font, resBuf, Col::Text, arrowX + arrowW + 8.f, y + 4.f, 12);
-        btnResolutionNext = {arrowX + arrowW + 8.f + 80.f, y, arrowW, arrowH};
-        drawButton(win, btnResolutionNext, ">", Col::Panel2, Col::Muted, false, 12, font);
-    }
-    y += 34.f;
-
     // Positive prompt
     drawText(win, font, "Positive prompt:", Col::Muted, LEFT_X, y, 12);
     y += 18.f;

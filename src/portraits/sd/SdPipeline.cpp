@@ -103,8 +103,20 @@ void runPipeline(const std::string& prompt,
     std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path());
 
     ModelConfig cfg = loadModelConfig(modelDir);
+    const int native_w = cfg.image_w;
+    const int native_h = cfg.image_h;
     if (params.width  > 0) cfg.image_w = params.width;
     if (params.height > 0) cfg.image_h = params.height;
+    // UNet spatial dimensions are static (batch-only dynamic axes). If the
+    // requested resolution produces a different latent size than the model was
+    // exported at, revert and warn — the UNet will reject the wrong shape.
+    if (cfg.image_w / 8 != native_w / 8 || cfg.image_h / 8 != native_h / 8) {
+        Logger::info("[WARN] Requested resolution " + std::to_string(cfg.image_w) + "x" + std::to_string(cfg.image_h)
+                     + " incompatible with model native " + std::to_string(native_w) + "x" + std::to_string(native_h)
+                     + " (UNet has static spatial dims) — using native resolution.");
+        cfg.image_w = native_w;
+        cfg.image_h = native_h;
+    }
     const int num_steps  = params.numSteps;
     const int num_images = params.numImages;
 

@@ -287,7 +287,7 @@ class SDXLExportPolicy(ExportPolicy):
         return component_name == "unet"
 
     def should_fix_resize_fp16(self, component_name: str) -> bool:
-        return component_name == "unet"
+        return True  # VAE decoder also has fp16 Resize nodes at runtime
 
     def should_simplify_vae(self, requested: bool) -> bool:
         return requested
@@ -586,73 +586,100 @@ def fix_attention_sqrt_cast_fp32(path: str) -> None:
 
 
 def fix_resize_fp16_input(path: str) -> None:
-    """Wrap Resize data inputs with Cast(fp16→fp32) / Cast(fp32→fp16) pairs.
+    """Fix fp16 inputs on Resize nodes so ORT accepts the model.
 
-    ORT rejects fp16 as the data type for the Resize operator on some builds
-    and execution providers.  In an fp16 UNet every Resize data input will be
-    fp16.  This function inserts explicit Cast nodes so the Resize op always
-    receives and emits fp32 data, keeping the rest of the graph in fp16.
+    ORT rejects fp16 for both:
+    - input[0] (data)  — wraps with Cast(fp16→fp32) before + Cast(fp32→fp16) after
+    - input[2] (scales) — wraps with Cast(fp16→fp32) only; scales must be fp32 and
+                          are not consumed downstream so no fp16 restore is needed.
 
-    Only Resize nodes whose data input (input[0]) is inferred to be fp16 are
-    patched.  Resize ops that already receive fp32 (e.g. a correctly-typed
-    static model) are left untouched.
+    In a fully-fp16 SDXL UNet, dynamic scale tensors computed via Concat/Shape ops
+    come out as fp16, triggering ORT's "Type 'tensor(float16)' of input parameter
+    … of operator (Resize) is invalid" error.
+
+    Already-patched nodes (producer is already Cast(to=FLOAT)) are skipped so the
+    function is safe to call multiple times.
     """
     import onnx
     from onnx import TensorProto, helper
 
     model = onnx.load_model(path, load_external_data=False)
 
-    # Build a set of Cast(to=fp32) outputs already wrapping a Resize data input
-    # so we can skip nodes that were patched by a previous run.
     out_to_node: dict[str, onnx.NodeProto] = {}
     for node in model.graph.node:
         for out in node.output:
             out_to_node[out] = node
 
-    to_patch: list[onnx.NodeProto] = []
-    for node in model.graph.node:
-        if node.op_type != "Resize" or not node.input:
-            continue
-        parent = out_to_node.get(node.input[0])
-        if parent is not None and parent.op_type == "Cast":
-            for attr in parent.attribute:
-                if attr.name == "to" and attr.i == TensorProto.FLOAT:
-                    break  # already wrapped — skip
-            else:
-                to_patch.append(node)
-        else:
-            to_patch.append(node)
+    def _already_cast_fp32(tensor_name: str) -> bool:
+        """Return True if tensor_name is already produced by a Cast(to=FLOAT)."""
+        producer = out_to_node.get(tensor_name)
+        if producer is None or producer.op_type != "Cast":
+            return False
+        return any(a.name == "to" and a.i == TensorProto.FLOAT for a in producer.attribute)
 
-    if not to_patch:
+    # Collect Resize nodes whose data input (input[0]) needs wrapping.
+    data_to_patch: list[onnx.NodeProto] = [
+        n for n in model.graph.node
+        if n.op_type == "Resize" and n.input and not _already_cast_fp32(n.input[0])
+    ]
+
+    # Collect Resize nodes whose scales input (input[2]) needs a fp16→fp32 cast.
+    # Only patch when input[2] is non-empty (scales mode) and not already fp32.
+    scales_to_patch: list[onnx.NodeProto] = [
+        n for n in model.graph.node
+        if n.op_type == "Resize"
+        and len(n.input) > 2 and n.input[2]
+        and not _already_cast_fp32(n.input[2])
+    ]
+
+    if not data_to_patch and not scales_to_patch:
         return
 
-    patched_ids = {id(n) for n in to_patch}
+    data_ids   = {id(n) for n in data_to_patch}
+    scales_ids = {id(n) for n in scales_to_patch}
+
     final_nodes: list[onnx.NodeProto] = []
-    counter = 0
+    data_counter   = 0
+    scales_counter = 0
 
     for node in model.graph.node:
-        if id(node) not in patched_ids:
+        need_data   = id(node) in data_ids
+        need_scales = id(node) in scales_ids
+
+        if not need_data and not need_scales:
             final_nodes.append(node)
             continue
 
-        data_in  = node.input[0]
-        data_out = node.output[0]
-        suffix   = f"_resize{counter}"
-        fp32_in  = data_in  + suffix + "_f32"
-        fp32_out = data_out + suffix + "_f32"
-        counter += 1
+        if need_data:
+            data_in  = node.input[0]
+            data_out = node.output[0]
+            fp32_in  = data_in  + f"_resize{data_counter}_f32"
+            fp32_out = data_out + f"_resize{data_counter}_f32"
+            data_counter += 1
+            final_nodes.append(helper.make_node(
+                "Cast", inputs=[data_in], outputs=[fp32_in],
+                to=TensorProto.FLOAT, name=node.name + "/cast_in",
+            ))
+            node.input[0]  = fp32_in
+            node.output[0] = fp32_out
 
-        final_nodes.append(helper.make_node(
-            "Cast", inputs=[data_in], outputs=[fp32_in],
-            to=TensorProto.FLOAT, name=node.name + "/cast_in",
-        ))
-        node.input[0]  = fp32_in
-        node.output[0] = fp32_out
+        if need_scales:
+            scales_in = node.input[2]
+            scales_f32 = scales_in + f"_scales{scales_counter}_f32"
+            scales_counter += 1
+            final_nodes.append(helper.make_node(
+                "Cast", inputs=[scales_in], outputs=[scales_f32],
+                to=TensorProto.FLOAT, name=node.name + "/cast_scales",
+            ))
+            node.input[2] = scales_f32
+
         final_nodes.append(node)
-        final_nodes.append(helper.make_node(
-            "Cast", inputs=[fp32_out], outputs=[data_out],
-            to=TensorProto.FLOAT16, name=node.name + "/cast_out",
-        ))
+
+        if need_data:
+            final_nodes.append(helper.make_node(
+                "Cast", inputs=[fp32_out], outputs=[data_out],
+                to=TensorProto.FLOAT16, name=node.name + "/cast_out",
+            ))
 
     del model.graph.node[:]
     model.graph.node.extend(final_nodes)
@@ -665,7 +692,10 @@ def fix_resize_fp16_input(path: str) -> None:
         all_tensors_to_one_file=True,
         convert_attribute=False,
     )
-    print(f"  Wrapped {len(to_patch)} Resize node(s) with Cast(fp16↔fp32) pairs")
+    if data_to_patch:
+        print(f"  Wrapped {len(data_to_patch)} Resize data input(s) with Cast(fp16↔fp32) pairs")
+    if scales_to_patch:
+        print(f"  Wrapped {len(scales_to_patch)} Resize scales input(s) with Cast(fp16→fp32)")
 
 
 def cleanup_stale_component_files(path: str) -> None:

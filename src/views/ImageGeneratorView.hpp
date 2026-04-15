@@ -83,18 +83,6 @@ public:
     bool showLoraPanel      = false;
     int  activeLoraScaleIdx = -1;               // Which scale field has keyboard focus (-1 = none)
 
-    // ── Resolution selection ──────────────────────────────────────────────────
-    // Common SD resolutions (width, height). Index 0 is the default (512×512).
-    // The user can cycle through these; the selected dimensions are injected into
-    // GenerationParams.width/height before launching the pipeline.
-    static constexpr std::pair<int,int> kResolutions[] = {
-        {512,  512},
-        {768,  768},
-        {1024, 1024},
-    };
-    static constexpr int kNumResolutions = 3;
-    int selectedResolutionIdx = 0;
-
     // ── Hit rects (written during render, read by controller) ─────────────────
     // Laid out by render(); the controller checks mouse positions against these.
     sf::FloatRect positiveField;
@@ -109,8 +97,6 @@ public:
     sf::FloatRect              btnLoraPanel;
     std::vector<sf::FloatRect> loraRowToggleRects; // per-lora: checkbox+name area
     std::vector<sf::FloatRect> loraScaleRects;     // per-lora: scale text field
-    sf::FloatRect btnResolutionPrev;
-    sf::FloatRect btnResolutionNext;
     sf::FloatRect stepsSliderTrack;
     sf::FloatRect cfgSliderTrack;
     sf::FloatRect imagesSliderTrack;
