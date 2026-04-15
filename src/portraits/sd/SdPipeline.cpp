@@ -156,6 +156,7 @@ void runPipeline(const std::string& prompt,
         }
     });
 
+    std::exception_ptr denoiseException;
     try {
         for (int i = 0; i < num_images; ++i) {
             if (cancelToken && cancelToken->load()) break;
@@ -197,11 +198,19 @@ void runPipeline(const std::string& prompt,
         }
         Logger::info("=== Pipeline complete in " + fmtMs(tTotal) + " ===");
     } catch (const Ort::Exception&) {
-        Logger::info("Generation cancelled mid-step (ORT terminated).");
+        if (cancelToken && cancelToken->load()) {
+            Logger::info("Generation cancelled mid-step (ORT terminated).");
+        } else {
+            Logger::error("ORT exception during inference (not a cancellation).");
+            denoiseException = std::current_exception();
+        }
     }
 
     pipelineDone.store(true);
     watcher.join();
+
+    if (denoiseException)
+        std::rethrow_exception(denoiseException);
 }
 
 } // namespace sd

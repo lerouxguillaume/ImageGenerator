@@ -26,10 +26,19 @@ void ImageGeneratorPresenter::beginGeneration(ImageGeneratorView& view) const
     view.cancelToken.store(false);
     view.generationStep.store(0);
     view.resultLoaded = false;
+    view.generationFailed.store(false);
+    view.generationErrorMsg.clear();
 }
 
 void ImageGeneratorPresenter::finishGeneration(ImageGeneratorView& view) const
 {
     view.generating = false;
     view.generationDone.store(false);
+}
+
+void ImageGeneratorPresenter::failGeneration(ImageGeneratorView& view) const
+{
+    view.generating = false;
+    view.generationDone.store(false);
+    // generationFailed stays true — the view renders the error banner until the next run
 }

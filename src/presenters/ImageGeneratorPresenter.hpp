@@ -21,4 +21,8 @@ public:
 
     // Switch the view back to idle state and trigger a result image reload.
     void finishGeneration(ImageGeneratorView& view) const;
+
+    // Switch the view back to idle state after a pipeline error.
+    // Leaves generationFailed=true so the view renders the error banner.
+    void failGeneration(ImageGeneratorView& view) const;
 };

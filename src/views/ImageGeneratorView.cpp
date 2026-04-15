@@ -202,6 +202,21 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
         win.draw(sprite);
     }
 
+    // Error banner — shown when the last generation failed; cleared on next Generate
+    if (generationFailed.load() && !generating) {
+        std::string msg = generationErrorMsg;
+        constexpr size_t kMaxLen = 120;
+        if (msg.size() > kMaxLen)
+            msg = msg.substr(0, kMaxLen) + "... (see log)";
+
+        constexpr float bannerW = 480.f;
+        constexpr float bannerH = 54.f;
+        const sf::FloatRect banner = {cx - bannerW / 2.f, y, bannerW, bannerH};
+        drawRect(win, banner, Col::Panel2, Col::RedLt, 1.f);
+        drawTextC(win, font, "Generation failed", Col::RedLt, cx, banner.top + 8.f, 12, true);
+        drawTextC(win, font, msg, Col::Muted, cx, banner.top + 28.f, 10);
+    }
+
     // Model dropdown list (drawn on top of all other UI)
     if (showModelDropdown && !availableModels.empty()) {
         constexpr float itemH   = 22.f;

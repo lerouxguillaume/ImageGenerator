@@ -1,5 +1,6 @@
 #include "ImageGeneratorController.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
+#include "../managers/Logger.hpp"
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
@@ -537,19 +538,23 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     }
 
     if (view.generating && view.generationDone.load()) {
-        presenter.finishGeneration(view);
-        // For multi-image runs the last image has an _N suffix; single image has no suffix.
-        std::string pathToLoad = view.lastImagePath;
-        const int n = view.generationParams.numImages;
-        if (n > 1) {
-            const auto dot = view.lastImagePath.rfind('.');
-            const std::string idx = std::to_string(n);
-            pathToLoad = (dot == std::string::npos)
-                ? view.lastImagePath + "_" + idx
-                : view.lastImagePath.substr(0, dot) + "_" + idx + view.lastImagePath.substr(dot);
+        if (view.generationFailed.load()) {
+            presenter.failGeneration(view);
+        } else {
+            presenter.finishGeneration(view);
+            // For multi-image runs the last image has an _N suffix; single image has no suffix.
+            std::string pathToLoad = view.lastImagePath;
+            const int n = view.generationParams.numImages;
+            if (n > 1) {
+                const auto dot = view.lastImagePath.rfind('.');
+                const std::string idx = std::to_string(n);
+                pathToLoad = (dot == std::string::npos)
+                    ? view.lastImagePath + "_" + idx
+                    : view.lastImagePath.substr(0, dot) + "_" + idx + view.lastImagePath.substr(dot);
+            }
+            if (view.resultTexture.loadFromFile(pathToLoad))
+                view.resultLoaded = true;
         }
-        if (view.resultTexture.loadFromFile(pathToLoad))
-            view.resultLoaded = true;
     }
 }
 
@@ -782,15 +787,28 @@ void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
         std::atomic<bool>* cancel     = &view.cancelToken;
         std::atomic<int>*  idPtr      = &view.generationId;
         std::atomic<int>*  imgNum     = &view.generationImageNum;
+        std::atomic<bool>* failed     = &view.generationFailed;
+        std::string*       errorMsg   = &view.generationErrorMsg;
 
         view.generationTotalImages.store(params.numImages);
 
         std::thread generationThread([prompt, negPrompt, outPathBase, params, modelDir,
-                                      done, step, cancel, idPtr, imgNum, myId]() {
+                                      done, step, cancel, idPtr, imgNum, myId,
+                                      failed, errorMsg]() {
             // Models and text encoding happen once inside generateFromPrompt;
             // the multi-image loop runs there too, so no reload per image.
-            PortraitGeneratorAi::generateFromPrompt(
-                prompt, negPrompt, outPathBase, params, modelDir, step, imgNum, cancel);
+            try {
+                PortraitGeneratorAi::generateFromPrompt(
+                    prompt, negPrompt, outPathBase, params, modelDir, step, imgNum, cancel);
+            } catch (const std::exception& e) {
+                Logger::error("Generation failed: " + std::string(e.what()));
+                *errorMsg = e.what();
+                failed->store(true);
+            } catch (...) {
+                Logger::error("Generation failed: unknown error");
+                *errorMsg = "Unknown error during generation. See log for details.";
+                failed->store(true);
+            }
 
             if (idPtr->load() == myId)
                 done->store(true);

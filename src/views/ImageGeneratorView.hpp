@@ -53,6 +53,11 @@ public:
     // to discard stale completion signals from a previous run.
     std::atomic<int> generationId{0};
 
+    // Set by the background thread (before generationDone) when the pipeline throws.
+    // Safe to read after acquiring on generationDone (seq_cst store ordering).
+    std::atomic<bool> generationFailed{false};
+    std::string       generationErrorMsg;
+
     // ── Prompt enhancement ────────────────────────────────────────────────────
     bool              promptEnhancerAvailable = false; // set by controller after loading
     bool              llmLoading    = false;            // set while the LLM model is loading async
