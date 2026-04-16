@@ -16,8 +16,18 @@ Handled by:
 
 # Model selection
 
-If `model.json` missing:
-→ default = SD1.5
+Configured via `model.json` at the model root:
+
+```json
+{ "type": "sdxl" }
+```
+
+If `model.json` is absent → default = SD1.5.
+
+The `type` field drives:
+- Output resolution (512×512 for SD1.5, 1024×1024 for SDXL)
+- Number of CLIP text encoders (1 for SD1.5, 2 for SDXL)
+- UNet input shape (latent channels and conditioning dimensions)
 
 ---
 
