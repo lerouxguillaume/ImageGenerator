@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(GuildMaster CXX)
+project(ImageGenerator CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,8 +60,8 @@ endif()
 if(APPLE)
     add_executable(image_generator MACOSX_BUNDLE ${SOURCES})
     set_target_properties(image_generator PROPERTIES
-        MACOSX_BUNDLE_BUNDLE_NAME      "GuildMaster"
-        MACOSX_BUNDLE_GUI_IDENTIFIER   "com.guildmaster.app"
+        MACOSX_BUNDLE_BUNDLE_NAME      "ImageGenerator"
+        MACOSX_BUNDLE_GUI_IDENTIFIER   "com.imageGenerator.app"
         MACOSX_BUNDLE_ICON_FILE        "icon.icns")
 else()
     add_executable(image_generator ${SOURCES})

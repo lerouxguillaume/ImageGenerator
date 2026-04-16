@@ -1,7 +1,7 @@
 # System Overview
 
 ## What this file explains
-High-level understanding of the GuildMaster image generation system.
+High-level understanding of the ImageGenerator image generation system.
 
 ## When to use this
 - First contact with the project
@@ -9,7 +9,7 @@ High-level understanding of the GuildMaster image generation system.
 - Before diving into specific subsystems
 
 ## System purpose
-GuildMaster generates character portraits using a fully local Stable Diffusion pipeline implemented in C++ on top of ONNX Runtime.
+ImageGenerator generates character portraits using a fully local Stable Diffusion pipeline implemented in C++ on top of ONNX Runtime.
 
 No Python is used at runtime. The system supports SD 1.5 and SDXL models and allows runtime LoRA application and optional LLM-based prompt enhancement.
 

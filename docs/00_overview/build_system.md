@@ -1,7 +1,7 @@
 # Build System
 
 ## What this file explains
-CMake configuration, build flags, and platform-specific build instructions for GuildMaster.
+CMake configuration, build flags, and platform-specific build instructions for ImageGenerator.
 
 ## When to use this
 - Setting up a new build environment

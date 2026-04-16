@@ -1,6 +1,6 @@
-# GuildMaster
+# ImageGenerator
 
-A fantasy guild-management game with an AI portrait generator built in. Character portraits are generated locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required.
+Character portraits are generated locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required.
 
 Built with C++17, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceleration via CUDA or DirectML.
 

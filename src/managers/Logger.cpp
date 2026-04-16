@@ -24,7 +24,7 @@ static void writeLine(const std::string& line) {
 
 void Logger::init(const std::string& path) {
     s_logFile.open(path, std::ios::out | std::ios::trunc);
-    writeLine("=== Guild Master log — " + currentTimestamp() + " ===");
+    writeLine("=== Image generation log — " + currentTimestamp() + " ===");
 }
 
 void Logger::info(const std::string& msg) {
