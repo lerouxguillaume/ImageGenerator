@@ -1,22 +1,18 @@
 # UI Architecture
 
-## What this file explains
-UI system structure.
+SFML-based retained UI system.
 
-## When to use this
-- UI changes
+---
 
-## Key invariants
-- MVC separation
+# Structure
 
-## Mental model
-View renders, Controller updates.
+- View: rendering only
+- Controller: input + logic
+- Widgets: self-contained components
 
-## Implementation details
-- MultiLineTextArea widget
+---
 
-## Common pitfalls
-- Mixing logic in view
+# Key principle
 
-## Related files
-- multiline_textarea.md
+Widgets own their state fully.
+No external cursor management.

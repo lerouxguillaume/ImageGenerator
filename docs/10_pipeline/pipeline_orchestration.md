@@ -1,33 +1,51 @@
 # Pipeline Orchestration
 
-## What this file explains
-How the full SD pipeline executes.
+Main entry:
+- `sd::runPipeline()`
 
-## When to use this
-- Understanding generation flow
-- Debugging pipeline issues
+---
 
-## Key invariants
-- Order: tokenize → encode → UNet loop → VAE
-- CFG uses 2 passes
-- Scheduler controls sigma progression
+# Execution stages
 
-## Mental model
-Pipeline is a deterministic loop over noise refinement.
+1. Prompt preparation
+2. Text encoding (CLIP / SDXL dual encoder)
+3. Latent initialization
+4. Denoising loop
+5. CFG guidance
+6. Scheduler step updates
+7. VAE decode
+8. Image output
 
-## Implementation details
-- Entry: SdPipeline::runPipeline
-- Calls:
-    - encodeText
-    - runUNetCFG
-    - decodeLatent
+---
 
-## Common pitfalls
-- Wrong dtype → silent corruption
-- Skipping CFG → bad images
+# Denoising loop
 
-## Related files
-- [scheduler.md](scheduler.md)
-- [cancellation.md](cancellation.md)
-- [dtype_handling.md](dtype_handling.md)
-- [sdxl_specifics.md](sdxl_specifics.md)
+For each timestep:
+
+- Run UNet (uncond)
+- Run UNet (cond)
+- Apply CFG blending
+- Update latent
+
+---
+
+# Context object
+
+All state is stored in:
+- `GenerationContext`
+
+Includes:
+- latents
+- embeddings
+- model sessions
+- dtype flags
+- cancellation state
+
+---
+
+# Determinism
+
+Pipeline is deterministic given:
+- same seed
+- same scheduler
+- same model + LoRA set

@@ -1,23 +1,24 @@
-# LLM Overview
+# LLM Prompt Enhancement
 
-## What this file explains
-Prompt enhancement system.
+Optional system using ORT GenAI.
 
-## When to use this
-- Prompt refinement
+---
 
-## Key invariants
-- Stateless transform()
+# Architecture
 
-## Mental model
-LLM rewrites prompt + negative
+- IPromptEnhancer interface
+- OrtLlmEnhancer implementation
+- NullPromptEnhancer fallback
 
-## Implementation details
-- IPromptEnhancer
-- OrtLlmEnhancer
+---
 
-## Common pitfalls
-- JSON parsing failure
+# Mode
 
-## Related files
-- prompt_transform.md
+Stateless transform:
+- input prompt → output prompt + negative prompt
+
+---
+
+# Rules
+
+- Do NOT add an `enhance()` method to `IPromptEnhancer` — `transform()` is the only mode; empty `instruction` signals generic improvement and is handled internally

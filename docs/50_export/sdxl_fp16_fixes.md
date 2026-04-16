@@ -1,23 +1,26 @@
-# SDXL fp16 Fixes
+# SDXL FP16 Fixes
 
-## What this file explains
-Why SDXL exports break and how to fix them.
+SDXL export introduces fp32 contamination issues.
 
-## When to use this
-- ORT dtype errors
+---
 
-## Key invariants
-- Mixed fp32/fp16 breaks ORT
+# Problems
 
-## Mental model
-Fix graph inconsistencies.
+- attention upcasting
+- timestep embedding fp32
+- Resize operator dtype mismatch
 
-## Implementation details
-- fix_fp32_constants
-- fix_resize_fp16_input
+---
 
-## Common pitfalls
-- Resize requires fp32 scales
+# Fix strategy
 
-## Related files
-- export_overview.md
+Two phases:
+
+1. Pre-export patching
+2. Post-export ONNX graph fixes
+
+---
+
+# Result
+
+Ensures pure fp16-compatible graph for ORT.

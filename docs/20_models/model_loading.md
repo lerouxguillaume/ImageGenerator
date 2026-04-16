@@ -1,29 +1,30 @@
 # Model Loading
 
-## What this file explains
-How models are detected and loaded.
+Handled by:
+- `SdLoader.cpp`
 
-## When to use this
-- Model fails to load
-- Wrong model behavior
+---
 
-## Key invariants
-- model.json defines type
-- Missing = SD1.5 fallback
+# Responsibilities
 
-## Mental model
-Loader builds ModelConfig then sessions.
+- Parse `model.json`
+- Detect model type
+- Load ONNX sessions
+- Build ModelInstance
 
-## Implementation details
-- loadModelConfig()
-- loadModels()
-- builds GenerationContext
+---
 
-## Common pitfalls
-- Missing files
-- Wrong model type
+# Model selection
 
-## Related files
-- [model_cache.md](model_cache.md) — session reuse after loading
-- [adding_new_model.md](adding_new_model.md) — extending loadModelConfig and loadModels
-- [../10_pipeline/sdxl_specifics.md](../10_pipeline/sdxl_specifics.md) — SDXL-specific session loading
+If `model.json` missing:
+→ default = SD1.5
+
+---
+
+# Session creation
+
+Each model produces:
+- UNet session
+- VAE session
+- CLIP session(s)
+- optional SDXL encoder2 session

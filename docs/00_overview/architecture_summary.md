@@ -1,113 +1,83 @@
 # Architecture Summary
 
-## What this file explains
-How the codebase is structured and how components interact.
+Image generator is structured around a strict separation of:
 
-## When to use this
-- Locating where to implement a change
-- Understanding module boundaries
-- Avoiding architectural violations
-
----
-
-## High-level structure
-
-The application follows a modular architecture with clear separation between UI, orchestration, and computation.
-
-### Layers
-
-- **View (SFML)**  
-  Rendering only. No logic.
-
-- **Controller**  
-  Handles input, triggers actions, manages state transitions.
-
-- **Presenter**  
-  Stateless transformations applied to views.
+- UI layer (SFML)
+- Control layer (controllers)
+- Presentation layer (state mutation)
+- Inference layer (ONNX runtime pipeline)
 
 ---
 
-## Core modules
+# MVC structure
 
-### Pipeline (`src/portraits/sd/`)
-Responsible for image generation.
+View:
+- Pure rendering
+- No business logic
+- SFML drawing only
 
-Subcomponents:
-- Scheduler — timestep / sigma progression
-- Text encoder — converts prompt to embeddings
-- UNet — denoising loop with CFG
-- VAE — latent → image decoding
+Controller:
+- Input handling
+- State transitions
+- Triggering SD generation
 
----
-
-### Model system
-
-- Loads ONNX models
-- Builds execution sessions
-- Handles caching via ModelManager
+Presenter:
+- Stateless mutations on view state
+- Formatting and UI updates
 
 ---
 
-### LoRA system
+# SD pipeline architecture
 
-- Parses LoRA weights
-- Matches keys to ONNX tensors
-- Applies deltas before session creation
+The pipeline is a linear graph:
 
----
+CLIP → UNet (CFG loop) → Scheduler → VAE → Image
 
-### LLM subsystem (`src/llm/`)
-
-- Optional
-- Transforms prompts via local model
-- Stateless interface (`transform()`)
+Each component is:
+- stateless per call
+- driven by GenerationContext
+- cached via ModelManager
 
 ---
 
-### UI system (`src/views/`, `src/ui/widgets/`)
+# Model system architecture
 
-- SFML-based rendering
-- Custom widgets (e.g. MultiLineTextArea)
-- Controller-driven interaction
+Two-layer model system:
 
----
+1. SdLoader
+  - Resolves model.json
+  - Builds ModelInstance
 
-## Data flow
-
-User input  
-→ Controller  
-→ (optional) LLM transform  
-→ Pipeline  
-→ ModelManager (load/cache)  
-→ UNet loop  
-→ VAE decode  
-→ Image output
+2. ModelManager
+  - Caches ModelInstances by ModelCacheKey
+  - Prevents redundant session creation
 
 ---
 
-## Key abstractions
+# LoRA architecture
 
-- `GenerationContext` — runtime state for pipeline
-- `ModelInstance` — loaded sessions
-- `ModelCacheKey` — cache identity
-- `LoraInjector` — LoRA application engine
+LoRA injection occurs at model load time:
 
----
+- ONNX external initializer patching
+- weight merging via safetensors
+- suffix-based tensor matching
 
-## Architectural invariants
-
-- No business logic in views
-- Pipeline is stateless per run
-- ModelManager owns session lifecycle
-- LoRA is resolved before session creation
+No runtime graph mutation occurs.
 
 ---
 
-## Related files
+# Execution isolation model
 
-- [system_overview.md](system_overview.md)
-- [build_system.md](build_system.md)
-- [../10_pipeline/pipeline_orchestration.md](../10_pipeline/pipeline_orchestration.md)
-- [../10_pipeline/cancellation.md](../10_pipeline/cancellation.md)
-- [../10_pipeline/gpu_fallback.md](../10_pipeline/gpu_fallback.md)
-- [../20_models/model_loading.md](../20_models/model_loading.md)
+Each generation run:
+- clones session options
+- resets run_opts
+- isolates cancellation state
+
+---
+
+# Key design decision
+
+The system prioritizes:
+- determinism over flexibility
+- caching over recomputation
+- static graphs over dynamic graph editing
