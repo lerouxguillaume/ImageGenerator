@@ -80,9 +80,12 @@ struct JsonStreamTracker {
 
 static std::string modelTypeGuidance(ModelType model) {
     if (model == ModelType::SDXL)
-        return "STYLE: SDXL — write natural-language descriptive sentences forming a coherent "
-               "scene. Avoid bare keyword lists.";
-    return "STYLE: SD 1.5 — write short comma-separated keywords and tags. Avoid long sentences.";
+        return "STYLE: SDXL — write natural-language descriptive sentences forming a coherent scene. "
+               "Order: subject → attributes → environment → composition → lighting → style → quality. "
+               "Avoid keyword spam; maintain flow and coherence.";
+    return "STYLE: SD 1.5 — write concise comma-separated tags. Order: subject → attributes → "
+               "environment → composition → lighting → style → quality. "
+               "Use strong visual keywords; avoid long sentences.";
 }
 
 static std::string strengthGuidance(float strength) {
@@ -106,26 +109,48 @@ static std::string buildTransformPrompt(const std::string& prompt,
                                         const std::string& instruction,
                                         ModelType          model,
                                         float              strength) {
+    const bool isSDXL = (model == ModelType::SDXL);
+
+    const std::string validExample = isSDXL
+        ? "{\"prompt\":\"A detailed portrait of a woman with soft studio lighting, sharp focus on "
+          "facial features, a clean neutral background, rendered in photorealistic high quality.\","
+          "\"negative_prompt\":\"worst quality, low quality, blurry, bad anatomy, extra limbs, "
+          "deformed face, watermark, text\"}"
+        : "{\"prompt\":\"portrait of a woman, detailed face, soft studio lighting, clean background, "
+          "sharp focus, masterpiece, best quality, highly detailed\","
+          "\"negative_prompt\":\"worst quality, low quality, blurry, bad anatomy, extra limbs, "
+          "deformed, watermark, text, signature\"}";
+
     const std::string sys =
         "You are a JSON generator function for Stable Diffusion prompts. "
         "You do NOT chat, explain, or reason. "
         "You output exactly one JSON object and stop immediately.\n\n"
         + modelTypeGuidance(model) + "\n"
         + strengthGuidance(strength) + "\n\n"
+        "PROMPT STRUCTURE — cover these components in order when relevant:\n"
+        "1. SUBJECT — who or what is depicted\n"
+        "2. ATTRIBUTES — appearance, clothing, pose, expression\n"
+        "3. ENVIRONMENT — setting, background, time of day\n"
+        "4. COMPOSITION — framing, camera angle, shot type (e.g. close-up, wide shot)\n"
+        "5. LIGHTING — cinematic, soft, dramatic, golden hour, etc.\n"
+        "6. STYLE — realism, anime, oil painting, photographic, etc.\n"
+        "7. QUALITY TAGS — masterpiece, best quality, highly detailed, sharp focus\n\n"
+        "NEGATIVE PROMPT RULES:\n"
+        "- Always include base negatives: worst quality, low quality, blurry, bad anatomy.\n"
+        "- Add context-aware negatives (e.g. extra limbs for characters, "
+          "blurry background for landscapes, watermark, text).\n\n"
         "RULES:\n"
-        "- Preserve the subject and original intent.\n"
+        "- Preserve the subject and original intent exactly.\n"
         "- Do not add elements unrelated to the subject or instruction.\n"
         "- Do not remove key elements from the original prompt.\n"
-        "- Avoid repeating the same words.\n"
-        "- negative_prompt must include: worst quality, low quality, blurry, bad anatomy.\n\n"
+        "- Do not repeat the same words.\n"
+        "- Do not turn the prompt into an explanation or description of intent.\n\n"
         "STRICT COMPLETION RULE:\n"
         "- Output exactly one JSON object.\n"
         "- Stop immediately after the closing brace.\n"
-        "- No markdown, no code fences, no explanations, no text before or after.\n"
-        "- Do not output multiple JSON objects.\n\n"
+        "- No markdown, no code fences, no explanations, no text before or after.\n\n"
         "VALID output (the only acceptable form):\n"
-        "{\"prompt\":\"a knight in shining armour, dramatic lighting, oil painting style\","
-        "\"negative_prompt\":\"worst quality, low quality, blurry, bad anatomy, watermark\"}\n\n"
+        + validExample + "\n\n"
         "INVALID output (will be rejected — do NOT produce this):\n"
         "Here is the improved prompt: "
         "{\"prompt\":\"...\",\"negative_prompt\":\"...\"}";
