@@ -63,8 +63,9 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         const float maxImgW = w - 16.f;
         const float maxImgH = h - 80.f; // leave room for generate button below
         const auto  texSize = resultTexture.getSize();
-        const float scale   = std::min(maxImgW / static_cast<float>(texSize.x),
-                                       maxImgH / static_cast<float>(texSize.y));
+        const float scale   = std::min(1.f,
+                                       std::min(maxImgW / static_cast<float>(texSize.x),
+                                                maxImgH / static_cast<float>(texSize.y)));
         const float imgW    = static_cast<float>(texSize.x) * scale;
         const float imgH    = static_cast<float>(texSize.y) * scale;
         const float imgX    = cx - imgW / 2.f;

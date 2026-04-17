@@ -63,6 +63,7 @@ constexpr int PAD      = 8;    // Standard inner padding / margin
 // ─── Image generator two-column layout ───────────────────────────────────────
 constexpr float MENU_BAR_H   = 40.f;  // Top menu bar height
 constexpr float LLM_BAR_H    = 44.f;  // Bottom LLM bar height (collapsed)
+constexpr float LLM_EXPANDED_H = 80.f; // Extra height added to LLM bar when expanded
 constexpr float LEFT_PANEL_W = 460.f; // Settings panel width
 constexpr float BODY_Y       = MENU_BAR_H;
 constexpr float BODY_H_FULL  = WIN_H - MENU_BAR_H;             // body when no LLM bar

@@ -28,9 +28,16 @@ mkdir -p "$DEPS_DIR" "$BUILD_DIR" "$INSTALL_DIR"
 
 # ── Prerequisites ──────────────────────────────────────────────────────────────
 echo "Checking prerequisites..."
-for tool in x86_64-w64-mingw32-g++ cmake wget unzip gendef; do
-    command -v "$tool" >/dev/null || { echo "Missing: $tool. Install with: sudo apt install mingw-w64 cmake wget unzip mingw-w64-tools"; exit 1; }
+for tool in cmake wget unzip gendef; do
+    command -v "$tool" >/dev/null || { echo "Missing: $tool. Install with: sudo apt install cmake wget unzip mingw-w64-tools"; exit 1; }
 done
+# C++20 std::jthread / std::stop_token require the POSIX thread model.
+if ! command -v x86_64-w64-mingw32-g++-posix >/dev/null 2>&1; then
+    echo "Missing: x86_64-w64-mingw32-g++-posix (POSIX thread model required for C++20)"
+    echo "Install with: sudo apt install gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix"
+    echo "Or set as default: sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix"
+    exit 1
+fi
 
 # ── SFML ──────────────────────────────────────────────────────────────────────
 SFML_DIR="$DEPS_DIR/SFML-$SFML_VERSION"
@@ -133,7 +140,7 @@ if [ ! -f "$SQLITE_DIR/sqlite3.h" ]; then
     unzip -q "$DEPS_DIR/sqlite.zip" -d "$DEPS_DIR/sqlite_tmp"
     cp "$DEPS_DIR"/sqlite_tmp/*/sqlite3.{c,h} "$SQLITE_DIR/"
     rm -rf "$DEPS_DIR/sqlite_tmp" "$DEPS_DIR/sqlite.zip"
-    x86_64-w64-mingw32-gcc -O2 -c "$SQLITE_DIR/sqlite3.c" -o "$SQLITE_DIR/sqlite3.o"
+    x86_64-w64-mingw32-gcc-posix -O2 -c "$SQLITE_DIR/sqlite3.c" -o "$SQLITE_DIR/sqlite3.o"
     x86_64-w64-mingw32-ar rcs "$SQLITE_DIR/libsqlite3.a" "$SQLITE_DIR/sqlite3.o"
 fi
 
@@ -152,9 +159,11 @@ if [ ! -f "$OPENCV_DIR/lib/cmake/opencv4/OpenCVConfig.cmake" ]; then
     cmake -S "$OPENCV_SRC" -B "$DEPS_DIR/opencv-build" \
         -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake" \
         -DCMAKE_INSTALL_PREFIX="$OPENCV_DIR" \
-        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_SHARED_LIBS=OFF \
         -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF \
-        -DWITH_IPP=OFF -DWITH_ITT=OFF \
+        -DWITH_IPP=OFF -DWITH_ITT=OFF -DWITH_OPENMP=OFF \
+        -DWITH_PROTOBUF=OFF -DBUILD_PROTOBUF=OFF \
+        -DWITH_ADE=OFF \
         -DBUILD_LIST="core,imgproc,imgcodecs" \
         -DCMAKE_BUILD_TYPE=Release || { echo "OpenCV cmake configure failed"; exit 1; }
 

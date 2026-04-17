@@ -13,7 +13,7 @@ void PortraitGeneratorAi::generatePortrait(const Race race,
     auto now       = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
     const std::string outputPath = "assets/generated/portrait_" + std::to_string(timestamp) + ".png";
-    sd::runPipeline(prompt, neg_prompt, outputPath, params, "models", progressStep, nullptr, nullptr);
+    sd::runPipeline(prompt, neg_prompt, outputPath, params, "models", progressStep, nullptr);
 }
 
 void PortraitGeneratorAi::generateFromPrompt(const std::string& prompt,
@@ -23,7 +23,7 @@ void PortraitGeneratorAi::generateFromPrompt(const std::string& prompt,
                                              const std::string& modelDir,
                                              std::atomic<int>*  progressStep,
                                              std::atomic<int>*  currentImage,
-                                             std::atomic<bool>* cancelToken) {
+                                             std::stop_token    stopToken) {
     sd::runPipeline(prompt, negativePrompt, outputPath, params, modelDir,
-                    progressStep, currentImage, cancelToken);
+                    progressStep, currentImage, std::move(stopToken));
 }

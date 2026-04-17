@@ -45,6 +45,7 @@ private:
 
     std::string             text_;
     int                     cursor_      = 0;
+    int                     prevCursor_  = 0;
     bool                    active_      = false;
     bool                    allSelected_ = false;
     std::vector<VisualLine> lines_;       // rebuilt each render() call

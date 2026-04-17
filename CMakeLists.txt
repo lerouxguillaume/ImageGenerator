@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(ImageGenerator CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(USE_CUDA  "Enable CUDA GPU acceleration via ONNX Runtime" OFF)

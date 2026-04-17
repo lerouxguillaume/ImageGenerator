@@ -1,6 +1,7 @@
 #pragma once
 #include <future>
 #include <memory>
+#include <thread>
 #include <SFML/Graphics.hpp>
 #include "../config/AppConfig.hpp"
 #include "../llm/IPromptEnhancer.hpp"
@@ -50,6 +51,9 @@ private:
 
     // Async LLM model load
     std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;
+
+    // Generation thread (jthread: auto-requests-stop + joins on destruction/reassignment)
+    std::jthread generationThread_;
 
     // Async folder browser
     enum class BrowseTarget { ModelDir, OutputDir, LlmDir, LoraDir };

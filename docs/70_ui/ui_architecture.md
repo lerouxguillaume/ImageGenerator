@@ -13,13 +13,15 @@ SFML-based retained UI system with a component panel architecture.
 │  SettingsPanel           │  ResultPanel                     │
 │  (460px wide)            │  (820px wide)                    │
 │                          │                                  │
-│  model / lora            │  generated image (scaled to fit) │
-│  positive prompt         │                                  │
-│  negative prompt         │  [Generate]                      │
-│  steps / cfg / images    │  progress bar / cancel           │
-│  seed                    │  error banner                    │
-├──────────────────────────┴──────────────────────────────────┤  y=756
-│  LlmBar (visible when LLM available or loading)             │  h=44
+│  model / lora            │  generated image (native size,   │
+│  positive prompt         │   downscaled only if too large)  │
+│  negative prompt         │                                  │
+│  steps / cfg / images    │  [Generate]                      │
+│  seed                    │  progress bar / cancel           │
+│                          │  error banner                    │
+├──────────────────────────┴──────────────────────────────────┤  y varies
+│  LlmBar collapsed (visible when LLM available or loading)   │  h=44
+│  LlmBar expanded (instruction area below toggle row)        │  h=124
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,8 +29,13 @@ Layout constants (`src/enum/constants.hpp`):
 - `MENU_BAR_H = 40` — top bar height
 - `LEFT_PANEL_W = 460` — SettingsPanel width
 - `LLM_BAR_H = 44` — bottom bar height (collapsed)
-- `BODY_H_FULL = 760` — body height without LLM bar
-- `BODY_H_LLM = 716` — body height with LLM bar
+- `LLM_EXPANDED_H = 80` — extra height added when LLM bar is expanded
+- `BODY_H_FULL = 760` — body height without LLM bar (compile-time constant)
+
+Body height is computed dynamically in `ImageGeneratorView::render`:
+- No LLM bar: `WIN_H - MENU_BAR_H`
+- LLM bar collapsed: `WIN_H - MENU_BAR_H - LLM_BAR_H`
+- LLM bar expanded: `WIN_H - MENU_BAR_H - LLM_BAR_H - LLM_EXPANDED_H`
 
 ---
 
@@ -50,19 +57,23 @@ Action flags: `backRequested`, `settingsRequested`, `saveConfirmed`, `selectedPr
 
 State: `positiveArea`, `negativeArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
 All params always visible (no Advanced toggle)  
-Tab cycles focus: positive → negative → positive
+Tab cycles focus: positive → negative → positive  
+`positiveArea` shows 4 visible lines (fieldH=86); `negativeArea` shows 3 visible lines (fieldH=68).  
+Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforces this after each handleEvent.
 
 ## `ResultPanel`
 
 State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
-Action flag: `generateRequested`  
-Generate button at bottom of panel; progress overlay covers the image during generation
+Action flags: `generateRequested`, `cancelToken` (set by Cancel button, read+cleared by controller)  
+Generate button at bottom of panel; progress overlay covers the image during generation.  
+Generated image displayed at native pixel size; downscaled only when larger than the panel.
 
 ## `LlmBar`
 
 State: `instructionArea`, `expanded` toggle, `enhanceDone` atomic  
 Action flag: `enhanceRequested`  
-Collapsed: 44px strip. Expanded: 120px overlay panel above the bar.  
+Collapsed: 44px strip. Expanded: bar grows by `LLM_EXPANDED_H` (80px); instruction textarea
+appears below the toggle row (not as a floating overlay).  
 Only rendered when `promptEnhancerAvailable || llmLoading`
 
 ## `SettingsModal`
@@ -114,8 +125,10 @@ Panels set flags; the controller acts on them after the delegation chain:
 if (view.resultPanel.handleEvent(e)) {
     if (view.resultPanel.generateRequested) {
         view.resultPanel.generateRequested = false;
-        launchGeneration(view);   // controller launches the thread
+        launchGeneration(view);   // controller launches the jthread
     }
+    if (view.resultPanel.cancelToken.exchange(false))
+        generationThread_.request_stop();  // bridges Cancel button → jthread stop_token
     return;
 }
 ```

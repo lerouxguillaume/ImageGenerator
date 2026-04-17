@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -48,5 +49,5 @@ public:
                                    const std::string& modelDir = "models",
                                    std::atomic<int>* progressStep = nullptr,
                                    std::atomic<int>* currentImage = nullptr,
-                                   std::atomic<bool>* cancelToken = nullptr);
+                                   std::stop_token   stopToken    = {});
 };

@@ -13,7 +13,7 @@ class SettingsPanel {
 public:
     // ── Prompt fields ─────────────────────────────────────────────────────────
     MultiLineTextArea positiveArea{2000};
-    MultiLineTextArea negativeArea{2000};
+    MultiLineTextArea negativeArea{2000, 3};
 
     // ── Generation parameters ─────────────────────────────────────────────────
     GenerationParams generationParams;

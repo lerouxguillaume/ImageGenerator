@@ -5,8 +5,8 @@
 #include "MultiLineTextArea.hpp"
 
 // Bottom LLM bar (visible only when LLM is available or loading).
-// Collapsed: 44px toggle strip. Expanded: overlay panel above the bar with
-// the instruction textarea and Enhance button.
+// Collapsed: 44px toggle strip. Expanded: bar grows by LLM_EXPANDED_H, showing
+// the instruction textarea below the toggle row.
 class LlmBar {
 public:
     // ── State (written by controller each update()) ───────────────────────────
@@ -34,9 +34,7 @@ public:
     bool handleEvent(const sf::Event& e);
 
 private:
-    sf::FloatRect rect_;        // collapsed bar
-    sf::FloatRect expandedRect_; // overlay panel (computed each render)
-
+    sf::FloatRect rect_;
     sf::FloatRect btnToggle_;
     sf::FloatRect btnEnhance_;
 };

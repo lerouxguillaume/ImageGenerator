@@ -63,7 +63,9 @@ inline cv::Mat latentToImage(const float* img_data, int img_w, int img_h) {
         Logger::info("VAE ch[" + std::to_string(c) + "] range: ["
                      + std::to_string(mn) + ", " + std::to_string(mx) + "]");
     }
+    Logger::info("latentToImage: creating Mat " + std::to_string(img_w) + "x" + std::to_string(img_h));
     cv::Mat img(img_h, img_w, CV_8UC3);
+    Logger::info("latentToImage: starting pixel loop");
     for (int y = 0; y < img_h; ++y)
         for (int x = 0; x < img_w; ++x)
             for (int c = 0; c < 3; ++c) {
@@ -71,7 +73,9 @@ inline cv::Mat latentToImage(const float* img_data, int img_w, int img_h) {
                 val = std::min(std::max((val + 1.0f) / 2.0f, 0.0f), 1.0f) * 255.0f;
                 img.at<cv::Vec3b>(y, x)[c] = static_cast<uint8_t>(val);
             }
+    Logger::info("latentToImage: pixel loop done, calling cvtColor");
     cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
+    Logger::info("latentToImage: cvtColor done, returning");
     return img;
 }
 

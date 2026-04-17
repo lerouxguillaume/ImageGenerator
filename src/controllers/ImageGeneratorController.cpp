@@ -217,28 +217,31 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
 
     std::atomic<bool>* done     = &rp.generationDone;
     std::atomic<int>*  step     = &rp.generationStep;
-    std::atomic<bool>* cancel   = &rp.cancelToken;
     std::atomic<int>*  idPtr    = &rp.generationId;
     std::atomic<int>*  imgNum   = &rp.generationImageNum;
     std::atomic<bool>* failed   = &rp.generationFailed;
     std::string*       errorMsg = &rp.generationErrorMsg;
 
-    std::thread([prompt, negPrompt, outPath, params, modelDir,
-                 done, step, cancel, idPtr, imgNum, myId, failed, errorMsg]() {
-        try {
-            PortraitGeneratorAi::generateFromPrompt(
-                prompt, negPrompt, outPath, params, modelDir, step, imgNum, cancel);
-        } catch (const std::exception& e) {
-            Logger::error("Generation failed: " + std::string(e.what()));
-            *errorMsg = e.what();
-            failed->store(true);
-        } catch (...) {
-            Logger::error("Generation failed: unknown error");
-            *errorMsg = "Unknown error during generation. See log for details.";
-            failed->store(true);
-        }
-        if (idPtr->load() == myId) done->store(true);
-    }).detach();
+    // Assigning a new jthread implicitly request_stop() + join()s the previous one,
+    // ensuring only one pipeline runs at a time and no thread is ever abandoned.
+    generationThread_ = std::jthread(
+        [prompt, negPrompt, outPath, params, modelDir,
+         done, step, idPtr, imgNum, myId, failed, errorMsg]
+        (std::stop_token st) {
+            try {
+                PortraitGeneratorAi::generateFromPrompt(
+                    prompt, negPrompt, outPath, params, modelDir, step, imgNum, std::move(st));
+            } catch (const std::exception& e) {
+                Logger::error("Generation failed: " + std::string(e.what()));
+                *errorMsg = e.what();
+                failed->store(true);
+            } catch (...) {
+                Logger::error("Generation failed: unknown error");
+                *errorMsg = "Unknown error during generation. See log for details.";
+                failed->store(true);
+            }
+            if (idPtr->load() == myId) done->store(true);
+        });
 }
 
 void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
@@ -362,17 +365,31 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     }
 
     // Panels handle their own events
-    if (view.settingsPanel.handleEvent(e)) return;
+    if (view.settingsPanel.handleEvent(e)) {
+        if (view.settingsPanel.positiveArea.isActive() ||
+            view.settingsPanel.negativeArea.isActive() ||
+            view.settingsPanel.seedInputActive) {
+            view.llmBar.instructionArea.setActive(false);
+        }
+        return;
+    }
 
     if (view.resultPanel.handleEvent(e)) {
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
             launchGeneration(view);
         }
+        if (view.resultPanel.cancelToken.exchange(false))
+            generationThread_.request_stop();
         return;
     }
 
     if (view.llmBar.handleEvent(e)) {
+        if (view.llmBar.instructionArea.isActive()) {
+            view.settingsPanel.positiveArea.setActive(false);
+            view.settingsPanel.negativeArea.setActive(false);
+            view.settingsPanel.seedInputActive = false;
+        }
         if (view.llmBar.enhanceRequested && !view.llmBar.enhancing) {
             view.llmBar.enhanceRequested = false;
             launchEnhancement(view);
@@ -459,26 +476,27 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         view.llmBar.enhanceDone.store(false);
     }
 
-    // Collect generation result
-    if (rp.generating && rp.generationDone.load()) {
-        if (rp.generationFailed.load()) {
+    // Collect generation result — also joins cancelled threads once they finish
+    if (generationThread_.joinable() && rp.generationDone.load()) {
+        generationThread_.join(); // instant: thread already set done before returning
+        rp.generationDone.store(false);
+
+        if (rp.generating) { // false when user cancelled
             rp.generating = false;
-            rp.generationDone.store(false);
-        } else {
-            rp.generating = false;
-            rp.generationDone.store(false);
-            // Multi-image: load the last image (has _N suffix)
-            std::string pathToLoad = rp.lastImagePath;
-            const int n = sp.generationParams.numImages;
-            if (n > 1) {
-                const auto dot = rp.lastImagePath.rfind('.');
-                const std::string idx = std::to_string(n);
-                pathToLoad = (dot == std::string::npos)
-                    ? rp.lastImagePath + "_" + idx
-                    : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
+            if (!rp.generationFailed.load()) {
+                // Multi-image: load the last image (has _N suffix)
+                std::string pathToLoad = rp.lastImagePath;
+                const int n = sp.generationParams.numImages;
+                if (n > 1) {
+                    const auto dot = rp.lastImagePath.rfind('.');
+                    const std::string idx = std::to_string(n);
+                    pathToLoad = (dot == std::string::npos)
+                        ? rp.lastImagePath + "_" + idx
+                        : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
+                }
+                if (rp.resultTexture.loadFromFile(pathToLoad))
+                    rp.resultLoaded = true;
             }
-            if (rp.resultTexture.loadFromFile(pathToLoad))
-                rp.resultLoaded = true;
         }
     }
 

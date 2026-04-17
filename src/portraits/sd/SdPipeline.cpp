@@ -9,9 +9,11 @@
 #include "../ClipTokenizer.hpp"
 #include "../../managers/Logger.hpp"
 #include <filesystem>
+#include <fstream>
+#include <algorithm>
 #include <opencv2/opencv.hpp>
-#include <thread>
 #include <chrono>
+#include <stop_token>
 
 namespace sd {
 
@@ -22,7 +24,7 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
                                               const std::vector<float>& alphas_cumprod,
                                               GenerationContext& ctx,
                                               std::atomic<int>*  progressStep,
-                                              std::atomic<bool>* cancelToken) {
+                                              std::stop_token    stopToken) {
     std::vector<float> x(ctx.latent_size);
     for (auto& v : x) v = randNormal() * sigmas[0];
 
@@ -31,7 +33,7 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
     auto tDenoise = Clock::now();
 
     for (int step = 0; step < num_steps; ++step) {
-        if (cancelToken && cancelToken->load()) {
+        if (stopToken.stop_requested()) {
             Logger::info("Denoising cancelled at step " + std::to_string(step));
             return {};
         }
@@ -94,7 +96,7 @@ void runPipeline(const std::string& prompt,
                  const std::string& modelDir,
                  std::atomic<int>*  progressStep,
                  std::atomic<int>*  currentImage,
-                 std::atomic<bool>* cancelToken) {
+                 std::stop_token    stopToken) {
     auto tTotal = Clock::now();
 
     Logger::info("=== runPipeline ===");
@@ -155,23 +157,16 @@ void runPipeline(const std::string& prompt,
     auto alphas_cumprod = buildAlphasCumprod(cfg.T, cfg.beta_start, cfg.beta_end);
     auto sigmas         = buildKarrasSchedule(alphas_cumprod, num_steps);
 
-    // Watcher thread: calls SetTerminate() on the shared RunOptions as soon as
-    // cancelToken goes true, aborting any in-progress ORT Run() immediately.
-    std::atomic<bool> pipelineDone{false};
-    std::thread watcher([cancelToken, &ctx, &pipelineDone]() {
-        while (!pipelineDone.load()) {
-            if (cancelToken && cancelToken->load()) {
-                ctx.run_opts.SetTerminate();
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
+    // When request_stop() is called on the owning jthread, this callback fires
+    // immediately (no polling delay) and aborts any in-progress ORT Run().
+    std::stop_callback stopCallback(stopToken, [&ctx]() {
+        ctx.run_opts.SetTerminate();
     });
 
     std::exception_ptr denoiseException;
     try {
         for (int i = 0; i < num_images; ++i) {
-            if (cancelToken && cancelToken->load()) break;
+            if (stopToken.stop_requested()) break;
 
             if (currentImage) currentImage->store(i + 1);
             if (progressStep) progressStep->store(0);
@@ -190,9 +185,9 @@ void runPipeline(const std::string& prompt,
             }
 
             Logger::info("--- Image " + std::to_string(i + 1) + "/" + std::to_string(num_images) + " ---");
-            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx, progressStep, cancelToken);
+            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx, progressStep, stopToken);
 
-            if (cancelToken && cancelToken->load()) break;
+            if (stopToken.stop_requested()) break;
 
             float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;
             for (float v : latent) {
@@ -205,21 +200,29 @@ void runPipeline(const std::string& prompt,
                          + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.size())));
 
             auto img = decodeLatent(latent, ctx);
-            cv::imwrite(outPath, img);
-            Logger::info("Image saved: " + outPath);
+            // Normalise separators so cv::imwrite gets a consistent path on Windows.
+            std::string normPath = outPath;
+            std::replace(normPath.begin(), normPath.end(), '\\', '/');
+            std::vector<uchar> encBuf;
+            bool encOk = cv::imencode(".png", img, encBuf);
+            if (encOk) {
+                std::ofstream ofs(normPath, std::ios::binary);
+                ofs.write(reinterpret_cast<const char*>(encBuf.data()),
+                          static_cast<std::streamsize>(encBuf.size()));
+                Logger::info("Image saved: " + normPath);
+            } else {
+                Logger::error("cv::imencode failed for: " + normPath);
+            }
         }
         Logger::info("=== Pipeline complete in " + fmtMs(tTotal) + " ===");
     } catch (const Ort::Exception&) {
-        if (cancelToken && cancelToken->load()) {
+        if (stopToken.stop_requested()) {
             Logger::info("Generation cancelled mid-step (ORT terminated).");
         } else {
             Logger::error("ORT exception during inference (not a cancellation).");
             denoiseException = std::current_exception();
         }
     }
-
-    pipelineDone.store(true);
-    watcher.join();
 
     if (denoiseException)
         std::rethrow_exception(denoiseException);

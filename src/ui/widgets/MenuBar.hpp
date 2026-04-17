@@ -42,6 +42,7 @@ private:
 
     // Hit rects
     sf::FloatRect btnBack_;
+    sf::FloatRect btnQuickSave_;
     sf::FloatRect btnSettings_;
     sf::FloatRect btnPresets_;
     sf::FloatRect              dropdownSaveItem_;     // "Save" (overwrite)

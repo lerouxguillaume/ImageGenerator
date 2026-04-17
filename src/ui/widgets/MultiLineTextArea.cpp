@@ -98,12 +98,14 @@ void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
         if (cursor_ < lines_[l + 1].start) { cursorLine = l; break; }
     }
 
-    // Auto-scroll so cursor stays visible
-    if (active_) {
+    // Auto-scroll so cursor stays visible — only when cursor actually moved,
+    // so manual scroll isn't overridden every frame.
+    if (active_ && cursor_ != prevCursor_) {
         if (cursorLine < scrollLine_) scrollLine_ = cursorLine;
         if (cursorLine >= scrollLine_ + visibleLines_)
             scrollLine_ = cursorLine - visibleLines_ + 1;
     }
+    prevCursor_ = cursor_;
     scrollLine_ = std::clamp(scrollLine_, 0,
                              std::max(0, static_cast<int>(lines_.size()) - visibleLines_));
 

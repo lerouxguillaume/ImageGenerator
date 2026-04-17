@@ -8,8 +8,9 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     // Fill window background
     win.clear(Col::Bg);
 
-    const bool hasLlm = llmBar.promptEnhancerAvailable || llmBar.llmLoading;
-    const float bodyH = hasLlm ? BODY_H_LLM : BODY_H_FULL;
+    const bool  hasLlm = llmBar.promptEnhancerAvailable || llmBar.llmLoading;
+    const float llmH   = hasLlm ? (llmBar.expanded ? LLM_BAR_H + LLM_EXPANDED_H : LLM_BAR_H) : 0.f;
+    const float bodyH  = static_cast<float>(WIN_H) - MENU_BAR_H - llmH;
 
     menuBar.setRect({0.f, 0.f, static_cast<float>(WIN_W), MENU_BAR_H});
     settingsPanel.setRect({0.f, BODY_Y, LEFT_PANEL_W, bodyH});
@@ -20,8 +21,8 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     menuBar.render(win, font);
 
     if (hasLlm) {
-        llmBar.setRect({0.f, static_cast<float>(WIN_H) - LLM_BAR_H,
-                        static_cast<float>(WIN_W), LLM_BAR_H});
+        llmBar.setRect({0.f, static_cast<float>(WIN_H) - llmH,
+                        static_cast<float>(WIN_W), llmH});
         llmBar.render(win, font);
     }
 

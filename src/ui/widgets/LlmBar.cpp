@@ -10,43 +10,43 @@ void LlmBar::setRect(const sf::FloatRect& rect) {
 }
 
 void LlmBar::render(sf::RenderWindow& win, sf::Font& font) {
-    const float x  = rect_.left;
-    const float y  = rect_.top;
-    const float w  = rect_.width;
-    const float h  = rect_.height; // LLM_BAR_H = 44
-    constexpr float pad = static_cast<float>(PAD);
+    const float x = rect_.left;
+    const float y = rect_.top;
+    const float w = rect_.width;
+    constexpr float pad  = static_cast<float>(PAD);
+    constexpr float barH = LLM_BAR_H;
 
-    // Collapsed bar background + top border
+    // Bar background + top border
     drawRect(win, rect_, Col::Panel2);
     drawRect(win, {x, y, w, 1.f}, Col::Border);
 
-    // Toggle button
+    // Toggle button (always in the top barH strip)
     const std::string toggleLabel = expanded ? "v LLM" : "> LLM";
-    btnToggle_ = {x + pad, y + (h - 22.f) / 2.f, 70.f, 22.f};
+    btnToggle_ = {x + pad, y + (barH - 22.f) / 2.f, 70.f, 22.f};
     drawButton(win, btnToggle_, toggleLabel, Col::Panel, expanded ? Col::GoldLt : Col::Muted, false, 11, font);
 
     if (llmLoading) {
-        drawText(win, font, "LLM loading...", Col::Muted, x + pad + 80.f, y + (h - 12.f) / 2.f, 11);
+        drawText(win, font, "LLM loading...", Col::Muted, x + pad + 80.f, y + (barH - 12.f) / 2.f, 11);
         btnEnhance_ = {};
     } else if (promptEnhancerAvailable) {
         const std::string enhLabel = enhancing ? "Enhancing..." : "Enhance";
         const sf::Color   enhCol   = enhancing ? Col::Muted : Col::GoldLt;
-        btnEnhance_ = {x + w - pad - 100.f, y + (h - 22.f) / 2.f, 100.f, 22.f};
+        btnEnhance_ = {x + w - pad - 100.f, y + (barH - 22.f) / 2.f, 100.f, 22.f};
         drawButton(win, btnEnhance_, enhLabel, Col::Panel, enhCol, false, 11, font);
     } else {
         btnEnhance_ = {};
     }
 
-    // ── Expanded overlay panel ────────────────────────────────────────────────
+    // ── Expanded section (below toggle row) ───────────────────────────────────
     if (expanded) {
-        constexpr float panelH = 120.f;
-        expandedRect_ = {x, y - panelH, w, panelH};
-        drawRect(win, expandedRect_, Col::Panel2, Col::BorderHi, 1.f);
+        const float expandedY = y + barH;
+        const float expandedH = rect_.height - barH;
+        drawRect(win, {x, expandedY - 1.f, w, 1.f}, Col::Border);
 
         constexpr float fieldH = 46.f;
-        const float fieldY = y - panelH + (panelH - fieldH) / 2.f;
-        constexpr float labelW  = 160.f;
+        constexpr float labelW = 160.f;
         const float fieldW = w - pad * 2.f - labelW;
+        const float fieldY = expandedY + (expandedH - fieldH) / 2.f;
 
         drawText(win, font, "Instruction (optional):", Col::Muted, x + pad, fieldY + 4.f, 12);
         instructionArea.setRect({x + pad + labelW, fieldY, fieldW, fieldH});
@@ -68,16 +68,11 @@ bool LlmBar::handleEvent(const sf::Event& e) {
             enhanceRequested = true;
             return true;
         }
-        if (expanded) {
-            if (instructionArea.getRect().contains(pos)) {
-                instructionArea.setActive(true);
-                return true;
-            }
-            if (expandedRect_.contains(pos)) return true;
-            if (rect_.contains(pos)) return true;
-        } else {
-            if (rect_.contains(pos)) return true;
+        if (expanded && instructionArea.getRect().contains(pos)) {
+            instructionArea.setActive(true);
+            return true;
         }
+        if (rect_.contains(pos)) return true;
         return false;
     }
 

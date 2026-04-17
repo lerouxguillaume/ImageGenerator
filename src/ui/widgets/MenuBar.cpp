@@ -99,7 +99,10 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
     drawButton(win, btnBack_, "< Back", Col::Panel, Col::Muted, false, 12, font);
 
     // Title
-    drawTextC(win, font, "Image Generator", Col::GoldLt, cx, y + (h - 18.f) / 2.f, 16, true);
+    std::string title = "Explore...";
+    for (const auto& p : presets_)
+        if (p.id == activePresetId_) { title = p.name; break; }
+    drawTextC(win, font, title, Col::GoldLt, cx, y + (h - 18.f) / 2.f, 16, true);
 
     // Presets button (right after Back)
     const std::string presetsLabel = "Presets " + std::string(showPresetDropdown ? "^" : "v");
@@ -107,8 +110,13 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
     drawButton(win, btnPresets_, presetsLabel, Col::Panel,
                showPresetDropdown ? Col::GoldLt : Col::Muted, false, 12, font);
 
-    // Settings button
+    // Quick Save button (left of Settings)
     btnSettings_ = {x + w - pad - 80.f, y + (h - 26.f) / 2.f, 80.f, 26.f};
+    btnQuickSave_ = {btnSettings_.left - 70.f, y + (h - 26.f) / 2.f, 64.f, 26.f};
+    drawButton(win, btnQuickSave_, "Save", Col::Panel,
+               activePresetId_.empty() ? Col::Muted : Col::GoldLt, false, 12, font);
+
+    // Settings button
     drawButton(win, btnSettings_, "Settings", Col::Panel, Col::Muted, false, 12, font);
 
     // ── Preset dropdown (overlay) ─────────────────────────────────────────────
@@ -259,6 +267,16 @@ bool MenuBar::handleEvent(const sf::Event& e) {
         if (btnBack_.contains(pos))     { backRequested     = true; return true; }
         if (btnSettings_.contains(pos)) { settingsRequested = true; return true; }
         if (btnPresets_.contains(pos))  { showPresetDropdown = !showPresetDropdown; return true; }
+        if (btnQuickSave_.contains(pos)) {
+            if (!activePresetId_.empty()) {
+                saveCurrentRequested = true;
+            } else {
+                showSaveModal  = true;
+                saveNameInput.clear();
+                saveNameCursor = 0;
+            }
+            return true;
+        }
 
         // Only consume clicks within the bar rect
         return rect_.contains(pos);
