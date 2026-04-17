@@ -6,6 +6,7 @@ Image generator is structured around a strict separation of:
 - Control layer (controllers)
 - Presentation layer (state mutation)
 - Inference layer (ONNX runtime pipeline)
+- Preset layer (file-backed configuration persistence)
 
 ---
 

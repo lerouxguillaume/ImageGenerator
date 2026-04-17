@@ -55,6 +55,7 @@ The system is fully synchronous per generation request:
 - ONNX parsing → external tensor resolution
 - UI system → SFML widgets
 - LLM system → optional ORT GenAI wrapper
+- Preset system → `PresetManager`, file-backed reusable generation configs
 
 ---
 

@@ -65,6 +65,9 @@ This file is a **retrieval router** only. All implementation details live in `do
 → docs/70_ui/ui_architecture.md  
 → docs/70_ui/multiline_textarea.md
 
+## Preset system — `PresetManager`
+→ docs/80_presets/preset_overview.md
+
 ## Debugging
 → docs/90_debug/common_failures.md  
 → docs/90_debug/performance.md

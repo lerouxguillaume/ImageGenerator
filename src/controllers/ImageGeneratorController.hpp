@@ -8,6 +8,7 @@
 #include "../presenters/ImageGeneratorPresenter.hpp"
 #include "../views/ImageGeneratorView.hpp"
 #include "MenuController.hpp"
+#include "../presets/PresetManager.hpp"
 
 class ImageGeneratorController {
 public:
@@ -42,6 +43,7 @@ private:
     void startLlmLoad(const std::string& modelDir);
 
     AppConfig                        config;
+    PresetManager                    presetManager;   // loads presets.json on construction
     ImageGeneratorPresenter          presenter;
     std::unique_ptr<IPromptEnhancer> enhancer;
     bool                             modelsDirty     = true;

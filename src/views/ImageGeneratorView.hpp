@@ -63,6 +63,7 @@ public:
     // ── Model selection ───────────────────────────────────────────────────────
     std::vector<std::string> availableModels; // Populated at screen init from the models/ directory
     int selectedModelIdx = 0;
+    std::string activePresetId; // empty when no preset is active
 
     // ── LoRA selection ────────────────────────────────────────────────────────
     std::vector<std::string> availableLoras;    // Full paths from loraBaseDir (*.safetensors)
