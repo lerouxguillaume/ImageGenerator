@@ -69,7 +69,7 @@ bool LlmBar::handleEvent(const sf::Event& e) {
             return true;
         }
         if (expanded && instructionArea.getRect().contains(pos)) {
-            instructionArea.setActive(true);
+            instructionArea.handleClick(pos);
             return true;
         }
         if (rect_.contains(pos)) return true;

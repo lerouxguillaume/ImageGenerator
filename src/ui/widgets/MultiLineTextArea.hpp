@@ -54,4 +54,5 @@ private:
     sf::Color               textColor_   = sf::Color(220, 210, 185); // Col::Text default
     int                     charLimit_;
     int                     visibleLines_;
+    sf::Font*               cachedFont_  = nullptr; // set each render(); used by handleClick
 };

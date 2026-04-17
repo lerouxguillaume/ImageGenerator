@@ -80,6 +80,7 @@ MultiLineTextArea::computeLines(sf::Font& font) const {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
+    cachedFont_ = &font;
     drawRect(win, rect_, Col::Panel2, active_ ? Col::BorderHi : Col::Border, 1.f);
 
     // Selection highlight (drawn before text so text renders on top)
@@ -266,8 +267,40 @@ void MultiLineTextArea::handleScroll(float delta) {
 }
 
 void MultiLineTextArea::handleClick(sf::Vector2f pos) {
-    if (rect_.contains(pos))
-        active_ = true;
+    if (!rect_.contains(pos)) return;
+    active_      = true;
+    allSelected_ = false;
+
+    if (!cachedFont_ || lines_.empty()) return;
+
+    // Which visual (scrolled) line was clicked?
+    const float relY    = pos.y - rect_.top - FIELD_PAD_Y;
+    const int   visLine = std::clamp(static_cast<int>(relY / FIELD_LINE_H), 0, visibleLines_ - 1);
+    const int   lineIdx = std::clamp(scrollLine_ + visLine, 0, static_cast<int>(lines_.size()) - 1);
+
+    const auto& vl       = lines_[static_cast<size_t>(lineIdx)];
+    const std::string lineText = text_.substr(static_cast<size_t>(vl.start),
+                                              static_cast<size_t>(vl.end - vl.start));
+    const float relX = pos.x - rect_.left - FIELD_PAD_X;
+
+    // Find the character column closest to relX
+    sf::Text t;
+    t.setFont(*cachedFont_);
+    t.setCharacterSize(FIELD_FONT);
+
+    int bestCol = 0;
+    for (int c = 1; c <= static_cast<int>(lineText.size()); ++c) {
+        t.setString(lineText.substr(0, static_cast<size_t>(c)));
+        const float wAt = t.getLocalBounds().width;
+        if (wAt > relX) {
+            t.setString(lineText.substr(0, static_cast<size_t>(c - 1)));
+            bestCol = (relX - t.getLocalBounds().width < wAt - relX) ? c - 1 : c;
+            break;
+        }
+        bestCol = c;
+    }
+
+    cursor_ = vl.start + bestCol;
 }
 
 // ── State accessors ───────────────────────────────────────────────────────────

@@ -291,13 +291,13 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
 
     // Text field focus
     if (positiveArea.getRect().contains(pos)) {
-        positiveArea.setActive(true);
+        positiveArea.handleClick(pos);
         negativeArea.setActive(false);
         seedInputActive = false;
         return true;
     }
     if (negativeArea.getRect().contains(pos)) {
-        negativeArea.setActive(true);
+        negativeArea.handleClick(pos);
         positiveArea.setActive(false);
         seedInputActive = false;
         return true;
