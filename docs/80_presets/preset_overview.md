@@ -23,10 +23,10 @@ Plain data struct persisted to `presets.json`:
 | `height` | `int` | Output height in pixels; 0 = model default |
 | `createdAt` | `uint64_t` | Unix seconds at creation |
 
-## `Generation` (`src/presets/Preset.hpp`)
+## `GenerationSettings` (`src/presets/Preset.hpp`)
 
 Lightweight snapshot of current UI state; used as input to `PresetManager` methods.
-Intentionally decoupled from `ImageGeneratorView` to avoid circular includes.
+Intentionally decoupled from `SettingsPanel` to avoid circular includes.
 
 Fields mirror `Preset` plus `presetId` (empty string if no preset is active).
 
@@ -40,11 +40,11 @@ Loads `presets.json` on construction; saves after every mutation.
 ## Core methods
 
 ```cpp
-// Create a new preset from a Generation snapshot.
-Preset createFromGeneration(const Generation& gen, const std::string& name);
+// Create a new preset from a GenerationSettings snapshot.
+Preset createFromGeneration(const GenerationSettings& gen, const std::string& name);
 
 // Overwrite an existing preset's data fields (preserves id, name, createdAt).
-void updateFromGeneration(const std::string& presetId, const Generation& gen);
+void updateFromGeneration(const std::string& presetId, const GenerationSettings& gen);
 
 // Copy a preset under a new name with a fresh id and createdAt.
 Preset duplicatePreset(const std::string& presetId, const std::string& newName);
@@ -73,40 +73,43 @@ Corrupt/invalid JSON → start empty (logged at ERROR).
 
 # Integration
 
-## Applying a preset to the view
+## Applying a preset to the settings panel
 
 ```cpp
-void applyPresetToSettings(const Preset& preset, ImageGeneratorView& view);
+void applyPresetToSettings(const Preset& preset, SettingsPanel& panel);
 ```
 
 Free function declared in `PresetManager.hpp`, defined in `PresetManager.cpp`.
 
 Sets:
-- `view.positiveArea` / `view.negativeArea` via `setText()`
-- `view.generationParams.numSteps`, `guidanceScale`, `width`, `height`
-- `view.selectedModelIdx` (linear scan of `view.availableModels` by folder name)
-- `view.activePresetId`
+- `panel.positiveArea` / `panel.negativeArea` via `setText()`
+- `panel.generationParams.numSteps`, `guidanceScale`, `width`, `height`
+- `panel.selectedModelIdx` (linear scan of `panel.availableModels` by folder name)
+- `panel.activePresetId`
 
 If `modelId` is not found in `availableModels`, `selectedModelIdx` is left unchanged and a warning is logged.
 
-## Building a Generation snapshot from the view
+## Building a GenerationSettings snapshot from the view
+
+The controller's `buildGenerationSettings(view)` helper captures current state:
 
 ```cpp
-Generation gen;
-gen.prompt         = view.positiveArea.getText();
-gen.negativePrompt = view.negativeArea.getText();
-gen.modelId        = view.availableModels[view.selectedModelIdx];
-gen.steps          = view.generationParams.numSteps;
-gen.cfg            = view.generationParams.guidanceScale;
-gen.width          = view.generationParams.width;
-gen.height         = view.generationParams.height;
-gen.presetId       = view.activePresetId; // empty if none
+GenerationSettings gs;
+gs.prompt         = sp.positiveArea.getText();
+gs.negativePrompt = sp.negativeArea.getText();
+gs.modelId        = filesystem::path(sp.getSelectedModelDir()).filename().string();
+gs.steps          = sp.generationParams.numSteps;
+gs.cfg            = sp.generationParams.guidanceScale;
+gs.width          = sp.generationParams.width;
+gs.height         = sp.generationParams.height;
+gs.presetId       = sp.activePresetId; // empty if none
 ```
 
 ## Tracking active preset
 
-`ImageGeneratorView::activePresetId` (empty string) indicates which preset is currently applied.
-Set by `applyPresetToSettings`; clear it when the user manually edits a field if the UI should indicate "unsaved changes".
+`SettingsPanel::activePresetId` (empty string) indicates which preset is currently applied.
+Set by `applyPresetToSettings`; the controller also sets it after `createFromGeneration`.
+`MenuBar` displays a ✓ next to the active preset in the dropdown.
 
 ---
 

@@ -2,6 +2,7 @@
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
+#include "../presets/PresetManager.hpp"
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
@@ -14,7 +15,7 @@
 #include <string>
 #include <thread>
 
-// ── Folder browser ───────────────────────────────────────────────────────────
+// ── Folder browser ────────────────────────────────────────────────────────────
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -22,110 +23,104 @@
 #include <windows.h>
 #include <shlobj.h>
 
-// Callback that pre-selects the initial folder in the dialog.
 static int CALLBACK browseCb(HWND hwnd, UINT msg, LPARAM, LPARAM data) {
     if (msg == BFFM_INITIALIZED && data)
         SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
     return 0;
 }
 
-// Opens the native Windows folder-picker dialog.
-// Runs on a background thread — CoInitialize is called per-thread.
 static std::string browseForFolder(const std::string& startPath) {
     CoInitialize(nullptr);
-
-    // Convert startPath (UTF-8) to wide string for the callback.
     std::wstring wStart;
     if (!startPath.empty()) {
         int n = MultiByteToWideChar(CP_UTF8, 0, startPath.c_str(), -1, nullptr, 0);
         wStart.resize(n - 1);
         MultiByteToWideChar(CP_UTF8, 0, startPath.c_str(), -1, &wStart[0], n);
     }
-
     BROWSEINFOW bi  = {};
     bi.ulFlags      = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     bi.lpszTitle    = L"Select folder";
     bi.lpfn         = browseCb;
     bi.lParam       = wStart.empty() ? 0 : reinterpret_cast<LPARAM>(wStart.c_str());
-
     std::string result;
     PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
     if (pidl) {
         wchar_t path[MAX_PATH] = {};
         if (SHGetPathFromIDListW(pidl, path)) {
             int len = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
-            if (len > 1) {
-                result.resize(len - 1);
-                WideCharToMultiByte(CP_UTF8, 0, path, -1, &result[0], len, nullptr, nullptr);
-            }
+            if (len > 1) { result.resize(len - 1); WideCharToMultiByte(CP_UTF8, 0, path, -1, &result[0], len, nullptr, nullptr); }
         }
         CoTaskMemFree(pidl);
     }
-
     CoUninitialize();
     return result;
 }
-
 #else
-
-// Opens a folder-picker dialog via zenity (Linux/macOS).
 static std::string browseForFolder(const std::string& startPath) {
     std::string cmd = "zenity --file-selection --directory --title='Select folder'";
-    if (!startPath.empty())
-        cmd += " --filename='" + startPath + "/'";
+    if (!startPath.empty()) cmd += " --filename='" + startPath + "/'";
     cmd += " 2>/dev/null";
     FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) return {};
     char buf[4096] = {};
     std::string result;
-    while (fgets(buf, sizeof(buf), pipe))
-        result += buf;
+    while (fgets(buf, sizeof(buf), pipe)) result += buf;
     pclose(pipe);
-    while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
-        result.pop_back();
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) result.pop_back();
     return result;
 }
-
 #endif
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Quickly determine whether a model directory is SDXL by peeking at model.json.
-// Falls back to SD15 if the file is absent or unreadable.
 static ModelType inferModelType(const std::string& modelDir) {
     if (modelDir.empty()) return ModelType::SD15;
     std::ifstream f(modelDir + "/model.json");
     if (!f.is_open()) return ModelType::SD15;
-    std::string content((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     return (content.find("\"sdxl\"") != std::string::npos) ? ModelType::SDXL : ModelType::SD15;
+}
+
+static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view) {
+    const auto& sp = view.settingsPanel;
+    GenerationSettings gs;
+    gs.prompt         = sp.positiveArea.getText();
+    gs.negativePrompt = sp.negativeArea.getText();
+    gs.modelId        = sp.getSelectedModelDir().empty()
+        ? std::string{}
+        : std::filesystem::path(sp.getSelectedModelDir()).filename().string();
+    gs.steps          = sp.generationParams.numSteps;
+    gs.cfg            = sp.generationParams.guidanceScale;
+    gs.width          = sp.generationParams.width;
+    gs.height         = sp.generationParams.height;
+    gs.presetId       = sp.activePresetId;
+    return gs;
 }
 
 // ── Model defaults ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
-    // Resolve per-model overrides, falling back to global config defaults.
+    auto& sp = view.settingsPanel;
     const ModelDefaults* md = nullptr;
-    if (!view.availableModels.empty()) {
+    if (!sp.availableModels.empty()) {
         const std::string name = std::filesystem::path(
-            view.availableModels[static_cast<size_t>(view.selectedModelIdx)]).filename().string();
+            sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
         const auto it = config.modelConfigs.find(name);
-        if (it != config.modelConfigs.end())
-            md = &it->second;
+        if (it != config.modelConfigs.end()) md = &it->second;
     }
 
-    view.positiveArea.setText((md && !md->positivePrompt.empty())
+    sp.positiveArea.setText((md && !md->positivePrompt.empty())
         ? md->positivePrompt : config.defaultPositivePrompt);
-    view.positiveArea.setActive(true);
+    sp.positiveArea.setActive(true);
 
-    view.negativeArea.setText((md && !md->negativePrompt.empty())
+    sp.negativeArea.setText((md && !md->negativePrompt.empty())
         ? md->negativePrompt : config.defaultNegativePrompt);
-    view.negativeArea.setActive(false);
+    sp.negativeArea.setActive(false);
 
-    view.generationParams.numSteps = (md && md->numSteps > 0)
+    sp.generationParams.numSteps = (md && md->numSteps > 0)
         ? md->numSteps : config.defaultNumSteps;
 
-    view.generationParams.guidanceScale = (md && md->guidanceScale > 0.f)
+    sp.generationParams.guidanceScale = (md && md->guidanceScale > 0.f)
         ? md->guidanceScale : config.defaultGuidanceScale;
 }
 
@@ -141,633 +136,352 @@ void ImageGeneratorController::startLlmLoad(const std::string& modelDir) {
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
 void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
-    view.settingsModelDir             = config.modelBaseDir;
-    view.settingsOutputDir            = config.outputDir;
-    view.settingsLlmModelDir          = config.promptEnhancer.modelDir;
-    view.settingsLoraDir              = config.loraBaseDir;
-    view.settingsModelDirCursor       = static_cast<int>(config.modelBaseDir.size());
-    view.settingsOutputDirCursor      = static_cast<int>(config.outputDir.size());
-    view.settingsLlmModelDirCursor    = static_cast<int>(config.promptEnhancer.modelDir.size());
-    view.settingsLoraDirCursor        = static_cast<int>(config.loraBaseDir.size());
-    view.settingsModelDirActive       = true;
-    view.settingsOutputDirActive      = false;
-    view.settingsLlmModelDirActive    = false;
-    view.settingsLoraDirActive        = false;
-    view.showSettings                 = true;
+    auto& m = view.settingsModal;
+    m.settingsModelDir            = config.modelBaseDir;
+    m.settingsOutputDir           = config.outputDir;
+    m.settingsLlmModelDir         = config.promptEnhancer.modelDir;
+    m.settingsLoraDir             = config.loraBaseDir;
+    m.settingsModelDirCursor      = static_cast<int>(config.modelBaseDir.size());
+    m.settingsOutputDirCursor     = static_cast<int>(config.outputDir.size());
+    m.settingsLlmModelDirCursor   = static_cast<int>(config.promptEnhancer.modelDir.size());
+    m.settingsLoraDirCursor       = static_cast<int>(config.loraBaseDir.size());
+    m.settingsModelDirActive      = true;
+    m.settingsOutputDirActive     = false;
+    m.settingsLlmModelDirActive   = false;
+    m.settingsLoraDirActive       = false;
+    m.saveRequested               = false;
+    m.cancelRequested             = false;
+    m.browseTarget                = SettingsModal::BrowseTarget::None;
+    m.llmLoading                  = view.llmBar.llmLoading;
+    view.showSettings             = true;
 }
 
 void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
-    config.modelBaseDir = view.settingsModelDir;
-    config.outputDir    = view.settingsOutputDir;
-    config.loraBaseDir  = view.settingsLoraDir;
+    auto& m = view.settingsModal;
+    config.modelBaseDir             = m.settingsModelDir;
+    config.outputDir                = m.settingsOutputDir;
+    config.loraBaseDir              = m.settingsLoraDir;
 
-    const std::string newLlmDir = view.settingsLlmModelDir;
-    const bool llmDirChanged    = (newLlmDir != config.promptEnhancer.modelDir);
-    config.promptEnhancer.modelDir = newLlmDir;
-    config.promptEnhancer.enabled  = !newLlmDir.empty();
+    const std::string newLlmDir  = m.settingsLlmModelDir;
+    const bool llmDirChanged     = (newLlmDir != config.promptEnhancer.modelDir);
+    config.promptEnhancer.modelDir  = newLlmDir;
+    config.promptEnhancer.enabled   = !newLlmDir.empty();
     config.save();
 
     view.showSettings = false;
 
-    // Trigger a model rescan with the new base directory.
-    view.availableModels.clear();
-    view.selectedModelIdx = 0;
+    view.settingsPanel.availableModels.clear();
+    view.settingsPanel.selectedModelIdx = 0;
     modelsDirty = true;
+    lorasDirty  = true;
 
-    // Trigger a LoRA rescan with the new LoRA directory.
-    lorasDirty = true;
-
-    // Reload the LLM if its directory changed.
     if (llmDirChanged) {
         enhancer = std::make_unique<NullPromptEnhancer>();
-        view.promptEnhancerAvailable = false;
-        if (!newLlmDir.empty())
-            startLlmLoad(newLlmDir);
+        view.llmBar.promptEnhancerAvailable = false;
+        if (!newLlmDir.empty()) startLlmLoad(newLlmDir);
     }
+}
+
+// ── Generation ────────────────────────────────────────────────────────────────
+
+void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
+    auto& sp = view.settingsPanel;
+    auto& rp = view.resultPanel;
+
+    const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+    rp.lastImagePath = config.outputDir + "/img_" + std::to_string(now) + ".png";
+
+    rp.generating = true;
+    rp.generationDone.store(false);
+    rp.cancelToken.store(false);
+    rp.generationStep.store(0);
+    rp.resultLoaded = false;
+    rp.generationFailed.store(false);
+    rp.generationErrorMsg.clear();
+
+    const int myId = ++rp.generationId;
+    rp.generationTotalImages.store(sp.generationParams.numImages);
+
+    const std::string prompt    = sp.positiveArea.getText();
+    const std::string negPrompt = sp.negativeArea.getText();
+    const std::string outPath   = rp.lastImagePath;
+    const std::string modelDir  = sp.getSelectedModelDir();
+    GenerationParams params = sp.generationParams;
+    params.seed = sp.seedInput.empty() ? -1 : std::stoll(sp.seedInput);
+
+    for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
+        if (i < sp.loraSelected.size() && sp.loraSelected[i])
+            params.loras.push_back({sp.availableLoras[i],
+                                    i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+    }
+
+    std::atomic<bool>* done     = &rp.generationDone;
+    std::atomic<int>*  step     = &rp.generationStep;
+    std::atomic<bool>* cancel   = &rp.cancelToken;
+    std::atomic<int>*  idPtr    = &rp.generationId;
+    std::atomic<int>*  imgNum   = &rp.generationImageNum;
+    std::atomic<bool>* failed   = &rp.generationFailed;
+    std::string*       errorMsg = &rp.generationErrorMsg;
+
+    std::thread([prompt, negPrompt, outPath, params, modelDir,
+                 done, step, cancel, idPtr, imgNum, myId, failed, errorMsg]() {
+        try {
+            PortraitGeneratorAi::generateFromPrompt(
+                prompt, negPrompt, outPath, params, modelDir, step, imgNum, cancel);
+        } catch (const std::exception& e) {
+            Logger::error("Generation failed: " + std::string(e.what()));
+            *errorMsg = e.what();
+            failed->store(true);
+        } catch (...) {
+            Logger::error("Generation failed: unknown error");
+            *errorMsg = "Unknown error during generation. See log for details.";
+            failed->store(true);
+        }
+        if (idPtr->load() == myId) done->store(true);
+    }).detach();
+}
+
+void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
+    auto& sp  = view.settingsPanel;
+    auto& llm = view.llmBar;
+
+    llm.enhancing = true;
+    llm.enhanceDone.store(false);
+
+    const std::string posCapture  = sp.positiveArea.getText();
+    const std::string instruction = llm.instructionArea.getText();
+    const std::string modelDir    = sp.getSelectedModelDir();
+    const std::string modelName   = modelDir.empty()
+        ? std::string{} : std::filesystem::path(modelDir).filename().string();
+
+    std::string effectiveInstruction = instruction;
+    if (effectiveInstruction.empty()) {
+        const auto it = config.modelConfigs.find(modelName);
+        if (it != config.modelConfigs.end() && !it->second.llmHint.empty())
+            effectiveInstruction = it->second.llmHint;
+    }
+
+    const ModelType modelType = inferModelType(modelDir);
+
+    std::atomic<bool>* done   = &llm.enhanceDone;
+    std::string*       outPos = &llm.enhancedPositive;
+    std::string*       outNeg = &llm.enhancedNegative;
+    IPromptEnhancer*   enh    = enhancer.get();
+
+    std::thread([posCapture, effectiveInstruction, modelType, done, outPos, outNeg, enh]() {
+        LLMRequest req;
+        req.prompt      = posCapture;
+        req.instruction = effectiveInstruction;
+        req.model       = modelType;
+        req.strength    = 0.5f;
+        const LLMResponse result = enh->transform(req);
+        *outPos = result.prompt;
+        *outNeg = result.negative_prompt;
+        done->store(true);
+    }).detach();
 }
 
 // ── Event handling ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
                                             ImageGeneratorView& view, AppScreen& appScreen) {
-    if (e.type == sf::Event::Closed) win.close();
+    if (e.type == sf::Event::Closed) { win.close(); return; }
 
-    // Escape: close dropdowns/modals in order, or navigate to menu.
+    // Escape: close modals/dropdowns in priority order, or navigate to menu
     if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Escape) {
-        if (view.showSettings)     { view.showSettings = false;     return; }
-        if (view.showModelDropdown){ view.showModelDropdown = false; return; }
+        if (view.menuBar.showSaveModal)       { view.menuBar.showSaveModal = false; return; }
+        if (view.showSettings)                { view.showSettings = false;          return; }
+        if (view.menuBar.showPresetDropdown)  { view.menuBar.showPresetDropdown = false; return; }
+        if (view.settingsPanel.showModelDropdown) { view.settingsPanel.showModelDropdown = false; return; }
         appScreen = AppScreen::MENU;
+        return;
     }
 
-    if (e.type == sf::Event::MouseButtonPressed && e.mouseButton.button == sf::Mouse::Left)
-        handleClick(win.mapPixelToCoords({e.mouseButton.x, e.mouseButton.y}), win, view, appScreen);
-
-    if (e.type == sf::Event::MouseButtonReleased && e.mouseButton.button == sf::Mouse::Left)
-        view.draggingSlider = DraggingSlider::None;
-
-    if (e.type == sf::Event::MouseMoved && view.draggingSlider != DraggingSlider::None) {
-        const sf::Vector2f mousePos = win.mapPixelToCoords({e.mouseMove.x, e.mouseMove.y});
-        if (view.draggingSlider == DraggingSlider::Steps) {
-            const sf::FloatRect& track = view.stepsSliderTrack;
-            const float t = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            view.generationParams.numSteps = static_cast<int>(std::round(5.f + t * 45.f));
-        } else if (view.draggingSlider == DraggingSlider::Cfg) {
-            const sf::FloatRect& track = view.cfgSliderTrack;
-            const float t   = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            const float raw = 1.0f + t * 19.0f;
-            view.generationParams.guidanceScale = std::round(raw * 2.f) / 2.f;
-        } else if (view.draggingSlider == DraggingSlider::Images) {
-            const sf::FloatRect& track = view.imagesSliderTrack;
-            const float t = std::clamp((mousePos.x - track.left) / track.width, 0.f, 1.f);
-            view.generationParams.numImages = static_cast<int>(std::round(1.f + t * 19.f));
-        }
-    }
-
-    // Mouse-wheel scrolling on text areas
-    if (e.type == sf::Event::MouseWheelScrolled && !view.generating) {
-        const sf::Vector2f pos   = win.mapPixelToCoords({e.mouseWheelScroll.x, e.mouseWheelScroll.y});
-        const float        delta = e.mouseWheelScroll.delta > 0 ? -1.f : 1.f;
-        if (view.positiveArea.getRect().contains(pos))
-            view.positiveArea.handleScroll(delta);
-        else if (view.negativeArea.getRect().contains(pos))
-            view.negativeArea.handleScroll(delta);
-    }
-
-    // Settings modal keyboard input
+    // Settings modal intercepts all input while open
     if (view.showSettings) {
-        std::string& activeField = view.settingsLoraDirActive     ? view.settingsLoraDir
-                                 : view.settingsLlmModelDirActive ? view.settingsLlmModelDir
-                                 : view.settingsModelDirActive    ? view.settingsModelDir
-                                                                  : view.settingsOutputDir;
-        int& cursor = view.settingsLoraDirActive     ? view.settingsLoraDirCursor
-                    : view.settingsLlmModelDirActive ? view.settingsLlmModelDirCursor
-                    : view.settingsModelDirActive    ? view.settingsModelDirCursor
-                                                     : view.settingsOutputDirCursor;
-
-        if (e.type == sf::Event::KeyPressed) {
-            if (e.key.code == sf::Keyboard::Tab) {
-                // Cycle: ModelDir → OutputDir → LlmDir → LoraDir → ModelDir
-                if (view.settingsModelDirActive) {
-                    view.settingsModelDirActive    = false;
-                    view.settingsOutputDirActive   = true;
-                    view.settingsLlmModelDirActive = false;
-                    view.settingsLoraDirActive     = false;
-                } else if (view.settingsOutputDirActive) {
-                    view.settingsModelDirActive    = false;
-                    view.settingsOutputDirActive   = false;
-                    view.settingsLlmModelDirActive = true;
-                    view.settingsLoraDirActive     = false;
-                } else if (view.settingsLlmModelDirActive) {
-                    view.settingsModelDirActive    = false;
-                    view.settingsOutputDirActive   = false;
-                    view.settingsLlmModelDirActive = false;
-                    view.settingsLoraDirActive     = true;
-                } else {
-                    view.settingsModelDirActive    = true;
-                    view.settingsOutputDirActive   = false;
-                    view.settingsLlmModelDirActive = false;
-                    view.settingsLoraDirActive     = false;
-                }
-            } else if (e.key.code == sf::Keyboard::Enter) {
+        if (view.settingsModal.handleEvent(e)) {
+            if (view.settingsModal.saveRequested) {
+                view.settingsModal.saveRequested = false;
                 saveSettings(view);
-            } else if (e.key.code == sf::Keyboard::Left && cursor > 0) {
-                --cursor;
-            } else if (e.key.code == sf::Keyboard::Right
-                       && cursor < static_cast<int>(activeField.size())) {
-                ++cursor;
-            } else if (e.key.code == sf::Keyboard::Home) {
-                cursor = 0;
-            } else if (e.key.code == sf::Keyboard::End) {
-                cursor = static_cast<int>(activeField.size());
-            } else if (e.key.code == sf::Keyboard::BackSpace && cursor > 0) {
-                activeField.erase(static_cast<size_t>(cursor - 1), 1);
-                --cursor;
-            } else if (e.key.code == sf::Keyboard::Delete
-                       && cursor < static_cast<int>(activeField.size())) {
-                activeField.erase(static_cast<size_t>(cursor), 1);
+            }
+            if (view.settingsModal.cancelRequested) {
+                view.settingsModal.cancelRequested = false;
+                view.showSettings = false;
+            }
+            if (view.settingsModal.browseTarget != SettingsModal::BrowseTarget::None) {
+                auto& m = view.settingsModal;
+                std::string startPath;
+                switch (m.browseTarget) {
+                    case SettingsModal::BrowseTarget::ModelDir:  browseTarget = BrowseTarget::ModelDir;  startPath = m.settingsModelDir;    break;
+                    case SettingsModal::BrowseTarget::OutputDir: browseTarget = BrowseTarget::OutputDir; startPath = m.settingsOutputDir;   break;
+                    case SettingsModal::BrowseTarget::LlmDir:    browseTarget = BrowseTarget::LlmDir;    startPath = m.settingsLlmModelDir; break;
+                    case SettingsModal::BrowseTarget::LoraDir:   browseTarget = BrowseTarget::LoraDir;   startPath = m.settingsLoraDir;     break;
+                    default: break;
+                }
+                m.browseTarget = SettingsModal::BrowseTarget::None;
+                if (!browseFuture.valid())
+                    browseFuture = std::async(std::launch::async, browseForFolder, startPath);
             }
         }
-        if (e.type == sf::Event::TextEntered) {
-            const auto c = e.text.unicode;
-            // Accept printable ASCII; paths use /, \, :, space, etc. — all < 127.
-            if (c >= 32 && c < 127) {
-                activeField.insert(static_cast<size_t>(cursor), 1, static_cast<char>(c));
-                ++cursor;
-            }
-        }
-        return; // block all other input while settings is open
+        return;
     }
 
-    // Text input for active field
-    if (!view.generating) {
-        // LoRA scale field keyboard handling
-        if (view.activeLoraScaleIdx >= 0) {
-            const size_t idx = static_cast<size_t>(view.activeLoraScaleIdx);
-            if (e.type == sf::Event::KeyPressed) {
-                auto& s = view.loraScaleInputs[idx];
-                if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Tab
-                    || e.key.code == sf::Keyboard::Enter) {
-                    view.activeLoraScaleIdx = -1;
-                } else if (e.key.code == sf::Keyboard::BackSpace && !s.empty()) {
-                    s.pop_back();
-                    try { view.loraScales[idx] = std::stof(s); } catch (...) {}
-                } else if (e.key.code == sf::Keyboard::Delete) {
-                    s.clear();
-                    view.loraScales[idx] = 0.f;
-                }
-            }
-            if (e.type == sf::Event::TextEntered) {
-                const auto ch = static_cast<char>(e.text.unicode);
-                // Accept digits and a single decimal point
-                const bool isDigit = (ch >= '0' && ch <= '9');
-                const bool isDot   = (ch == '.' && view.loraScaleInputs[idx].find('.') == std::string::npos);
-                if ((isDigit || isDot) && view.loraScaleInputs[idx].size() < 8) {
-                    view.loraScaleInputs[idx] += ch;
-                    try { view.loraScales[idx] = std::stof(view.loraScaleInputs[idx]); } catch (...) {}
-                }
-            }
-            return; // don't forward to prompt fields
+    // MenuBar (handles save modal, preset dropdown, Back, Settings buttons)
+    if (view.menuBar.handleEvent(e)) {
+        if (view.menuBar.backRequested) {
+            view.menuBar.backRequested = false;
+            appScreen = AppScreen::MENU;
         }
-
-        // Seed field keyboard handling
-        if (view.seedInputActive) {
-            if (e.type == sf::Event::KeyPressed) {
-                auto& s = view.seedInput;
-                auto& c = view.seedInputCursor;
-                if (e.key.code == sf::Keyboard::Left  && c > 0) { --c; }
-                else if (e.key.code == sf::Keyboard::Right && c < static_cast<int>(s.size())) { ++c; }
-                else if (e.key.code == sf::Keyboard::Home) { c = 0; }
-                else if (e.key.code == sf::Keyboard::End)  { c = static_cast<int>(s.size()); }
-                else if (e.key.code == sf::Keyboard::BackSpace && c > 0) { s.erase(static_cast<size_t>(--c), 1); }
-                else if (e.key.code == sf::Keyboard::Delete && c < static_cast<int>(s.size())) { s.erase(static_cast<size_t>(c), 1); }
-                else if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Tab) {
-                    view.seedInputActive = false;
-                } else if (e.key.control && e.key.code == sf::Keyboard::C) {
-                    sf::Clipboard::setString(s);
-                } else if (e.key.control && e.key.code == sf::Keyboard::V) {
-                    const std::string clip = sf::Clipboard::getString().toAnsiString();
-                    for (std::size_t i = 0; i < clip.size() && s.size() < 20; ++i) {
-                        const char ch = clip[i];
-                        const bool isDigit = (ch >= '0' && ch <= '9');
-                        const bool isMinus = (ch == '-' && c == 0 && s.empty());
-                        if (isDigit || isMinus) {
-                            s.insert(static_cast<size_t>(c), 1, ch);
-                            ++c;
-                        }
-                    }
-                } else if (e.key.control && e.key.code == sf::Keyboard::A) {
-                    // Select all: move cursor to end (no visual selection, but prepares for overwrite)
-                    c = static_cast<int>(s.size());
-                }
-            }
-            if (e.type == sf::Event::TextEntered) {
-                const auto ch = e.text.unicode;
-                // Allow digits and a leading minus sign
-                const bool isDigit = (ch >= '0' && ch <= '9');
-                const bool isMinus = (ch == '-' && view.seedInputCursor == 0 && view.seedInput.empty());
-                if ((isDigit || isMinus) && view.seedInput.size() < 20) {
-                    view.seedInput.insert(static_cast<size_t>(view.seedInputCursor), 1, static_cast<char>(ch));
-                    ++view.seedInputCursor;
-                }
-            }
-            return; // don't forward to prompt fields
+        if (view.menuBar.settingsRequested) {
+            view.menuBar.settingsRequested = false;
+            openSettings(view);
         }
-
-        // Tab: cycle focus — positive → negative → instruction (if visible) → positive
-        if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab) {
-            if (view.positiveArea.isActive()) {
-                view.positiveArea.setActive(false);
-                view.negativeArea.setActive(true);
-            } else if (view.negativeArea.isActive()) {
-                view.negativeArea.setActive(false);
-                if (view.promptEnhancerAvailable)
-                    view.instructionArea.setActive(true);
-                else
-                    view.positiveArea.setActive(true);
-            } else if (view.instructionArea.isActive()) {
-                view.instructionArea.setActive(false);
-                view.positiveArea.setActive(true);
+        if (!view.menuBar.selectedPresetId.empty()) {
+            const auto p = presetManager.getPreset(view.menuBar.selectedPresetId);
+            if (p) applyPresetToSettings(*p, view.settingsPanel);
+            view.menuBar.selectedPresetId.clear();
+        }
+        if (view.menuBar.saveCurrentRequested) {
+            view.menuBar.saveCurrentRequested = false;
+            const std::string pid = view.settingsPanel.activePresetId;
+            if (!pid.empty()) {
+                presetManager.updateFromGeneration(pid, buildGenerationSettings(view));
+                view.menuBar.setPresets(presetManager.getAllPresets(), pid);
             }
         }
+        if (view.menuBar.saveConfirmed) {
+            const std::string name = view.menuBar.saveNameInput;
+            view.menuBar.saveNameInput.clear();
+            view.menuBar.saveConfirmed = false;
+            const auto preset = presetManager.createFromGeneration(
+                buildGenerationSettings(view), name);
+            view.settingsPanel.activePresetId = preset.id;
+            view.menuBar.setPresets(presetManager.getAllPresets(), preset.id);
+        }
+        return;
+    }
 
-        // Delegate all other input to whichever field is active
-        if (view.positiveArea.isActive())
-            view.positiveArea.handleEvent(e);
-        else if (view.negativeArea.isActive())
-            view.negativeArea.handleEvent(e);
-        else if (view.instructionArea.isActive())
-            view.instructionArea.handleEvent(e);
+    // Panels handle their own events
+    if (view.settingsPanel.handleEvent(e)) return;
+
+    if (view.resultPanel.handleEvent(e)) {
+        if (view.resultPanel.generateRequested) {
+            view.resultPanel.generateRequested = false;
+            launchGeneration(view);
+        }
+        return;
+    }
+
+    if (view.llmBar.handleEvent(e)) {
+        if (view.llmBar.enhanceRequested && !view.llmBar.enhancing) {
+            view.llmBar.enhanceRequested = false;
+            launchEnhancement(view);
+        }
+        return;
     }
 }
 
+// ── Update (async polling) ────────────────────────────────────────────────────
+
 void ImageGeneratorController::update(ImageGeneratorView& view) {
-    // Apply defaults on first open, and whenever the selected model changes.
-    if (!viewInitialized || view.selectedModelIdx != lastModelIdx) {
+    auto& sp = view.settingsPanel;
+    auto& rp = view.resultPanel;
+
+    // Apply model defaults on first open or model change
+    if (!viewInitialized || sp.selectedModelIdx != lastModelIdx) {
         applyModelDefaults(view);
-        lastModelIdx    = view.selectedModelIdx;
+        lastModelIdx    = sp.selectedModelIdx;
         viewInitialized = true;
     }
 
-    // Poll async LLM load; swap in the real enhancer when ready.
+    // Poll async LLM load
     if (llmLoadFuture.valid()) {
-        view.llmLoading = true;
+        view.llmBar.llmLoading = true;
         if (llmLoadFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             enhancer = llmLoadFuture.get();
-            view.llmLoading = false;
+            view.llmBar.llmLoading = false;
         }
     }
+    view.llmBar.promptEnhancerAvailable = !view.llmBar.llmLoading && enhancer->isAvailable();
+    view.settingsModal.llmLoading       = view.llmBar.llmLoading;
 
-    // Apply async browse result when zenity finishes.
+    // Poll async folder browse
     if (browseFuture.valid() &&
         browseFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::string picked = browseFuture.get();
         if (!picked.empty()) {
-            if (browseTarget == BrowseTarget::ModelDir) {
-                view.settingsModelDir       = picked;
-                view.settingsModelDirCursor = static_cast<int>(picked.size());
-            } else if (browseTarget == BrowseTarget::OutputDir) {
-                view.settingsOutputDir       = picked;
-                view.settingsOutputDirCursor = static_cast<int>(picked.size());
-            } else if (browseTarget == BrowseTarget::LlmDir) {
-                view.settingsLlmModelDir       = picked;
-                view.settingsLlmModelDirCursor = static_cast<int>(picked.size());
-            } else {
-                view.settingsLoraDir       = picked;
-                view.settingsLoraDirCursor = static_cast<int>(picked.size());
+            auto& m = view.settingsModal;
+            switch (browseTarget) {
+                case BrowseTarget::ModelDir:  m.settingsModelDir    = picked; m.settingsModelDirCursor    = static_cast<int>(picked.size()); break;
+                case BrowseTarget::OutputDir: m.settingsOutputDir   = picked; m.settingsOutputDirCursor   = static_cast<int>(picked.size()); break;
+                case BrowseTarget::LlmDir:    m.settingsLlmModelDir = picked; m.settingsLlmModelDirCursor = static_cast<int>(picked.size()); break;
+                case BrowseTarget::LoraDir:   m.settingsLoraDir     = picked; m.settingsLoraDirCursor     = static_cast<int>(picked.size()); break;
             }
         }
     }
 
-    // Scan modelBaseDir for subdirectories containing unet.onnx.
-    // Runs on first update and whenever modelsDirty is set (e.g. after settings save).
+    // Scan models directory
     if (modelsDirty) {
-        view.availableModels.clear();
+        sp.availableModels.clear();
         std::error_code ec;
-        for (const auto& entry :
-             std::filesystem::directory_iterator(config.modelBaseDir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(config.modelBaseDir, ec)) {
             if (!entry.is_directory()) continue;
             if (std::filesystem::exists(entry.path() / "unet.onnx"))
-                view.availableModels.push_back(entry.path().string());
+                sp.availableModels.push_back(entry.path().string());
         }
-        std::sort(view.availableModels.begin(), view.availableModels.end());
-        view.selectedModelIdx = 0;
+        std::sort(sp.availableModels.begin(), sp.availableModels.end());
+        sp.selectedModelIdx = 0;
         modelsDirty = false;
     }
 
-    // Scan loraBaseDir for .safetensors files.
+    // Scan LoRA directory
     if (lorasDirty) {
-        view.availableLoras.clear();
+        sp.availableLoras.clear();
         std::error_code ec;
-        for (const auto& entry :
-             std::filesystem::directory_iterator(config.loraBaseDir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(config.loraBaseDir, ec)) {
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() == ".safetensors")
-                view.availableLoras.push_back(entry.path().string());
+                sp.availableLoras.push_back(entry.path().string());
         }
-        std::sort(view.availableLoras.begin(), view.availableLoras.end());
-        view.loraSelected.assign(view.availableLoras.size(), false);
-        view.loraScales.assign(view.availableLoras.size(), 1.0f);
-        view.loraScaleInputs.assign(view.availableLoras.size(), "1");
-        view.activeLoraScaleIdx = -1;
+        std::sort(sp.availableLoras.begin(), sp.availableLoras.end());
+        sp.loraSelected.assign(sp.availableLoras.size(), false);
+        sp.loraScales.assign(sp.availableLoras.size(), 1.0f);
+        sp.loraScaleInputs.assign(sp.availableLoras.size(), "1");
+        sp.activeLoraScaleIdx = -1;
         lorasDirty = false;
     }
 
-    // Sync enhancer availability — not available while the model is still loading.
-    view.promptEnhancerAvailable = !view.llmLoading && enhancer->isAvailable();
-
-    // Collect enhancement result when the background thread finishes.
-    if (view.enhancing && view.enhanceDone.load()) {
-        view.positiveArea.setText(view.enhancedPositive);
-        view.negativeArea.setText(view.enhancedNegative);
-        view.enhancing = false;
-        view.enhanceDone.store(false);
+    // Collect enhancement result
+    if (view.llmBar.enhancing && view.llmBar.enhanceDone.load()) {
+        sp.positiveArea.setText(view.llmBar.enhancedPositive);
+        sp.negativeArea.setText(view.llmBar.enhancedNegative);
+        view.llmBar.enhancing = false;
+        view.llmBar.enhanceDone.store(false);
     }
 
-    if (view.generating && view.generationDone.load()) {
-        if (view.generationFailed.load()) {
-            presenter.failGeneration(view);
+    // Collect generation result
+    if (rp.generating && rp.generationDone.load()) {
+        if (rp.generationFailed.load()) {
+            rp.generating = false;
+            rp.generationDone.store(false);
         } else {
-            presenter.finishGeneration(view);
-            // For multi-image runs the last image has an _N suffix; single image has no suffix.
-            std::string pathToLoad = view.lastImagePath;
-            const int n = view.generationParams.numImages;
+            rp.generating = false;
+            rp.generationDone.store(false);
+            // Multi-image: load the last image (has _N suffix)
+            std::string pathToLoad = rp.lastImagePath;
+            const int n = sp.generationParams.numImages;
             if (n > 1) {
-                const auto dot = view.lastImagePath.rfind('.');
+                const auto dot = rp.lastImagePath.rfind('.');
                 const std::string idx = std::to_string(n);
                 pathToLoad = (dot == std::string::npos)
-                    ? view.lastImagePath + "_" + idx
-                    : view.lastImagePath.substr(0, dot) + "_" + idx + view.lastImagePath.substr(dot);
+                    ? rp.lastImagePath + "_" + idx
+                    : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
             }
-            if (view.resultTexture.loadFromFile(pathToLoad))
-                view.resultLoaded = true;
-        }
-    }
-}
-
-void ImageGeneratorController::handleClick(sf::Vector2f pos, sf::RenderWindow&,
-                                            ImageGeneratorView& view, AppScreen& appScreen) {
-    // Settings modal intercepts all clicks while open.
-    if (view.showSettings) {
-        if (view.settingsBtnSave.contains(pos))   { saveSettings(view); return; }
-        if (view.settingsBtnCancel.contains(pos))  { view.showSettings = false; return; }
-        if (view.settingsBtnBrowseModel.contains(pos)) {
-            browseTarget = BrowseTarget::ModelDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsModelDir);
-            return;
-        }
-        if (view.settingsBtnBrowseOutput.contains(pos)) {
-            browseTarget = BrowseTarget::OutputDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsOutputDir);
-            return;
-        }
-        if (view.settingsBtnBrowseLlm.contains(pos)) {
-            browseTarget = BrowseTarget::LlmDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsLlmModelDir);
-            return;
-        }
-        if (view.settingsBtnBrowseLora.contains(pos)) {
-            browseTarget = BrowseTarget::LoraDir;
-            browseFuture = std::async(std::launch::async, browseForFolder, view.settingsLoraDir);
-            return;
-        }
-        if (view.settingsModelDirField.contains(pos)) {
-            view.settingsModelDirActive    = true;
-            view.settingsOutputDirActive   = false;
-            view.settingsLlmModelDirActive = false;
-            view.settingsLoraDirActive     = false;
-            return;
-        }
-        if (view.settingsOutputDirField.contains(pos)) {
-            view.settingsModelDirActive    = false;
-            view.settingsOutputDirActive   = true;
-            view.settingsLlmModelDirActive = false;
-            view.settingsLoraDirActive     = false;
-            return;
-        }
-        if (view.settingsLlmModelDirField.contains(pos)) {
-            view.settingsModelDirActive    = false;
-            view.settingsOutputDirActive   = false;
-            view.settingsLlmModelDirActive = true;
-            view.settingsLoraDirActive     = false;
-            return;
-        }
-        if (view.settingsLoraDirField.contains(pos)) {
-            view.settingsModelDirActive    = false;
-            view.settingsOutputDirActive   = false;
-            view.settingsLlmModelDirActive = false;
-            view.settingsLoraDirActive     = true;
-            return;
-        }
-        return; // absorb clicks outside modal controls
-    }
-
-    if (view.generating || view.enhancing) {
-        if (!view.enhancing && view.btnCancelGenerate.contains(pos)) {
-            ++view.generationId;
-            view.cancelToken.store(true);
-            view.generating = false;
-        }
-        return;
-    }
-
-    // Model dropdown must be checked before all other hit rects because the
-    // open list renders on top and may overlap elements further down the page.
-    if (view.btnModelDropdown.contains(pos)) {
-        view.showModelDropdown = !view.showModelDropdown;
-        return;
-    }
-    if (view.showModelDropdown) {
-        for (int i = 0; i < static_cast<int>(view.modelDropdownItems.size()); ++i) {
-            if (view.modelDropdownItems[static_cast<size_t>(i)].contains(pos)) {
-                view.selectedModelIdx  = i;
-                view.showModelDropdown = false;
-                return;
-            }
-        }
-        view.showModelDropdown = false; // click outside closes it
-        return;
-    }
-
-    // LoRA panel toggle button and row interactions
-    if (view.btnLoraPanel.contains(pos)) {
-        view.showLoraPanel = !view.showLoraPanel;
-        view.activeLoraScaleIdx = -1;
-        return;
-    }
-    if (view.showLoraPanel) {
-        for (int i = 0; i < static_cast<int>(view.loraScaleRects.size()); ++i) {
-            if (view.loraScaleRects[static_cast<size_t>(i)].contains(pos)) {
-                view.activeLoraScaleIdx = i;
-                view.seedInputActive    = false;
-                return;
-            }
-        }
-        for (int i = 0; i < static_cast<int>(view.loraRowToggleRects.size()); ++i) {
-            if (view.loraRowToggleRects[static_cast<size_t>(i)].contains(pos)) {
-                if (i < static_cast<int>(view.loraSelected.size()))
-                    view.loraSelected[static_cast<size_t>(i)] = !view.loraSelected[static_cast<size_t>(i)];
-                view.activeLoraScaleIdx = -1;
-                return;
-            }
+            if (rp.resultTexture.loadFromFile(pathToLoad))
+                rp.resultLoaded = true;
         }
     }
 
-    if (view.btnSettings.contains(pos)) {
-        openSettings(view);
-        return;
-    }
-
-    if (view.btnBack.contains(pos)) {
-        appScreen = AppScreen::MENU;
-        return;
-    }
-
-    if (view.positiveArea.getRect().contains(pos)) {
-        view.positiveArea.setActive(true);
-        view.negativeArea.setActive(false);
-        view.instructionArea.setActive(false);
-        view.seedInputActive = false;
-        return;
-    }
-
-    if (view.negativeArea.getRect().contains(pos)) {
-        view.negativeArea.setActive(true);
-        view.positiveArea.setActive(false);
-        view.instructionArea.setActive(false);
-        view.seedInputActive = false;
-        return;
-    }
-
-    if (view.promptEnhancerAvailable
-        && view.instructionArea.getRect().contains(pos)) {
-        view.instructionArea.setActive(true);
-        view.positiveArea.setActive(false);
-        view.negativeArea.setActive(false);
-        view.seedInputActive = false;
-        return;
-    }
-
-    if (view.showAdvancedParams && view.seedField.contains(pos)) {
-        view.positiveArea.setActive(false);
-        view.negativeArea.setActive(false);
-        view.instructionArea.setActive(false);
-        view.seedInputActive = true;
-        return;
-    }
-
-    if (view.btnAdvanced.contains(pos)) {
-        presenter.toggleAdvanced(view);
-        return;
-    }
-
-    if (view.promptEnhancerAvailable && view.btnEnhance.contains(pos)
-        && !view.enhancing && !view.generating) {
-        view.enhancing = true;
-        view.enhanceDone.store(false);
-
-        const std::string posCapture  = view.positiveArea.getText();
-        const std::string instruction = view.instructionArea.getText();
-        const std::string modelDir     = view.availableModels.empty()
-            ? std::string{} : view.availableModels[static_cast<size_t>(view.selectedModelIdx)];
-        const std::string modelName    = modelDir.empty()
-            ? std::string{}
-            : std::filesystem::path(modelDir).filename().string();
-
-        // Resolve effective instruction: user's text > llmHint > empty (transform() defaults to quality improvement)
-        std::string effectiveInstruction = instruction;
-        if (effectiveInstruction.empty()) {
-            const auto it = config.modelConfigs.find(modelName);
-            if (it != config.modelConfigs.end() && !it->second.llmHint.empty())
-                effectiveInstruction = it->second.llmHint;
-        }
-
-        const ModelType modelType = inferModelType(modelDir);
-
-        std::atomic<bool>* done   = &view.enhanceDone;
-        std::string*       outPos = &view.enhancedPositive;
-        std::string*       outNeg = &view.enhancedNegative;
-        IPromptEnhancer*   enh    = enhancer.get();
-
-        std::thread([posCapture, effectiveInstruction, modelType, done, outPos, outNeg, enh]() {
-            LLMRequest req;
-            req.prompt      = posCapture;
-            req.instruction = effectiveInstruction; // empty → transform() uses "Improve quality" default
-            req.model       = modelType;
-            req.strength    = 0.5f;
-            const LLMResponse result = enh->transform(req);
-            *outPos = result.prompt;
-            *outNeg = result.negative_prompt;
-            done->store(true);
-        }).detach();
-        return;
-    }
-
-    if (view.showAdvancedParams) {
-        if (view.stepsSliderTrack.contains(pos)) {
-            view.draggingSlider = DraggingSlider::Steps;
-            return;
-        }
-        if (view.cfgSliderTrack.contains(pos)) {
-            view.draggingSlider = DraggingSlider::Cfg;
-            return;
-        }
-        if (view.imagesSliderTrack.contains(pos)) {
-            view.draggingSlider = DraggingSlider::Images;
-            return;
-        }
-    }
-
-    if (view.btnGenerate.contains(pos)) {
-        const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        view.lastImagePath = config.outputDir + "/img_" + std::to_string(now) + ".png";
-
-        presenter.beginGeneration(view);
-
-        const int myId = ++view.generationId;
-
-        const std::string prompt      = view.positiveArea.getText();
-        const std::string negPrompt   = view.negativeArea.getText();
-        const std::string outPathBase = view.lastImagePath; // used for single image; multi uses indexed paths
-        GenerationParams params = view.generationParams;
-        params.seed = view.seedInput.empty() ? -1 : std::stoll(view.seedInput);
-        const std::string modelDir    = view.availableModels.empty() ? "models" : view.availableModels[view.selectedModelIdx];
-        for (size_t i = 0; i < view.availableLoras.size(); ++i) {
-            if (i < view.loraSelected.size() && view.loraSelected[i])
-                params.loras.push_back({view.availableLoras[i],
-                                        i < view.loraScales.size() ? view.loraScales[i] : 1.0f});
-        }
-        std::atomic<bool>* done       = &view.generationDone;
-        std::atomic<int>*  step       = &view.generationStep;
-        std::atomic<bool>* cancel     = &view.cancelToken;
-        std::atomic<int>*  idPtr      = &view.generationId;
-        std::atomic<int>*  imgNum     = &view.generationImageNum;
-        std::atomic<bool>* failed     = &view.generationFailed;
-        std::string*       errorMsg   = &view.generationErrorMsg;
-
-        view.generationTotalImages.store(params.numImages);
-
-        std::thread generationThread([prompt, negPrompt, outPathBase, params, modelDir,
-                                      done, step, cancel, idPtr, imgNum, myId,
-                                      failed, errorMsg]() {
-            // Models and text encoding happen once inside generateFromPrompt;
-            // the multi-image loop runs there too, so no reload per image.
-            try {
-                PortraitGeneratorAi::generateFromPrompt(
-                    prompt, negPrompt, outPathBase, params, modelDir, step, imgNum, cancel);
-            } catch (const std::exception& e) {
-                Logger::error("Generation failed: " + std::string(e.what()));
-                *errorMsg = e.what();
-                failed->store(true);
-            } catch (...) {
-                Logger::error("Generation failed: unknown error");
-                *errorMsg = "Unknown error during generation. See log for details.";
-                failed->store(true);
-            }
-
-            if (idPtr->load() == myId)
-                done->store(true);
-        });
-
-        generationThread.detach();
-    }
+    // Sync preset list in menu bar (cheap — only name/id comparison needed)
+    view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
 }

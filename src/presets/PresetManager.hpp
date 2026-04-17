@@ -4,7 +4,7 @@
 #include <vector>
 #include "Preset.hpp"
 
-class ImageGeneratorView;
+class SettingsPanel;
 
 class PresetManager {
 public:
@@ -12,11 +12,11 @@ public:
     explicit PresetManager(std::string filePath = "presets.json");
 
     // Create a new preset from a Generation snapshot, append and persist it.
-    Preset createFromGeneration(const Generation& gen, const std::string& name);
+    Preset createFromGeneration(const GenerationSettings& gen, const std::string& name);
 
     // Overwrite all fields of an existing preset with gen's data; persist.
     // No-op (with a log warning) if presetId is not found.
-    void updateFromGeneration(const std::string& presetId, const Generation& gen);
+    void updateFromGeneration(const std::string& presetId, const GenerationSettings& gen);
 
     // Deep-copy a preset under a new name with a fresh id and createdAt.
     // Logs a warning and returns a default-constructed Preset if presetId is not found.
@@ -33,7 +33,7 @@ private:
     std::vector<Preset> presets_;
 };
 
-// Replaces ALL relevant view fields with preset values (no merge).
-// Finds modelId in view.availableModels and sets selectedModelIdx accordingly.
+// Replaces ALL relevant SettingsPanel fields with preset values (no merge).
+// Finds modelId in panel.availableModels and sets selectedModelIdx accordingly.
 // Logs a warning if modelId is not found; selectedModelIdx is left unchanged.
-void applyPresetToSettings(const Preset& preset, ImageGeneratorView& view);
+void applyPresetToSettings(const Preset& preset, SettingsPanel& panel);

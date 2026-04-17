@@ -17,7 +17,7 @@ struct Preset {
 
 // Snapshot of current UI state used as input for preset operations.
 // Intentionally decoupled from ImageGeneratorView to avoid circular includes.
-struct Generation {
+struct GenerationSettings {
     std::string prompt;
     std::string negativePrompt;
     std::string modelId;

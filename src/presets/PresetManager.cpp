@@ -1,6 +1,6 @@
 #include "PresetManager.hpp"
 #include "../managers/Logger.hpp"
-#include "../views/ImageGeneratorView.hpp"
+#include "../ui/widgets/SettingsPanel.hpp"
 #include <chrono>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -96,7 +96,7 @@ void PresetManager::save() const {
     }
 }
 
-Preset PresetManager::createFromGeneration(const Generation& gen, const std::string& name) {
+Preset PresetManager::createFromGeneration(const GenerationSettings& gen, const std::string& name) {
     Preset p;
     p.id             = generateId();
     p.name           = name;
@@ -113,7 +113,7 @@ Preset PresetManager::createFromGeneration(const Generation& gen, const std::str
     return p;
 }
 
-void PresetManager::updateFromGeneration(const std::string& presetId, const Generation& gen) {
+void PresetManager::updateFromGeneration(const std::string& presetId, const GenerationSettings& gen) {
     for (auto& p : presets_) {
         if (p.id == presetId) {
             p.basePrompt     = gen.prompt;
@@ -161,18 +161,18 @@ const std::vector<Preset>& PresetManager::getAllPresets() const {
 
 // ── applyPresetToSettings ─────────────────────────────────────────────────────
 
-void applyPresetToSettings(const Preset& preset, ImageGeneratorView& view) {
-    view.positiveArea.setText(preset.basePrompt);
-    view.negativeArea.setText(preset.negativePrompt);
-    view.generationParams.numSteps      = preset.steps;
-    view.generationParams.guidanceScale = preset.cfg;
-    view.generationParams.width         = preset.width;
-    view.generationParams.height        = preset.height;
+void applyPresetToSettings(const Preset& preset, SettingsPanel& panel) {
+    panel.positiveArea.setText(preset.basePrompt);
+    panel.negativeArea.setText(preset.negativePrompt);
+    panel.generationParams.numSteps      = preset.steps;
+    panel.generationParams.guidanceScale = preset.cfg;
+    panel.generationParams.width         = preset.width;
+    panel.generationParams.height        = preset.height;
 
     bool modelFound = false;
-    for (int i = 0; i < static_cast<int>(view.availableModels.size()); ++i) {
-        if (view.availableModels[i] == preset.modelId) {
-            view.selectedModelIdx = i;
+    for (int i = 0; i < static_cast<int>(panel.availableModels.size()); ++i) {
+        if (panel.availableModels[i] == preset.modelId) {
+            panel.selectedModelIdx = i;
             modelFound = true;
             break;
         }
@@ -181,5 +181,5 @@ void applyPresetToSettings(const Preset& preset, ImageGeneratorView& view) {
         Logger::info("applyPresetToSettings: model '" + preset.modelId
                      + "' not in availableModels — selectedModelIdx unchanged");
 
-    view.activePresetId = preset.id;
+    panel.activePresetId = preset.id;
 }

@@ -4,27 +4,28 @@ Image generator is structured around a strict separation of:
 
 - UI layer (SFML)
 - Control layer (controllers)
-- Presentation layer (state mutation)
 - Inference layer (ONNX runtime pipeline)
 - Preset layer (file-backed configuration persistence)
 
 ---
 
-# MVC structure
+# Component structure
 
-View:
-- Pure rendering
-- No business logic
-- SFML drawing only
+View (`ImageGeneratorView`):
+- Thin composition root — holds five panel instances
+- `render()` delegates to each panel; no logic
 
-Controller:
-- Input handling
-- State transitions
-- Triggering SD generation
+Panels (own state + rendering + event handling):
+- `MenuBar` — top bar: Back, title, Presets dropdown, Settings
+- `SettingsPanel` — left panel: model, prompts, sliders, seed, LoRA
+- `ResultPanel` — right panel: image display, Generate/Cancel, progress
+- `LlmBar` — bottom bar: LLM toggle, instruction, Enhance
+- `SettingsModal` — settings overlay modal
 
-Presenter:
-- Stateless mutations on view state
-- Formatting and UI updates
+Controller (`ImageGeneratorController`):
+- Thin coordinator: routes events to panels, acts on their action flags
+- Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
+- Accesses panels directly via `view.panelName.*`
 
 ---
 
