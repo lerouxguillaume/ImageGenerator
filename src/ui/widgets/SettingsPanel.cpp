@@ -134,8 +134,16 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         struct Chip { std::string label; sf::Color border; sf::Color text; };
         std::vector<Chip> chips;
 
-        if (currentDsl.subject)
-            chips.push_back({*currentDsl.subject, Col::Gold, Col::GoldLt});
+        if (currentDsl.subject) {
+            const auto& subj = *currentDsl.subject;
+            std::string lbl  = subj.value;
+            if (std::abs(subj.weight - 1.0f) > 0.01f) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight);
+                lbl += buf;
+            }
+            chips.push_back({lbl, Col::Gold, Col::GoldLt});
+        }
 
         for (const auto& tok : currentDsl.positive) {
             std::string lbl = tok.value;

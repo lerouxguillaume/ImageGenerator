@@ -12,24 +12,14 @@ void mergeTokens(std::vector<Token>& base, const std::vector<Token>& patch) {
     }
 }
 
-void mergeStrings(std::vector<std::string>& base, const std::vector<std::string>& patch) {
-    for (const auto& s : patch) {
-        bool found = false;
-        for (const auto& b : base)
-            if (b == s) { found = true; break; }
-        if (!found) base.push_back(s);
-    }
-}
-
 } // namespace
 
 namespace PromptMerge {
 
 Prompt merge(const Prompt& base, const Prompt& patch) {
     Prompt result = base;
-    if (patch.subject)        result.subject = patch.subject;
-    mergeStrings(result.styles,   patch.styles);
-    mergeTokens (result.positive, patch.positive);
+    if (patch.subject) result.subject = patch.subject;
+    mergeTokens(result.positive, patch.positive);
     mergeTokens (result.negative, patch.negative);
     return result;
 }

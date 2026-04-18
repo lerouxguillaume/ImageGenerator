@@ -9,8 +9,7 @@ struct Token {
 };
 
 struct Prompt {
-    std::optional<std::string> subject;
-    std::vector<std::string>   styles;
-    std::vector<Token>         positive;
-    std::vector<Token>         negative;
+    std::optional<Token> subject;
+    std::vector<Token>   positive;
+    std::vector<Token>   negative;
 };

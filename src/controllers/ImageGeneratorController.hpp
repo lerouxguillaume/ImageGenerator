@@ -48,8 +48,11 @@ private:
     bool                             modelsDirty     = true;
     bool                             lorasDirty      = true;
     bool                             viewInitialized = false;
-    int                              lastModelIdx    = -1;
+    int                              lastModelIdx     = -1;
     ModelType                        cachedModelType_ = ModelType::SDXL;
+    std::string                      lastPositiveText_;
+    std::string                      lastNegativeText_;
+    bool                             dslDirty_        = true;
 
     // Async LLM model load
     std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;

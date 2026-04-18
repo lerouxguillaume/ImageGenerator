@@ -49,7 +49,7 @@ Prompt parse(const std::string& positiveRaw, const std::string& negativeRaw) {
     const auto parts = splitComma(positiveRaw);
     for (size_t i = 0; i < parts.size(); ++i) {
         if (i == 0)
-            p.subject = parts[0]; // subject stays verbatim (may include A1111 syntax)
+            p.subject = parseToken(parts[0]);
         else
             p.positive.push_back(parseToken(parts[i]));
     }

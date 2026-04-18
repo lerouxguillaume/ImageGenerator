@@ -80,7 +80,7 @@ Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforc
 ### Token chip row (Phase 8)
 
 Rendered between positive area and negative label. Read-only — visualises the parsed DSL:
-- Subject chip: gold border + gold text
+- Subject chip: gold border + gold text; weight suffix shown when non-default
 - Positive token chips: neutral border; blue if `weight > 1`, muted if `weight < 1`
 - Weight shown as `label 2.0×` when non-default
 - Wraps to a second row (max 2 rows)
@@ -90,7 +90,7 @@ Rendered between positive area and negative label. Read-only — visualises the 
 
 Single muted line `→ <compiled string>` rendered below the negative area.
 Visible **only when SD1.5 is selected** — hidden for SDXL since output matches input.
-Shows the full compiled positive including subject boost `(subject:1.20)` and quality boosters.
+Shows the full compiled positive including any quality boosters injected from `ModelDefaults.qualityBoosters`.
 
 ## `ResultPanel`
 

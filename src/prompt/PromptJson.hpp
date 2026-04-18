@@ -16,16 +16,18 @@ inline void from_json(const nlohmann::json& j, Token& t) {
 inline void to_json(nlohmann::json& j, const Prompt& p) {
     j = nlohmann::json::object();
     if (p.subject) j["subject"] = *p.subject;
-    j["styles"]   = p.styles;
     j["positive"] = p.positive;
     j["negative"] = p.negative;
 }
 
 inline void from_json(const nlohmann::json& j, Prompt& p) {
-    if (j.contains("subject") && j["subject"].is_string())
-        p.subject = j["subject"].get<std::string>();
-    if (j.contains("styles"))
-        p.styles = j["styles"].get<std::vector<std::string>>();
+    if (j.contains("subject")) {
+        // Support legacy string format (old presets.json) and current Token format
+        if (j["subject"].is_string())
+            p.subject = Token{j["subject"].get<std::string>(), 1.0f};
+        else if (j["subject"].is_object())
+            p.subject = j["subject"].get<Token>();
+    }
     if (j.contains("positive"))
         p.positive = j["positive"].get<std::vector<Token>>();
     if (j.contains("negative"))

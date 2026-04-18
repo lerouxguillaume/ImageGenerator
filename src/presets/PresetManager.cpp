@@ -162,7 +162,7 @@ void applyPresetToSettings(const Preset& preset, SettingsPanel& panel) {
     // Compile DSL to display text using neutral (SDXL) form — no model-specific boosters.
     // The compiler re-applies the correct model at generation time.
     panel.positiveArea.setText(PromptCompiler::compile(preset.dsl, ModelType::SDXL));
-    panel.negativeArea.setText(PromptCompiler::compileNegative(preset.dsl, ModelType::SDXL));
+    panel.negativeArea.setText(PromptCompiler::compileNegative(preset.dsl));
 
     panel.generationParams.numSteps      = preset.steps;
     panel.generationParams.guidanceScale = preset.cfg;

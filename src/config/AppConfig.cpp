@@ -15,8 +15,6 @@ AppConfig AppConfig::load(const std::string& configPath) {
         cfg.modelBaseDir            = j.value("modelBaseDir",            cfg.modelBaseDir);
         cfg.outputDir               = j.value("outputDir",               cfg.outputDir);
         cfg.loraBaseDir             = j.value("loraBaseDir",             cfg.loraBaseDir);
-        cfg.defaultPositivePrompt   = j.value("defaultPositivePrompt",   cfg.defaultPositivePrompt);
-        cfg.defaultNegativePrompt   = j.value("defaultNegativePrompt",   cfg.defaultNegativePrompt);
         cfg.defaultNumSteps         = j.value("defaultNumSteps",         cfg.defaultNumSteps);
         cfg.defaultGuidanceScale    = j.value("defaultGuidanceScale",    cfg.defaultGuidanceScale);
         if (j.contains("modelConfigs")) {
@@ -27,6 +25,10 @@ AppConfig AppConfig::load(const std::string& configPath) {
                 md.numSteps       = val.value("numSteps",       0);
                 md.guidanceScale  = val.value("guidanceScale",  0.f);
                 md.llmHint        = val.value("llmHint",        "");
+                if (val.contains("qualityBoosters") && val["qualityBoosters"].is_array()) {
+                    for (const auto& b : val["qualityBoosters"])
+                        if (b.is_string()) md.qualityBoosters.push_back(b.get<std::string>());
+                }
                 if (val.contains("loras") && val["loras"].is_array()) {
                     Logger::info("Model '" + key + "' has " + std::to_string(val["loras"].size()) + " LoRA adapter(s) configured.");
                     for (const auto& lo : val["loras"]) {
@@ -60,8 +62,6 @@ void AppConfig::save(const std::string& configPath) const {
         j["modelBaseDir"]          = modelBaseDir;
         j["outputDir"]             = outputDir;
         j["loraBaseDir"]           = loraBaseDir;
-        j["defaultPositivePrompt"] = defaultPositivePrompt;
-        j["defaultNegativePrompt"] = defaultNegativePrompt;
         j["defaultNumSteps"]       = defaultNumSteps;
         j["defaultGuidanceScale"]  = defaultGuidanceScale;
         nlohmann::json mcj = nlohmann::json::object();
@@ -72,6 +72,11 @@ void AppConfig::save(const std::string& configPath) const {
             if (md.numSteps > 0)            entry["numSteps"]       = md.numSteps;
             if (md.guidanceScale > 0.f)     entry["guidanceScale"]  = md.guidanceScale;
             if (!md.llmHint.empty())        entry["llmHint"]        = md.llmHint;
+            if (!md.qualityBoosters.empty()) {
+                nlohmann::json bArr = nlohmann::json::array();
+                for (const auto& b : md.qualityBoosters) bArr.push_back(b);
+                entry["qualityBoosters"] = bArr;
+            }
             if (!md.loras.empty()) {
                 nlohmann::json lorasArr = nlohmann::json::array();
                 for (const auto& lo : md.loras) {

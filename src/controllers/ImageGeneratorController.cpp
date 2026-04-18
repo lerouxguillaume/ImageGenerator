@@ -111,12 +111,10 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
         if (it != config.modelConfigs.end()) md = &it->second;
     }
 
-    sp.positiveArea.setText((md && !md->positivePrompt.empty())
-        ? md->positivePrompt : config.defaultPositivePrompt);
+    sp.positiveArea.setText((md && !md->positivePrompt.empty()) ? md->positivePrompt : std::string{});
     sp.positiveArea.setActive(true);
 
-    sp.negativeArea.setText((md && !md->negativePrompt.empty())
-        ? md->negativePrompt : config.defaultNegativePrompt);
+    sp.negativeArea.setText((md && !md->negativePrompt.empty()) ? md->negativePrompt : std::string{});
     sp.negativeArea.setActive(false);
 
     sp.generationParams.numSteps = (md && md->numSteps > 0)
@@ -184,6 +182,18 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     }
 }
 
+// ── Prompt helpers ────────────────────────────────────────────────────────────
+
+static void injectBoosters(Prompt& dsl, const ModelDefaults& md) {
+    for (const auto& booster : md.qualityBoosters) {
+        const bool inSubject  = dsl.subject && dsl.subject->value == booster;
+        const bool inPositive = std::any_of(dsl.positive.begin(), dsl.positive.end(),
+                                            [&](const Token& t){ return t.value == booster; });
+        if (!inSubject && !inPositive)
+            dsl.positive.push_back({booster, 1.0f});
+    }
+}
+
 // ── Generation ────────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
@@ -205,11 +215,16 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
     const std::string modelDir  = sp.getSelectedModelDir();
-    const Prompt      dsl       = PromptParser::parse(sp.positiveArea.getText(),
+    Prompt            dsl       = PromptParser::parse(sp.positiveArea.getText(),
                                                       sp.negativeArea.getText());
     const ModelType   modelType = inferModelType(modelDir);
+
+    const std::string modelKey = std::filesystem::path(modelDir).filename().string();
+    if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
+        injectBoosters(dsl, it->second);
+
     const std::string prompt    = PromptCompiler::compile(dsl, modelType);
-    const std::string negPrompt = PromptCompiler::compileNegative(dsl, modelType);
+    const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rp.lastImagePath;
     GenerationParams params = sp.generationParams;
     params.seed = sp.seedInput.empty() ? -1 : std::stoll(sp.seedInput);
@@ -417,6 +432,7 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         lastModelIdx     = sp.selectedModelIdx;
         viewInitialized  = true;
         cachedModelType_ = inferModelType(sp.getSelectedModelDir());
+        dslDirty_        = true;
     }
 
     // Poll async LLM load
@@ -484,7 +500,7 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                                                    view.llmBar.enhancedNegative);
         const Prompt merged = PromptMerge::merge(base, patch);
         sp.positiveArea.setText(PromptCompiler::compile(merged, ModelType::SDXL));
-        sp.negativeArea.setText(PromptCompiler::compileNegative(merged, ModelType::SDXL));
+        sp.negativeArea.setText(PromptCompiler::compileNegative(merged));
         view.llmBar.enhancing = false;
         view.llmBar.enhanceDone.store(false);
     }
@@ -517,8 +533,23 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
 
     // Update DSL-derived display state (chips + compiled preview) every frame
-    sp.currentDsl = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
-    sp.compiledPreview = (cachedModelType_ == ModelType::SD15)
-        ? PromptCompiler::compile(sp.currentDsl, ModelType::SD15)
-        : std::string{};
+    // Re-parse only when text or model actually changed
+    const std::string& posText = sp.positiveArea.getText();
+    const std::string& negText = sp.negativeArea.getText();
+    if (dslDirty_ || posText != lastPositiveText_ || negText != lastNegativeText_) {
+        lastPositiveText_ = posText;
+        lastNegativeText_ = negText;
+        dslDirty_         = false;
+
+        sp.currentDsl = PromptParser::parse(posText, negText);
+        if (cachedModelType_ == ModelType::SD15) {
+            Prompt previewDsl = sp.currentDsl;
+            const std::string previewKey = std::filesystem::path(sp.getSelectedModelDir()).filename().string();
+            if (const auto it = config.modelConfigs.find(previewKey); it != config.modelConfigs.end())
+                injectBoosters(previewDsl, it->second);
+            sp.compiledPreview = PromptCompiler::compile(previewDsl, ModelType::SD15);
+        } else {
+            sp.compiledPreview = std::string{};
+        }
+    }
 }

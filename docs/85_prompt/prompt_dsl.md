@@ -7,10 +7,11 @@ Model-agnostic structured prompt representation with model-specific compilation.
 # Principles
 
 1. DSL is model-agnostic — no model logic inside the structs
-2. Compilation is model-specific — compiler adapts output per `ModelType`
-3. Deterministic: same DSL → same compiled string
-4. Prompt string is output only — never internal state
-5. Structure is optional; free tokens always work
+2. Compiler is a pure renderer — ordering, formatting, joining only
+3. Semantic content (quality boosters) lives in config, not compiler logic
+4. Token.value contains raw semantic text only — never embedded A1111 syntax
+5. Subject is a normal Token placed first — no special wrapping or weighting
+6. Deterministic: same DSL → same compiled string
 
 ---
 
@@ -18,17 +19,19 @@ Model-agnostic structured prompt representation with model-specific compilation.
 
 ```cpp
 struct Token {
-    std::string value;
-    float       weight = 1.0f; // DSL-level weight (distinct from A1111 syntax in value)
+    std::string value;      // raw semantic text only — no "(text:1.2)" embedded
+    float       weight = 1.0f;
 };
 
 struct Prompt {
-    std::optional<std::string> subject;  // first comma-token (heuristic)
-    std::vector<std::string>   styles;   // high-level style grouping (set via UI future)
-    std::vector<Token>         positive; // remaining positive tokens
-    std::vector<Token>         negative; // negative tokens
+    std::optional<Token> subject;  // first comma-token (ordering hint only)
+    std::vector<Token>   positive; // remaining positive tokens
+    std::vector<Token>   negative; // negative tokens
 };
 ```
+
+`subject` is an `optional<Token>` — it carries a clean value and weight, exactly
+like any other positive token. It is placed first in the compiled output.
 
 ---
 
@@ -42,11 +45,13 @@ Prompt PromptParser::parse(const std::string& positiveRaw,
 ## Rules
 
 - Split by `,`, trim whitespace, skip empty segments
-- First positive segment → `subject` (verbatim, no weight stripping)
+- First positive segment → `subject` via A1111 weight parsing
 - Remaining segments → `positive` tokens via A1111 weight parsing
 - Negative segments → `negative` tokens via A1111 weight parsing
 
-## A1111 weight parsing (Phase 9)
+All segments go through the same `parseToken()` path — no special-casing.
+
+## A1111 weight parsing
 
 | Input | Token result |
 |---|---|
@@ -54,16 +59,16 @@ Prompt PromptParser::parse(const std::string& positiveRaw,
 | `(text)` | `{text, 1.1f}` (A1111 bare-parens convention) |
 | `text` | `{text, 1.0f}` |
 
-Subject is kept verbatim so it may contain A1111 syntax — the compiler detects this
-and avoids double-wrapping.
+A1111 syntax is **always stripped** from `value` — weight is extracted into the `weight` field.
+No raw `(text:1.2)` strings are stored inside any Token.
 
 ## Roundtrip invariant
 
 ```
-compile(parse(x), SDXL) ≈ x
+compile(parse(x)) ≈ x
 ```
 
-Approximate because SDXL compilation is neutral (no additions).
+Tokens with `weight == 1.0` round-trip exactly; weighted tokens reformat as `(value:weight)`.
 
 ---
 
@@ -71,39 +76,68 @@ Approximate because SDXL compilation is neutral (no additions).
 
 ```cpp
 std::string PromptCompiler::compile(const Prompt& p, ModelType model);
-std::string PromptCompiler::compileNegative(const Prompt& p, ModelType model);
+std::string PromptCompiler::compileNegative(const Prompt& p);
 ```
+
+## Responsibilities (strictly limited)
+
+1. Order tokens: subject → positive
+2. Format each token: `value` if weight≈1.0, else `(value:%.2f)`
+3. Join with `, `
+
+The compiler does **not** add, remove, or modify semantic content.
 
 ## Positive output order
 
 ```
-1. subject
-2. styles
-3. positive tokens
-4. quality boosters (SD1.5 only)
+1. subject (if set)
+2. positive tokens
 ```
 
 ## Model differences
 
-### SDXL
+SDXL and SD1.5 are compiled identically. Differences are limited to formatting style;
+neither model adds tokens or quality boosters inside the compiler.
 
-- Natural phrasing, no boosters
-- Subject passed through verbatim
-- Weighted tokens: `(value:weight)` format
+If model-specific tokens are needed, add them to `ModelDefaults.qualityBoosters` in
+`config.json` — they are injected as normal DSL tokens at generation time, not
+by the compiler.
 
-### SD1.5
+## Token formatting
 
-- Subject wrapped as `(subject:1.20)` unless it already contains A1111 weight syntax
-- Quality boosters appended: `masterpiece, best quality`
-- Weighted tokens: `(value:weight)` format
+```
+weight ≈ 1.0  →  value
+weight ≠ 1.0  →  (value:1.30)
+```
 
 ## Logging
 
 Every `compile()` call emits:
 
 ```
-[PromptCompiler] model=SD15 output="(girl:1.20), cinematic, masterpiece, best quality"
+[PromptCompiler] model=SD15 output="girl, cinematic lighting, (85mm:1.30)"
 ```
+
+---
+
+# Quality boosters (`AppConfig` / `ModelDefaults`)
+
+Quality boosters are **not** compiler logic. They live in `config.json`:
+
+```json
+"modelConfigs": {
+  "anything_v5": {
+    "qualityBoosters": ["masterpiece", "best quality"]
+  }
+}
+```
+
+At generation time, `ImageGeneratorController::launchGeneration` reads
+`ModelDefaults.qualityBoosters` and appends any missing values as normal
+`Token{booster, 1.0f}` entries into the DSL before compiling. Duplicates
+(already present in user's positive tokens) are skipped.
+
+This keeps boosters as config data and the compiler as a pure renderer.
 
 ---
 
@@ -113,15 +147,14 @@ Every `compile()` call emits:
 Prompt PromptMerge::merge(const Prompt& base, const Prompt& patch);
 ```
 
-Used by LLM enhancement (Phase 7 Step 2) to non-destructively apply an LLM-generated
-patch without clobbering user edits.
+Used by LLM enhancement to non-destructively apply an LLM-generated patch
+without clobbering user edits.
 
 ## Rules
 
 | Field | Behaviour |
 |---|---|
 | `subject` | patch overrides if set |
-| `styles` | union, deduplicated, base order preserved |
 | `positive` | deduplicated by value; patch weight overrides on collision |
 | `negative` | same as positive |
 
@@ -131,10 +164,11 @@ patch without clobbering user edits.
 
 Header-only ADL hooks for `nlohmann_json`. Used by the preset system.
 
+`subject` is serialised as a Token object:
+
 ```json
 {
-  "subject": "girl",
-  "styles": ["cinematic"],
+  "subject": {"value": "girl", "weight": 1.0},
   "positive": [
     {"value": "soft lighting", "weight": 1.0},
     {"value": "85mm",          "weight": 1.3}
@@ -144,6 +178,9 @@ Header-only ADL hooks for `nlohmann_json`. Used by the preset system.
   ]
 }
 ```
+
+**Legacy compatibility:** old `presets.json` files where `subject` is a plain string
+are loaded automatically — the string is converted to `Token{value, 1.0f}`.
 
 ---
 
@@ -155,9 +192,13 @@ Header-only ADL hooks for `nlohmann_json`. Used by the preset system.
 positiveArea.getText() + negativeArea.getText()
     → PromptParser::parse()
     → Prompt
-    → PromptCompiler::compile(p, inferModelType(modelDir))
+    → injectBoosters(dsl, ModelDefaults)   ← dedup against subject + positive
+    → PromptCompiler::compile(p, modelType)
     → std::string  →  PortraitGeneratorAi::generateFromPrompt()
 ```
+
+`injectBoosters` is a file-local helper in `ImageGeneratorController.cpp`, shared by
+`launchGeneration` and the compiled preview path in `update()`.
 
 ## LLM enhancement (`ImageGeneratorController::update`)
 
@@ -190,20 +231,21 @@ SDXL (neutral) form is used for display; generation re-compiles with actual mode
 
 Two DSL-derived elements are updated every frame by the controller:
 
-## Token chips (Phase 8)
+## Token chips
 
 Read-only chip row between positive area and negative label.
 
-- Subject chip: gold border + gold text
+- Subject chip: gold border + gold text; weight suffix shown when non-default
 - Positive tokens: neutral border; blue border if `weight > 1`, muted if `weight < 1`
 - Weight shown as `label 2.0×` when `weight ≠ 1.0`
 - Wraps to a second row (max 2 rows)
 
-## Compiled preview (Phase 6)
+## Compiled preview
 
 Single muted line below the negative area, **only visible when SD1.5 is selected**.
-Shows the full compiled positive string including subject boost and quality boosters.
-Hidden for SDXL (output matches input).
+Shows the full compiled positive string including quality boosters from `ModelDefaults.qualityBoosters`,
+so the user sees exactly what will be sent to the model.
+Hidden for SDXL since output matches input.
 
 ---
 
@@ -213,9 +255,9 @@ Hidden for SDXL (output matches input).
 src/prompt/
 ├── Prompt.hpp         — Token, Prompt structs
 ├── PromptParser.hpp   — parse() declaration
-├── PromptParser.cpp   — parse() + A1111 weight parsing
+├── PromptParser.cpp   — parse() + A1111 weight parsing (all tokens including subject)
 ├── PromptCompiler.hpp — compile(), compileNegative() declarations
-├── PromptCompiler.cpp — model-specific compilation + logging
+├── PromptCompiler.cpp — formatting/ordering only; no semantic injection
 ├── PromptMerge.hpp    — merge() declaration
 ├── PromptMerge.cpp    — merge() implementation
 └── PromptJson.hpp     — nlohmann_json ADL hooks (header-only)

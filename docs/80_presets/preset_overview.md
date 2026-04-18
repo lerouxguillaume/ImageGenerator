@@ -87,8 +87,7 @@ Corrupt/invalid JSON → start empty (logged at ERROR).
     "id": "preset_1713432000000",
     "name": "Cinematic portrait",
     "dsl": {
-      "subject": "girl",
-      "styles": [],
+      "subject": {"value": "girl", "weight": 1.0},
       "positive": [
         {"value": "soft lighting", "weight": 1.0},
         {"value": "85mm",          "weight": 1.3}
@@ -107,8 +106,9 @@ Corrupt/invalid JSON → start empty (logged at ERROR).
 ]
 ```
 
-**Note:** old `presets.json` files with `basePrompt`/`negativePrompt` string fields
-will load with an empty DSL (those fields are silently ignored). Resave to migrate.
+**Notes on migration:**
+- Old `presets.json` files with `basePrompt`/`negativePrompt` string fields load with an empty DSL (silently ignored). Resave to migrate.
+- Old files where `subject` is a plain string are auto-converted to `{"value": "...", "weight": 1.0}` on load.
 
 ---
 

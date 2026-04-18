@@ -24,7 +24,8 @@ struct ModelDefaults {
     float       guidanceScale = 0.f;  // 0      → use global default
     std::string llmHint;              // plain-English style hint for the LLM enhancer
                                       // empty  → fall back to positivePrompt as style example
-    std::vector<LoraEntry> loras;     // LoRA adapters to apply to this model (empty = none)
+    std::vector<LoraEntry>   loras;           // LoRA adapters (empty = none)
+    std::vector<std::string> qualityBoosters; // tokens appended as normal DSL tokens at generation time
 };
 
 // Persisted application settings. Saved to / loaded from config.json in the
@@ -34,20 +35,6 @@ struct AppConfig {
     std::string modelBaseDir = "models";           // Root directory scanned for model subdirectories
     std::string outputDir    = "assets/generated"; // Directory where generated images are written
     std::string loraBaseDir  = "loras";            // Directory scanned for .safetensors LoRA files
-
-    // Generation defaults — applied when the image generator screen first opens.
-    // Edit config.json to change them permanently; the sliders/fields stay editable per-session.
-    std::string defaultPositivePrompt =
-        "masterpiece, best quality, highly detailed, 1girl, beautiful face, "
-        "fantasy character, portrait, upper body, solo, cinematic lighting";
-
-    std::string defaultNegativePrompt =
-        "worst quality, low quality, bad anatomy, bad hands, extra fingers, "
-        "missing fingers, fused fingers, too many fingers, mutated hands, "
-        "poorly drawn hands, extra arms, missing arms, extra limbs, "
-        "malformed limbs, disconnected limbs, floating limbs, deformed, "
-        "mutation, gross proportions, long neck, ugly, blurry, artifacts, "
-        "watermark, signature";
 
     int   defaultNumSteps      = 25;
     float defaultGuidanceScale = 7.0f;
