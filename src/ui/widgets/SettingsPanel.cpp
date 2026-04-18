@@ -115,7 +115,57 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     constexpr float fieldH_sm = 68.f;
     positiveArea.setRect({x + pad, y, fw, fieldH});
     positiveArea.render(win, font);
-    y += fieldH + pad * 2.f;
+    y += fieldH + 4.f;
+
+    // ── Token chips (Phase 8 — read-only DSL visualisation) ──────────────────
+    if (currentDsl.subject || !currentDsl.positive.empty()) {
+        constexpr float chipH    = 20.f;
+        constexpr float chipPadX =  6.f;
+        constexpr float chipGap  =  4.f;
+        const float     startY   = y;
+        float cx = x + pad;
+        float cy = startY;
+        int   rows = 1;
+
+        sf::Text measure;
+        measure.setFont(font);
+        measure.setCharacterSize(11);
+
+        struct Chip { std::string label; sf::Color border; sf::Color text; };
+        std::vector<Chip> chips;
+
+        if (currentDsl.subject)
+            chips.push_back({*currentDsl.subject, Col::Gold, Col::GoldLt});
+
+        for (const auto& tok : currentDsl.positive) {
+            std::string lbl = tok.value;
+            if (std::abs(tok.weight - 1.0f) > 0.01f) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight); // × (UTF-8)
+                lbl += buf;
+            }
+            const sf::Color border = (tok.weight > 1.f) ? Col::BlueLt
+                                   : (tok.weight < 1.f) ? Col::Muted
+                                                         : Col::Border;
+            chips.push_back({lbl, border, Col::Text});
+        }
+
+        for (const auto& chip : chips) {
+            measure.setString(chip.label);
+            const float cw = measure.getLocalBounds().width + chipPadX * 2.f;
+            if (cx + cw > x + pad + fw && cx > x + pad) {
+                cy += chipH + 2.f;
+                cx  = x + pad;
+                if (++rows > 2) break;
+            }
+            drawRect(win, {cx, cy, cw, chipH}, Col::Panel2, chip.border, 1.f);
+            drawText(win, font, chip.label, chip.text, cx + chipPadX, cy + 4.f, 11);
+            cx += cw + chipGap;
+        }
+        y = startY + static_cast<float>(rows) * (chipH + 2.f) + 4.f;
+    } else {
+        y += pad * 2.f;
+    }
 
     // Negative prompt
     drawText(win, font, "Negative prompt:", Col::Muted, x + pad, y, 12);
@@ -123,7 +173,26 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     negativeArea.setRect({x + pad, y, fw, fieldH_sm});
     negativeArea.setTextColor(Col::Muted);
     negativeArea.render(win, font);
-    y += fieldH_sm + pad * 2.f;
+    y += fieldH_sm + 4.f;
+
+    // ── Compiled preview (Phase 6 — SD1.5 only, shows model-adjusted output) ─
+    if (!compiledPreview.empty()) {
+        sf::Text measure;
+        measure.setFont(font);
+        measure.setCharacterSize(10);
+        const float maxW = fw - 4.f;
+        std::string txt = compiledPreview;
+        measure.setString(txt);
+        while (!txt.empty() && measure.getLocalBounds().width > maxW) {
+            txt.pop_back();
+            measure.setString(txt);
+        }
+        if (txt.size() < compiledPreview.size()) txt += "\xe2\x80\xa6"; // … (UTF-8)
+        drawText(win, font, "\xe2\x86\x92 " + txt, Col::Muted, x + pad, y, 10); // → prefix
+        y += 16.f;
+    }
+
+    y += pad * 2.f;
 
     // ── Sliders (always visible) ──────────────────────────────────────────────
     const float sliderW = fw;

@@ -4,6 +4,7 @@ Image generator is structured around a strict separation of:
 
 - UI layer (SFML)
 - Control layer (controllers)
+- Prompt DSL layer (parse / compile / merge)
 - Inference layer (ONNX runtime pipeline)
 - Preset layer (file-backed configuration persistence)
 
@@ -17,7 +18,7 @@ View (`ImageGeneratorView`):
 
 Panels (own state + rendering + event handling):
 - `MenuBar` — top bar: Back, title, Presets dropdown, Settings
-- `SettingsPanel` — left panel: model, prompts, sliders, seed, LoRA
+- `SettingsPanel` — left panel: model, prompts, token chips, compiled preview, sliders, seed, LoRA
 - `ResultPanel` — right panel: image display, Generate/Cancel, progress
 - `LlmBar` — bottom bar: LLM toggle, instruction, Enhance
 - `SettingsModal` — settings overlay modal
@@ -25,7 +26,25 @@ Panels (own state + rendering + event handling):
 Controller (`ImageGeneratorController`):
 - Thin coordinator: routes events to panels, acts on their action flags
 - Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
+- Updates DSL display state (token chips, compiled preview) every frame
 - Accesses panels directly via `view.panelName.*`
+
+---
+
+# Prompt DSL architecture
+
+```
+raw text (UI)
+    ↓ PromptParser::parse()
+Prompt DSL { subject, styles, positive[], negative[] }
+    ↓ PromptMerge::merge()  ← optional LLM patch
+merged Prompt DSL
+    ↓ PromptCompiler::compile(dsl, ModelType)
+prompt string → inference pipeline
+```
+
+The DSL is re-parsed from text areas on every relevant operation (generation, preset save,
+LLM enhancement, per-frame display update). It is not stored as persistent UI state.
 
 ---
 
@@ -77,9 +96,10 @@ Each generation run:
 
 ---
 
-# Key design decision
+# Key design decisions
 
 The system prioritizes:
 - determinism over flexibility
 - caching over recomputation
 - static graphs over dynamic graph editing
+- DSL as source of truth for prompts, not raw strings

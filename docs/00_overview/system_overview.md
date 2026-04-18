@@ -1,26 +1,29 @@
 # System Overview
 
-Image generator is a C++17 / SFML application embedding a full Stable Diffusion inference stack using ONNX Runtime (no Python runtime dependency).
+Image generator is a C++20 / SFML application embedding a full Stable Diffusion inference stack using ONNX Runtime (no Python runtime dependency).
 
 It supports:
 - Stable Diffusion 1.5
 - Stable Diffusion XL (SDXL)
 - LoRA injection via external initializer patching
 - Optional LLM prompt transformation via ORT GenAI
+- Structured Prompt DSL with model-specific compilation
 
 ---
 
 # Core runtime flow
 
-1. User enters prompt (UI layer)
-2. Optional LLM transforms prompt
-3. SD pipeline executes:
+1. User enters prompt text (UI layer)
+2. `PromptParser::parse()` converts raw text → `Prompt` DSL
+3. Optional LLM transforms the DSL (merge, not replace)
+4. At generation time, `PromptCompiler::compile(dsl, modelType)` produces the final string
+5. SD pipeline executes:
     - CLIP encoding
     - UNet denoising loop
     - CFG guidance
     - Scheduler (DPM++ 2M Karras)
     - VAE decode
-4. Image saved via OpenCV
+6. Image saved via OpenCV
 
 Entry point:
 - `PortraitGeneratorAi::generateFromPrompt()`
@@ -44,6 +47,7 @@ The system is fully synchronous per generation request:
 - ONNX Runtime is the only inference backend
 - LoRA is injected at session creation (not runtime graph editing)
 - SDXL and SD1.5 share pipeline but diverge at encoding stage
+- Prompt DSL is model-agnostic; model-specific logic lives only in the compiler
 
 ---
 
@@ -53,9 +57,10 @@ The system is fully synchronous per generation request:
 - Model system → `ModelManager`, `SdLoader`
 - LoRA system → `LoraInjector`
 - ONNX parsing → external tensor resolution
-- UI system → SFML widgets
+- UI system → SFML widgets (resizable window, min 700×550)
 - LLM system → optional ORT GenAI wrapper
-- Preset system → `PresetManager`, file-backed reusable generation configs
+- Prompt DSL → `src/prompt/` — parse, compile, merge, JSON serialisation
+- Preset system → `PresetManager`, DSL-backed reusable generation configs
 
 ---
 
@@ -65,3 +70,4 @@ The system is fully synchronous per generation request:
 - All sessions are cached by `ModelCacheKey`
 - All LoRA modifications occur before session creation
 - All dtype selection must use runtime detection
+- Prompt string is output only — `Prompt` DSL is the internal representation

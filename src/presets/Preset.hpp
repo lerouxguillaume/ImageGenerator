@@ -1,12 +1,12 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include "../prompt/Prompt.hpp"
 
 struct Preset {
     std::string id;
     std::string name;
-    std::string basePrompt;
-    std::string negativePrompt;
+    Prompt      dsl;       // source of truth for prompts
     int         steps     = 20;
     float       cfg       = 7.0f;
     std::string modelId;   // matches availableModels entry (model folder name)
@@ -18,8 +18,7 @@ struct Preset {
 // Snapshot of current UI state used as input for preset operations.
 // Intentionally decoupled from ImageGeneratorView to avoid circular includes.
 struct GenerationSettings {
-    std::string prompt;
-    std::string negativePrompt;
+    Prompt      dsl;
     std::string modelId;
     int         steps  = 20;
     float       cfg    = 7.0f;

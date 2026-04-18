@@ -3,6 +3,9 @@
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
 #include "../presets/PresetManager.hpp"
+#include "../prompt/PromptParser.hpp"
+#include "../prompt/PromptCompiler.hpp"
+#include "../prompt/PromptMerge.hpp"
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
@@ -84,16 +87,15 @@ static ModelType inferModelType(const std::string& modelDir) {
 static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view) {
     const auto& sp = view.settingsPanel;
     GenerationSettings gs;
-    gs.prompt         = sp.positiveArea.getText();
-    gs.negativePrompt = sp.negativeArea.getText();
-    gs.modelId        = sp.getSelectedModelDir().empty()
+    gs.dsl     = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
+    gs.modelId = sp.getSelectedModelDir().empty()
         ? std::string{}
         : std::filesystem::path(sp.getSelectedModelDir()).filename().string();
-    gs.steps          = sp.generationParams.numSteps;
-    gs.cfg            = sp.generationParams.guidanceScale;
-    gs.width          = sp.generationParams.width;
-    gs.height         = sp.generationParams.height;
-    gs.presetId       = sp.activePresetId;
+    gs.steps   = sp.generationParams.numSteps;
+    gs.cfg     = sp.generationParams.guidanceScale;
+    gs.width   = sp.generationParams.width;
+    gs.height  = sp.generationParams.height;
+    gs.presetId = sp.activePresetId;
     return gs;
 }
 
@@ -202,10 +204,13 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const int myId = ++rp.generationId;
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
-    const std::string prompt    = sp.positiveArea.getText();
-    const std::string negPrompt = sp.negativeArea.getText();
-    const std::string outPath   = rp.lastImagePath;
     const std::string modelDir  = sp.getSelectedModelDir();
+    const Prompt      dsl       = PromptParser::parse(sp.positiveArea.getText(),
+                                                      sp.negativeArea.getText());
+    const ModelType   modelType = inferModelType(modelDir);
+    const std::string prompt    = PromptCompiler::compile(dsl, modelType);
+    const std::string negPrompt = PromptCompiler::compileNegative(dsl, modelType);
+    const std::string outPath   = rp.lastImagePath;
     GenerationParams params = sp.generationParams;
     params.seed = sp.seedInput.empty() ? -1 : std::stoll(sp.seedInput);
 
@@ -250,6 +255,8 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
 
     llm.enhancing = true;
     llm.enhanceDone.store(false);
+    llm.originalPositive = sp.positiveArea.getText();
+    llm.originalNegative = sp.negativeArea.getText();
 
     const std::string posCapture  = sp.positiveArea.getText();
     const std::string instruction = llm.instructionArea.getText();
@@ -407,8 +414,9 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     // Apply model defaults on first open or model change
     if (!viewInitialized || sp.selectedModelIdx != lastModelIdx) {
         applyModelDefaults(view);
-        lastModelIdx    = sp.selectedModelIdx;
-        viewInitialized = true;
+        lastModelIdx     = sp.selectedModelIdx;
+        viewInitialized  = true;
+        cachedModelType_ = inferModelType(sp.getSelectedModelDir());
     }
 
     // Poll async LLM load
@@ -468,10 +476,15 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         lorasDirty = false;
     }
 
-    // Collect enhancement result
+    // Collect enhancement result — merge LLM patch into original DSL (Phase 7 Step 2)
     if (view.llmBar.enhancing && view.llmBar.enhanceDone.load()) {
-        sp.positiveArea.setText(view.llmBar.enhancedPositive);
-        sp.negativeArea.setText(view.llmBar.enhancedNegative);
+        const Prompt base   = PromptParser::parse(view.llmBar.originalPositive,
+                                                   view.llmBar.originalNegative);
+        const Prompt patch  = PromptParser::parse(view.llmBar.enhancedPositive,
+                                                   view.llmBar.enhancedNegative);
+        const Prompt merged = PromptMerge::merge(base, patch);
+        sp.positiveArea.setText(PromptCompiler::compile(merged, ModelType::SDXL));
+        sp.negativeArea.setText(PromptCompiler::compileNegative(merged, ModelType::SDXL));
         view.llmBar.enhancing = false;
         view.llmBar.enhanceDone.store(false);
     }
@@ -502,4 +515,10 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
 
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
+
+    // Update DSL-derived display state (chips + compiled preview) every frame
+    sp.currentDsl = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
+    sp.compiledPreview = (cachedModelType_ == ModelType::SD15)
+        ? PromptCompiler::compile(sp.currentDsl, ModelType::SD15)
+        : std::string{};
 }

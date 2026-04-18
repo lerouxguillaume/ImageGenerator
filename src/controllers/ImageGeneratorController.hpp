@@ -4,6 +4,7 @@
 #include <thread>
 #include <SFML/Graphics.hpp>
 #include "../config/AppConfig.hpp"
+#include "../enum/enums.hpp"
 #include "../llm/IPromptEnhancer.hpp"
 #include "../llm/PromptEnhancerFactory.hpp"
 #include "../presets/PresetManager.hpp"
@@ -48,6 +49,7 @@ private:
     bool                             lorasDirty      = true;
     bool                             viewInitialized = false;
     int                              lastModelIdx    = -1;
+    ModelType                        cachedModelType_ = ModelType::SDXL;
 
     // Async LLM model load
     std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;

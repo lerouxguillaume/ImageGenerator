@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**ImageGenerator** — C++17 / SFML application with embedded Stable Diffusion inference (ONNX Runtime, no Python).
+**ImageGenerator** — C++20 / SFML application with embedded Stable Diffusion inference (ONNX Runtime, no Python).
 
 This file is a **retrieval router** only. All implementation details live in `docs/`.
 
@@ -61,12 +61,15 @@ This file is a **retrieval router** only. All implementation details live in `do
 → docs/60_llm/prompt_transform.md  
 → docs/60_llm/json_parsing.md
 
-## UI system — SFML, `MultiLineTextArea`
+## UI system — SFML, `MultiLineTextArea` (resizable window, token chips, compiled preview)
 → docs/70_ui/ui_architecture.md  
 → docs/70_ui/multiline_textarea.md
 
-## Preset system — `PresetManager`
+## Preset system — `PresetManager` (DSL-backed)
 → docs/80_presets/preset_overview.md
+
+## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
+→ docs/85_prompt/prompt_dsl.md
 
 ## Debugging
 → docs/90_debug/common_failures.md  
@@ -84,3 +87,5 @@ This file is a **retrieval router** only. All implementation details live in `do
 - Never use `operator[]` on `ModelManager` cache — use `emplace + std::move`
 - Never create local `LoraInjector` — use references from `s_injectors`
 - Never destroy `LoraOverrides` before `Ort::Session` constructor returns
+- Never store a raw prompt string as internal state — use `Prompt` DSL
+- Never replace LLM-enhanced text directly — always merge via `PromptMerge::merge()`

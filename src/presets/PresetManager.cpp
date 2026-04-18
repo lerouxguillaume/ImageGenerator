@@ -1,5 +1,7 @@
 #include "PresetManager.hpp"
 #include "../managers/Logger.hpp"
+#include "../prompt/PromptJson.hpp"
+#include "../prompt/PromptCompiler.hpp"
 #include "../ui/widgets/SettingsPanel.hpp"
 #include <chrono>
 #include <fstream>
@@ -26,31 +28,30 @@ static uint64_t nowSeconds() {
 
 static nlohmann::json presetToJson(const Preset& p) {
     nlohmann::json j;
-    j["id"]             = p.id;
-    j["name"]           = p.name;
-    j["basePrompt"]     = p.basePrompt;
-    j["negativePrompt"] = p.negativePrompt;
-    j["steps"]          = p.steps;
-    j["cfg"]            = p.cfg;
-    j["modelId"]        = p.modelId;
-    j["width"]          = p.width;
-    j["height"]         = p.height;
-    j["createdAt"]      = p.createdAt;
+    j["id"]        = p.id;
+    j["name"]      = p.name;
+    j["dsl"]       = p.dsl;
+    j["steps"]     = p.steps;
+    j["cfg"]       = p.cfg;
+    j["modelId"]   = p.modelId;
+    j["width"]     = p.width;
+    j["height"]    = p.height;
+    j["createdAt"] = p.createdAt;
     return j;
 }
 
 static Preset presetFromJson(const nlohmann::json& j) {
     Preset p;
-    p.id             = j.value("id",             std::string{});
-    p.name           = j.value("name",           std::string{});
-    p.basePrompt     = j.value("basePrompt",     std::string{});
-    p.negativePrompt = j.value("negativePrompt", std::string{});
-    p.steps          = j.value("steps",          20);
-    p.cfg            = j.value("cfg",            7.0f);
-    p.modelId        = j.value("modelId",        std::string{});
-    p.width          = j.value("width",          0);
-    p.height         = j.value("height",         0);
-    p.createdAt      = j.value("createdAt",      uint64_t{0});
+    p.id        = j.value("id",        std::string{});
+    p.name      = j.value("name",      std::string{});
+    p.steps     = j.value("steps",     20);
+    p.cfg       = j.value("cfg",       7.0f);
+    p.modelId   = j.value("modelId",   std::string{});
+    p.width     = j.value("width",     0);
+    p.height    = j.value("height",    0);
+    p.createdAt = j.value("createdAt", uint64_t{0});
+    if (j.contains("dsl") && j["dsl"].is_object())
+        p.dsl = j["dsl"].get<Prompt>();
     return p;
 }
 
@@ -98,16 +99,15 @@ void PresetManager::save() const {
 
 Preset PresetManager::createFromGeneration(const GenerationSettings& gen, const std::string& name) {
     Preset p;
-    p.id             = generateId();
-    p.name           = name;
-    p.basePrompt     = gen.prompt;
-    p.negativePrompt = gen.negativePrompt;
-    p.steps          = gen.steps;
-    p.cfg            = gen.cfg;
-    p.modelId        = gen.modelId;
-    p.width          = gen.width;
-    p.height         = gen.height;
-    p.createdAt      = nowSeconds();
+    p.id        = generateId();
+    p.name      = name;
+    p.dsl       = gen.dsl;
+    p.steps     = gen.steps;
+    p.cfg       = gen.cfg;
+    p.modelId   = gen.modelId;
+    p.width     = gen.width;
+    p.height    = gen.height;
+    p.createdAt = nowSeconds();
     presets_.push_back(p);
     save();
     return p;
@@ -116,14 +116,13 @@ Preset PresetManager::createFromGeneration(const GenerationSettings& gen, const 
 void PresetManager::updateFromGeneration(const std::string& presetId, const GenerationSettings& gen) {
     for (auto& p : presets_) {
         if (p.id == presetId) {
-            p.basePrompt     = gen.prompt;
-            p.negativePrompt = gen.negativePrompt;
-            p.steps          = gen.steps;
-            p.cfg            = gen.cfg;
-            p.modelId        = gen.modelId;
-            p.width          = gen.width;
-            p.height         = gen.height;
-            // id, name, createdAt are intentionally preserved
+            p.dsl     = gen.dsl;
+            p.steps   = gen.steps;
+            p.cfg     = gen.cfg;
+            p.modelId = gen.modelId;
+            p.width   = gen.width;
+            p.height  = gen.height;
+            // id, name, createdAt intentionally preserved
             save();
             return;
         }
@@ -134,9 +133,9 @@ void PresetManager::updateFromGeneration(const std::string& presetId, const Gene
 Preset PresetManager::duplicatePreset(const std::string& presetId, const std::string& newName) {
     for (const auto& p : presets_) {
         if (p.id == presetId) {
-            Preset copy  = p;
-            copy.id       = generateId();
-            copy.name     = newName;
+            Preset copy   = p;
+            copy.id        = generateId();
+            copy.name      = newName;
             copy.createdAt = nowSeconds();
             presets_.push_back(copy);
             save();
@@ -148,10 +147,8 @@ Preset PresetManager::duplicatePreset(const std::string& presetId, const std::st
 }
 
 std::optional<Preset> PresetManager::getPreset(const std::string& id) const {
-    for (const auto& p : presets_) {
-        if (p.id == id)
-            return p;
-    }
+    for (const auto& p : presets_)
+        if (p.id == id) return p;
     return std::nullopt;
 }
 
@@ -162,8 +159,11 @@ const std::vector<Preset>& PresetManager::getAllPresets() const {
 // ── applyPresetToSettings ─────────────────────────────────────────────────────
 
 void applyPresetToSettings(const Preset& preset, SettingsPanel& panel) {
-    panel.positiveArea.setText(preset.basePrompt);
-    panel.negativeArea.setText(preset.negativePrompt);
+    // Compile DSL to display text using neutral (SDXL) form — no model-specific boosters.
+    // The compiler re-applies the correct model at generation time.
+    panel.positiveArea.setText(PromptCompiler::compile(preset.dsl, ModelType::SDXL));
+    panel.negativeArea.setText(PromptCompiler::compileNegative(preset.dsl, ModelType::SDXL));
+
     panel.generationParams.numSteps      = preset.steps;
     panel.generationParams.guidanceScale = preset.cfg;
     panel.generationParams.width         = preset.width;

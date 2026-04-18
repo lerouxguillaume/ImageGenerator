@@ -4,38 +4,52 @@ SFML-based retained UI system with a component panel architecture.
 
 ---
 
-# Layout (1280 × 800)
+# Window
+
+The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
+
+- Default size: 1280 × 800
+- Minimum enforced size: **700 × 550** (smaller resize attempts are snapped back)
+- On `sf::Event::Resized`: the SFML view is updated so coordinates map directly to pixels
+- `SettingsPanel` stays at fixed width (`LEFT_PANEL_W = 460`); `ResultPanel` takes remaining width
+- All layout values read from `win.getSize()` dynamically every frame — no hard-coded WIN_W/WIN_H in panel code
+
+---
+
+# Layout (default 1280 × 800, scales with window)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐  y=0
 │  MenuBar                                                    │  h=40
 ├──────────────────────────┬──────────────────────────────────┤  y=40
 │  SettingsPanel           │  ResultPanel                     │
-│  (460px wide)            │  (820px wide)                    │
+│  (460px wide, fixed)     │  (win.width − 460, grows)        │
 │                          │                                  │
 │  model / lora            │  generated image (native size,   │
 │  positive prompt         │   downscaled only if too large)  │
-│  negative prompt         │                                  │
-│  steps / cfg / images    │  [Generate]                      │
-│  seed                    │  progress bar / cancel           │
-│                          │  error banner                    │
+│  token chips             │                                  │
+│  negative prompt         │  [Generate]                      │
+│  compiled preview*       │  progress bar / cancel           │
+│  steps / cfg / images    │  error banner                    │
+│  seed                    │                                  │
 ├──────────────────────────┴──────────────────────────────────┤  y varies
 │  LlmBar collapsed (visible when LLM available or loading)   │  h=44
 │  LlmBar expanded (instruction area below toggle row)        │  h=124
 └─────────────────────────────────────────────────────────────┘
 ```
 
+*compiled preview visible only when SD1.5 model is selected
+
 Layout constants (`src/enum/constants.hpp`):
 - `MENU_BAR_H = 40` — top bar height
-- `LEFT_PANEL_W = 460` — SettingsPanel width
+- `LEFT_PANEL_W = 460` — SettingsPanel width (fixed)
 - `LLM_BAR_H = 44` — bottom bar height (collapsed)
 - `LLM_EXPANDED_H = 80` — extra height added when LLM bar is expanded
-- `BODY_H_FULL = 760` — body height without LLM bar (compile-time constant)
 
-Body height is computed dynamically in `ImageGeneratorView::render`:
-- No LLM bar: `WIN_H - MENU_BAR_H`
-- LLM bar collapsed: `WIN_H - MENU_BAR_H - LLM_BAR_H`
-- LLM bar expanded: `WIN_H - MENU_BAR_H - LLM_BAR_H - LLM_EXPANDED_H`
+Body height is computed dynamically in `ImageGeneratorView::render` from `win.getSize()`:
+- No LLM bar: `winH - MENU_BAR_H`
+- LLM bar collapsed: `winH - MENU_BAR_H - LLM_BAR_H`
+- LLM bar expanded: `winH - MENU_BAR_H - LLM_BAR_H - LLM_EXPANDED_H`
 
 ---
 
@@ -51,15 +65,32 @@ Each panel (`src/ui/widgets/`):
 
 State: preset dropdown, save-as modal  
 Action flags: `backRequested`, `settingsRequested`, `saveConfirmed`, `selectedPresetId`  
-`setPresets(presets, activeId)` — called by controller after preset list changes
+`setPresets(presets, activeId)` — called by controller after preset list changes  
+Save modal and overlay dim use `win.getSize()` for centering.
 
 ## `SettingsPanel`
 
 State: `positiveArea`, `negativeArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
+DSL display state (set by controller each frame): `currentDsl`, `compiledPreview`  
 All params always visible (no Advanced toggle)  
 Tab cycles focus: positive → negative → positive  
 `positiveArea` shows 4 visible lines (fieldH=86); `negativeArea` shows 3 visible lines (fieldH=68).  
 Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforces this after each handleEvent.
+
+### Token chip row (Phase 8)
+
+Rendered between positive area and negative label. Read-only — visualises the parsed DSL:
+- Subject chip: gold border + gold text
+- Positive token chips: neutral border; blue if `weight > 1`, muted if `weight < 1`
+- Weight shown as `label 2.0×` when non-default
+- Wraps to a second row (max 2 rows)
+- Height is dynamic (20px per row + gaps)
+
+### Compiled preview strip (Phase 6)
+
+Single muted line `→ <compiled string>` rendered below the negative area.
+Visible **only when SD1.5 is selected** — hidden for SDXL since output matches input.
+Shows the full compiled positive including subject boost `(subject:1.20)` and quality boosters.
 
 ## `ResultPanel`
 
@@ -71,6 +102,7 @@ Generated image displayed at native pixel size; downscaled only when larger than
 ## `LlmBar`
 
 State: `instructionArea`, `expanded` toggle, `enhanceDone` atomic  
+Capture fields: `originalPositive`, `originalNegative` (snapshot before enhancement for merge base)  
 Action flag: `enhanceRequested`  
 Collapsed: 44px strip. Expanded: bar grows by `LLM_EXPANDED_H` (80px); instruction textarea
 appears below the toggle row (not as a floating overlay).  
@@ -80,7 +112,8 @@ Only rendered when `promptEnhancerAvailable || llmLoading`
 
 State: 4 directory strings + cursors + active flags  
 Action flags: `saveRequested`, `cancelRequested`, `browseTarget`  
-Rendered as a full-screen overlay when `view.showSettings == true`
+Rendered as a full-screen overlay when `view.showSettings == true`  
+Overlay dim and box centering use `win.getSize()` dynamically.
 
 ---
 
@@ -105,12 +138,13 @@ Panels are not required to inherit Widget — they follow the same interface pat
 
 ```cpp
 // Controller::handleEvent() priority order:
-1. Window close / Escape chain (save modal > settings modal > preset dropdown > navigate)
-2. settingsModal.handleEvent()   — when showSettings == true (blocks all else)
-3. menuBar.handleEvent()         → check action flags (back, settings, preset select, save)
-4. settingsPanel.handleEvent()
-5. resultPanel.handleEvent()     → check generateRequested
-6. llmBar.handleEvent()          → check enhanceRequested
+1. sf::Event::Resized — update view + enforce min size (handled in App::run before controllers)
+2. Window close / Escape chain (save modal > settings modal > preset dropdown > navigate)
+3. settingsModal.handleEvent()   — when showSettings == true (blocks all else)
+4. menuBar.handleEvent()         → check action flags (back, settings, preset select, save)
+5. settingsPanel.handleEvent()
+6. resultPanel.handleEvent()     → check generateRequested
+7. llmBar.handleEvent()          → check enhanceRequested
 ```
 
 Each panel's `handleEvent` returns `true` if the event was consumed. The controller stops routing on the first consumer.

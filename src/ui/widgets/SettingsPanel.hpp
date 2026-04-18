@@ -4,6 +4,7 @@
 #include <vector>
 #include <SFML/Graphics.hpp>
 #include "../../portraits/PortraitGeneratorAi.hpp"  // GenerationParams, LoraEntry
+#include "../../prompt/Prompt.hpp"
 #include "MultiLineTextArea.hpp"
 #include "../SliderTypes.hpp"
 
@@ -36,6 +37,10 @@ public:
     std::string seedInput;
     int  seedInputCursor = 0;
     bool seedInputActive = false;
+
+    // ── DSL display (set by controller each update) ───────────────────────────
+    Prompt      currentDsl;       // parsed DSL — drives token chip display
+    std::string compiledPreview;  // non-empty only for SD1.5 (shows compiled positive)
 
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);

@@ -22,6 +22,9 @@ public:
     std::atomic<bool> enhanceDone{false};
     std::string       enhancedPositive;
     std::string       enhancedNegative;
+    // Snapshot of prompts at enhancement start — used for DSL merge
+    std::string       originalPositive;
+    std::string       originalNegative;
 
     // ── Action flag (cleared by controller after launching enhancement) ───────
     bool enhanceRequested = false;
