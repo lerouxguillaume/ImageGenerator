@@ -5,9 +5,6 @@
 
 using namespace Helpers;
 
-static constexpr float WIN_W_F = static_cast<float>(WIN_W);
-static constexpr float WIN_H_F = static_cast<float>(WIN_H);
-
 void SettingsModal::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
                                         const sf::FloatRect& field,
                                         const std::string& text,
@@ -43,6 +40,9 @@ void SettingsModal::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
 }
 
 void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
+    const float WIN_W_F = static_cast<float>(win.getSize().x);
+    const float WIN_H_F = static_cast<float>(win.getSize().y);
+
     // Dim background
     sf::RectangleShape overlay({WIN_W_F, WIN_H_F});
     overlay.setFillColor(Col::Overlay);

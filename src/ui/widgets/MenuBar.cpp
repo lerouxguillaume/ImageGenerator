@@ -53,8 +53,8 @@ void MenuBar::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
 
 void MenuBar::drawSaveModal(sf::RenderWindow& win, sf::Font& font) {
     // Dim background
-    const float winW = static_cast<float>(WIN_W);
-    const float winH = static_cast<float>(WIN_H);
+    const float winW = static_cast<float>(win.getSize().x);
+    const float winH = static_cast<float>(win.getSize().y);
     sf::RectangleShape overlay({winW, winH});
     overlay.setFillColor(Col::Overlay);
     win.draw(overlay);

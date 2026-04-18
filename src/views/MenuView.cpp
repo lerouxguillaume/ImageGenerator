@@ -7,8 +7,8 @@
 #include "../ui/Logo.hpp"
 
 void MenuView::render(sf::RenderWindow& win) {
-    const float cx = WIN_W / 2.f;
-    const float cy = WIN_H / 2.f;
+    const float cx = win.getSize().x / 2.f;
+    const float cy = win.getSize().y / 2.f;
 
     Logo::draw(win, cx, cy - 220.f, 52.f);
     Helpers::drawTextC(win, font, "Image generator", Col::GoldLt, cx, cy - 120, 48, true);
