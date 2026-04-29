@@ -101,7 +101,7 @@ Generated image displayed at native pixel size; downscaled only when larger than
 
 ## `LlmBar`
 
-State: `instructionArea`, `expanded` toggle, `enhanceDone` atomic  
+State: `instructionArea`, `expanded` toggle  
 Capture fields: `originalPositive`, `originalNegative` (snapshot before enhancement for merge base)  
 Action flag: `enhanceRequested`  
 Collapsed: 44px strip. Expanded: bar grows by `LLM_EXPANDED_H` (80px); instruction textarea

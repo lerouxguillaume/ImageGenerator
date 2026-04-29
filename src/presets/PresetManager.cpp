@@ -4,6 +4,7 @@
 #include "../prompt/PromptCompiler.hpp"
 #include "../ui/widgets/SettingsPanel.hpp"
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -171,7 +172,7 @@ void applyPresetToSettings(const Preset& preset, SettingsPanel& panel) {
 
     bool modelFound = false;
     for (int i = 0; i < static_cast<int>(panel.availableModels.size()); ++i) {
-        if (panel.availableModels[i] == preset.modelId) {
+        if (std::filesystem::path(panel.availableModels[i]).filename().string() == preset.modelId) {
             panel.selectedModelIdx = i;
             modelFound = true;
             break;

@@ -176,7 +176,7 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     lorasDirty  = true;
 
     if (llmDirChanged) {
-        enhancer = std::make_unique<NullPromptEnhancer>();
+        enhancer = std::make_shared<NullPromptEnhancer>();
         view.llmBar.promptEnhancerAvailable = false;
         if (!newLlmDir.empty()) startLlmLoad(newLlmDir);
     }
@@ -227,7 +227,10 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rp.lastImagePath;
     GenerationParams params = sp.generationParams;
-    params.seed = sp.seedInput.empty() ? -1 : std::stoll(sp.seedInput);
+    if (!sp.seedInput.empty()) {
+        try { params.seed = std::stoll(sp.seedInput); }
+        catch (const std::exception&) { params.seed = -1; }
+    }
 
     for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
         if (i < sp.loraSelected.size() && sp.loraSelected[i])
@@ -288,22 +291,17 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
 
     const ModelType modelType = inferModelType(modelDir);
 
-    std::atomic<bool>* done   = &llm.enhanceDone;
-    std::string*       outPos = &llm.enhancedPositive;
-    std::string*       outNeg = &llm.enhancedNegative;
-    IPromptEnhancer*   enh    = enhancer.get();
+    std::shared_ptr<IPromptEnhancer> enhCopy = enhancer;
 
-    std::thread([posCapture, effectiveInstruction, modelType, done, outPos, outNeg, enh]() {
-        LLMRequest req;
-        req.prompt      = posCapture;
-        req.instruction = effectiveInstruction;
-        req.model       = modelType;
-        req.strength    = 0.5f;
-        const LLMResponse result = enh->transform(req);
-        *outPos = result.prompt;
-        *outNeg = result.negative_prompt;
-        done->store(true);
-    }).detach();
+    enhancementFuture_ = std::async(std::launch::async,
+        [posCapture, effectiveInstruction, modelType, enhCopy]() -> LLMResponse {
+            LLMRequest req;
+            req.prompt      = posCapture;
+            req.instruction = effectiveInstruction;
+            req.model       = modelType;
+            req.strength    = 0.5f;
+            return enhCopy->transform(req);
+        });
 }
 
 // ── Event handling ────────────────────────────────────────────────────────────
@@ -492,17 +490,17 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         lorasDirty = false;
     }
 
-    // Collect enhancement result — merge LLM patch into original DSL (Phase 7 Step 2)
-    if (view.llmBar.enhancing && view.llmBar.enhanceDone.load()) {
+    // Collect enhancement result — merge LLM patch into original DSL
+    if (view.llmBar.enhancing && enhancementFuture_.valid() &&
+        enhancementFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const LLMResponse result = enhancementFuture_.get();
         const Prompt base   = PromptParser::parse(view.llmBar.originalPositive,
                                                    view.llmBar.originalNegative);
-        const Prompt patch  = PromptParser::parse(view.llmBar.enhancedPositive,
-                                                   view.llmBar.enhancedNegative);
+        const Prompt patch  = PromptParser::parse(result.prompt, result.negative_prompt);
         const Prompt merged = PromptMerge::merge(base, patch);
         sp.positiveArea.setText(PromptCompiler::compile(merged, ModelType::SDXL));
         sp.negativeArea.setText(PromptCompiler::compileNegative(merged));
         view.llmBar.enhancing = false;
-        view.llmBar.enhanceDone.store(false);
     }
 
     // Collect generation result — also joins cancelled threads once they finish

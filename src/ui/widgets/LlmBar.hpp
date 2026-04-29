@@ -18,13 +18,9 @@ public:
     bool expanded  = false;
     bool enhancing = false;
 
-    // ── Enhancement result (written by background thread) ────────────────────
-    std::atomic<bool> enhanceDone{false};
-    std::string       enhancedPositive;
-    std::string       enhancedNegative;
-    // Snapshot of prompts at enhancement start — used for DSL merge
-    std::string       originalPositive;
-    std::string       originalNegative;
+    // ── Enhancement result (snapshot at start, result owned by controller future) ──
+    std::string originalPositive;
+    std::string originalNegative;
 
     // ── Action flag (cleared by controller after launching enhancement) ───────
     bool enhanceRequested = false;

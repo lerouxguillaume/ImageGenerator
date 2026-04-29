@@ -15,7 +15,7 @@ class ImageGeneratorController {
 public:
     explicit ImageGeneratorController(AppConfig cfg)
         : config(std::move(cfg))
-        , enhancer(std::make_unique<NullPromptEnhancer>())
+        , enhancer(std::make_shared<NullPromptEnhancer>())
     {
         if (!config.promptEnhancer.modelDir.empty())
             startLlmLoad(config.promptEnhancer.modelDir);
@@ -44,7 +44,7 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
     AppConfig                        config;
     PresetManager                    presetManager;
-    std::unique_ptr<IPromptEnhancer> enhancer;
+    std::shared_ptr<IPromptEnhancer> enhancer;
     bool                             modelsDirty     = true;
     bool                             lorasDirty      = true;
     bool                             viewInitialized = false;
@@ -56,6 +56,9 @@ private:
 
     // Async LLM model load
     std::future<std::unique_ptr<IPromptEnhancer>> llmLoadFuture;
+
+    // Async LLM enhancement (owned — result polled in update())
+    std::future<LLMResponse> enhancementFuture_;
 
     // Generation thread (jthread: auto-requests-stop + joins on destruction/reassignment)
     std::jthread generationThread_;

@@ -132,23 +132,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(image_generator PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# On Windows the SQLite3 amalgamation is in the custom deps dir;
-# on Linux it is provided by the system package.
-if(WIN32)
-    if(NOT DEFINED SQLITE3_ROOT)
-        message(FATAL_ERROR "Set SQLITE3_ROOT to the SQLite3 amalgamation directory")
-    endif()
-    set(SQLITE3_INCLUDE_DIR "${SQLITE3_ROOT}")
-    set(SQLITE3_LIB         "${SQLITE3_ROOT}/libsqlite3.a")
-else()
-    set(SQLITE3_INCLUDE_DIR "")   # system header, no extra path needed
-    set(SQLITE3_LIB         sqlite3)
-endif()
-
 target_include_directories(image_generator PRIVATE
     ${ONNXRUNTIME_ROOT}/include
     ${OpenCV_INCLUDE_DIRS}
-    ${SQLITE3_INCLUDE_DIR}
 )
 
 target_link_libraries(image_generator
@@ -156,7 +142,6 @@ target_link_libraries(image_generator
     sfml-window
     sfml-system
     nlohmann_json::nlohmann_json
-    ${SQLITE3_LIB}
     ${ONNXRUNTIME_LIB}
     ${OpenCV_LIBS}
 )

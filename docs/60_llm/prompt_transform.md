@@ -35,19 +35,27 @@ Falls back to original prompt + default negatives on parse failure.
 
 # Merge flow (controller side)
 
-The controller applies the LLM output as a DSL patch, not a replacement:
+The controller applies the LLM output as a DSL patch, not a replacement.
+
+`launchEnhancement` snapshots the current text and starts `enhancementFuture_` (a `std::future<LLMResponse>` owned by the controller). The worker captures a `shared_ptr` copy of `enhancer` so swapping the enhancer in settings cannot free the object mid-flight.
+
+`update()` polls the future and applies the result:
 
 ```cpp
-// launchEnhancement — capture originals before launching thread
+// launchEnhancement — snapshot originals, launch owned future
 llm.originalPositive = sp.positiveArea.getText();
 llm.originalNegative = sp.negativeArea.getText();
+enhancementFuture_ = std::async(std::launch::async, [enhCopy, ...]() -> LLMResponse {
+    return enhCopy->transform(req);
+});
 
-// update() — when enhanceDone fires
+// update() — when future is ready
+const LLMResponse result = enhancementFuture_.get();
 const Prompt base   = PromptParser::parse(llm.originalPositive, llm.originalNegative);
-const Prompt patch  = PromptParser::parse(llm.enhancedPositive, llm.enhancedNegative);
+const Prompt patch  = PromptParser::parse(result.prompt, result.negative_prompt);
 const Prompt merged = PromptMerge::merge(base, patch);
 sp.positiveArea.setText(PromptCompiler::compile(merged, ModelType::SDXL));
-sp.negativeArea.setText(PromptCompiler::compileNegative(merged, ModelType::SDXL));
+sp.negativeArea.setText(PromptCompiler::compileNegative(merged));
 ```
 
 Merge rules: subject overrides if set; tokens union-deduplicated; patch weight wins on collision.
