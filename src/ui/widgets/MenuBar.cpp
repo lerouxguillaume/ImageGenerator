@@ -2,6 +2,7 @@
 #include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
+#include "../../ui/Theme.h"
 #include <algorithm>
 
 using namespace Helpers;
@@ -52,18 +53,20 @@ void MenuBar::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
 }
 
 void MenuBar::drawSaveModal(sf::RenderWindow& win, sf::Font& font) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
     // Dim background
     const float winW = static_cast<float>(win.getSize().x);
     const float winH = static_cast<float>(win.getSize().y);
     sf::RectangleShape overlay({winW, winH});
-    overlay.setFillColor(Col::Overlay);
+    overlay.setFillColor(colors.overlay);
     win.draw(overlay);
 
     constexpr float boxW = 360.f, boxH = 130.f;
     const float boxX = (winW - boxW) / 2.f;
     const float boxY = (winH - boxH) / 2.f;
-    drawRect(win, {boxX, boxY, boxW, boxH}, Col::Panel2, Col::BorderHi, 2.f);
-    drawTextC(win, font, "Save preset as...", Col::GoldLt, winW / 2.f, boxY + 12.f, 13, true);
+    drawRect(win, {boxX, boxY, boxW, boxH}, colors.panel2, colors.borderHi, 2.f);
+    drawTextC(win, font, "Save preset as...", colors.goldLt, winW / 2.f, boxY + 12.f, 13, true);
 
     constexpr float padX   = 16.f;
     constexpr float fieldH = 26.f;
@@ -75,13 +78,16 @@ void MenuBar::drawSaveModal(sf::RenderWindow& win, sf::Font& font) {
     const float btnY = boxY + boxH - btnH - 12.f;
     saveModalCancel_ = {boxX + boxW - btnW * 2.f - padX - 4.f, btnY, btnW, btnH};
     saveModalOk_     = {boxX + boxW - btnW - padX,              btnY, btnW, btnH};
-    drawButton(win, saveModalCancel_, "Cancel", Col::Panel2, Col::Muted,  false, 12, font);
-    drawButton(win, saveModalOk_,     "Save",   Col::Panel,  Col::GoldLt, false, 12, font);
+    drawButton(win, saveModalCancel_, "Cancel", colors.panel, colors.muted,  false, 12, font);
+    drawButton(win, saveModalOk_,     "Save",   colors.blue,  colors.goldLt, false, 12, font);
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
 void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
     const float x  = rect_.left;
     const float y  = rect_.top;
     const float w  = rect_.width;
@@ -89,14 +95,14 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
     const float cx = x + w / 2.f;
 
     // Background + bottom border
-    drawRect(win, rect_, Col::Panel2);
-    drawRect(win, {x, y + h - 1.f, w, 1.f}, Col::Border);
+    drawRect(win, rect_, colors.panel, colors.border, metrics.borderWidth);
+    drawRect(win, {x + 1.f, y + 1.f, w - 2.f, h - 2.f}, colors.surfaceRaised, sf::Color::Transparent, 0.f);
 
     constexpr float pad = static_cast<float>(PAD);
 
     // Back button
     btnBack_ = {x + pad, y + (h - 26.f) / 2.f, 70.f, 26.f};
-    drawButton(win, btnBack_, "< Back", Col::Panel, Col::Muted, false, 12, font);
+    drawButton(win, btnBack_, "< Back", colors.panel2, colors.text, false, 12, font);
 
     // Title
     std::string title = titleOverride.empty() ? "Explore..." : titleOverride;
@@ -104,18 +110,18 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
         for (const auto& p : presets_)
             if (p.id == activePresetId_) { title = p.name; break; }
     }
-    drawTextC(win, font, title, Col::GoldLt, cx, y + (h - 18.f) / 2.f, 16, true);
+    drawTextC(win, font, title, colors.text, cx, y + (h - 18.f) / 2.f, 16, true);
 
     btnSettings_ = {x + w - pad - 80.f, y + (h - 26.f) / 2.f, 80.f, 26.f};
     if (showPresetControls) {
         const std::string presetsLabel = "Presets " + std::string(showPresetDropdown ? "^" : "v");
         btnPresets_ = {btnBack_.left + btnBack_.width + 6.f, y + (h - 26.f) / 2.f, 110.f, 26.f};
-        drawButton(win, btnPresets_, presetsLabel, Col::Panel,
-                   showPresetDropdown ? Col::GoldLt : Col::Muted, false, 12, font);
+        drawButton(win, btnPresets_, presetsLabel, colors.panel2,
+                   showPresetDropdown ? colors.goldLt : colors.text, false, 12, font);
 
         btnQuickSave_ = {btnSettings_.left - 70.f, y + (h - 26.f) / 2.f, 64.f, 26.f};
-        drawButton(win, btnQuickSave_, "Save", Col::Panel,
-                   activePresetId_.empty() ? Col::Muted : Col::GoldLt, false, 12, font);
+        drawButton(win, btnQuickSave_, "Save", colors.panel2,
+                   activePresetId_.empty() ? colors.muted : colors.goldLt, false, 12, font);
     } else {
         btnPresets_ = {};
         btnQuickSave_ = {};
@@ -123,7 +129,7 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
     }
 
     // Settings button
-    drawButton(win, btnSettings_, "Settings", Col::Panel, Col::Muted, false, 12, font);
+    drawButton(win, btnSettings_, "Settings", colors.panel2, colors.text, false, 12, font);
 
     // ── Preset dropdown (overlay) ─────────────────────────────────────────────
     if (showPresetControls && showPresetDropdown) {

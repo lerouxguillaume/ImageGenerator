@@ -2,6 +2,7 @@
 #include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
+#include "../../ui/Theme.h"
 #include <SFML/Window/Clipboard.hpp>
 #include <algorithm>
 #include <cmath>
@@ -28,28 +29,35 @@ sf::FloatRect SettingsPanel::getRect() const {
 void SettingsPanel::drawSlider(sf::RenderWindow& win, sf::Font& font,
                                const sf::FloatRect& track, float normalised,
                                const std::string& label, const std::string& valueStr) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    const auto& type = theme.typography();
     constexpr float visualH = 6.f;
     constexpr float thumbW  = 12.f;
     constexpr float thumbH  = 18.f;
 
     const float barY = track.top + (track.height - visualH) / 2.f;
-    drawRect(win, {track.left, barY, track.width, visualH}, Col::Panel2, Col::Border, 1.f);
+    drawRect(win, {track.left, barY, track.width, visualH}, colors.surfaceInset, colors.border, metrics.borderWidth);
     if (normalised > 0.f)
-        drawRect(win, {track.left, barY, track.width * normalised, visualH}, Col::Gold);
+        drawRect(win, {track.left, barY, track.width * normalised, visualH}, colors.gold);
 
     const float thumbX = track.left + track.width * normalised - thumbW / 2.f;
     const float thumbY = track.top  + (track.height - thumbH)  / 2.f;
-    drawRect(win, {thumbX, thumbY, thumbW, thumbH}, Col::GoldLt, Col::Border, 1.f);
+    drawRect(win, {thumbX, thumbY, thumbW, thumbH}, colors.goldLt, colors.border, metrics.borderWidth);
 
-    drawText(win,  font, label,    Col::Muted,  track.left,               track.top - 13.f, 11);
-    drawTextR(win, font, valueStr, Col::GoldLt, track.left + track.width, track.top - 13.f, 11);
+    drawText(win,  font, label,    colors.muted,  track.left,               track.top - 13.f, type.compact);
+    drawTextR(win, font, valueStr, colors.goldLt, track.left + track.width, track.top - 13.f, type.compact);
 }
 
 void SettingsPanel::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
                                         const sf::FloatRect& field,
                                         const std::string& text,
                                         int cursor, bool active) {
-    drawRect(win, field, Col::Panel, active ? Col::GoldLt : Col::Border, 1.f);
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    drawRect(win, field, colors.surfaceInset, active ? colors.borderHi : colors.border, metrics.borderWidth);
 
     constexpr float    padX     = 6.f;
     constexpr unsigned fontSize = 13;
@@ -66,14 +74,14 @@ void SettingsPanel::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
     sf::Text textObj;
     textObj.setFont(font);
     textObj.setCharacterSize(fontSize);
-    textObj.setFillColor(Col::Text);
+    textObj.setFillColor(theme.colors().text);
     textObj.setString(text);
     textObj.setPosition(field.left + padX - scrollX, textY);
     win.draw(textObj);
 
     if (active) {
         sf::RectangleShape cur({1.f, static_cast<float>(fontSize) + 3.f});
-        cur.setFillColor(Col::GoldLt);
+        cur.setFillColor(theme.colors().goldLt);
         cur.setPosition(field.left + padX + cursorPx - scrollX, textY);
         win.draw(cur);
     }
@@ -82,14 +90,18 @@ void SettingsPanel::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
 // ── Render ────────────────────────────────────────────────────────────────────
 
 void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    const auto& type = theme.typography();
     const float x  = rect_.left;
     const float pw = rect_.width;       // panel width
     constexpr float pad  = static_cast<float>(PAD);
     const float fw = pw - pad * 2.f;    // field width inside padding
 
     // Panel background with right border
-    drawRect(win, rect_, Col::Panel);
-    drawRect(win, {x + pw - 1.f, rect_.top, 1.f, rect_.height}, Col::Border);
+    drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
+    drawRect(win, {x + 1.f, rect_.top + 1.f, pw - 2.f, rect_.height - 2.f}, colors.panel, sf::Color::Transparent, 0.f);
 
     float y = rect_.top + pad * 2.f;
 
@@ -99,16 +111,16 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             ? "(no models found)"
             : std::filesystem::path(availableModels[static_cast<size_t>(selectedModelIdx)]).filename().string();
         const std::string label = displayName + (showModelDropdown ? "  ^" : "  v");
-        drawText(win, font, "Model:", Col::Muted, x + pad, y + 4.f, 12);
+        drawText(win, font, "Model:", colors.muted, x + pad, y + 4.f, type.body);
         btnModelDropdown_ = {x + pad + 52.f, y, 260.f, 22.f};
-        drawButton(win, btnModelDropdown_, label, Col::Panel2,
-                   showModelDropdown ? Col::GoldLt : Col::Text, false, 12, font);
+        drawButton(win, btnModelDropdown_, label, colors.panel,
+                   showModelDropdown ? colors.goldLt : colors.text, false, type.body, font);
 
         const int numSel = static_cast<int>(std::count(loraSelected.begin(), loraSelected.end(), true));
         const std::string loraLabel = "LoRA (" + std::to_string(numSel) + ")";
         btnLoraPanel_ = {x + pad + 324.f, y, 110.f, 22.f};
-        drawButton(win, btnLoraPanel_, loraLabel, Col::Panel2,
-                   showLoraPanel ? Col::GoldLt : Col::Text, false, 12, font);
+        drawButton(win, btnLoraPanel_, loraLabel, colors.panel,
+                   showLoraPanel ? colors.goldLt : colors.text, false, type.body, font);
     }
     y += 30.f;
 

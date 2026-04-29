@@ -2,6 +2,7 @@
 #include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
+#include "../../ui/Theme.h"
 #include <algorithm>
 
 using namespace Helpers;
@@ -63,16 +64,29 @@ void ResultPanel::renderTabBar(sf::RenderWindow& win, sf::Font& font,
 }
 
 void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    const auto& type = theme.typography();
     const float x  = rect_.left;
     const float y  = rect_.top;
     const float w  = rect_.width;
     const float h  = rect_.height;
     const float cx = x + w / 2.f;
+    const float actionBarX = x + 16.f;
+    const float actionBarY = y + h - 60.f;
+    const float actionBarW = w - 32.f;
+    const float actionBarH = 44.f;
+    const float actionButtonH = 30.f;
+    const float actionGenerateW = 136.f;
+    const float actionAuxW = 76.f;
+    const float actionGap = 10.f;
 
     const float tabBarH = (showTabs && !tabs.empty()) ? TAB_H : 0.f;
 
     // Panel background
-    drawRect(win, rect_, Col::Bg);
+    drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
+    drawRect(win, {x + 1.f, y + 1.f, w - 2.f, h - 2.f}, colors.surfaceInset, sf::Color::Transparent, 0.f);
 
     if (generating) {
         btnPrevImage_ = {};
@@ -84,7 +98,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         // ── Generating overlay ────────────────────────────────────────────────
         sf::RectangleShape overlay({w, h});
         overlay.setPosition(x, y);
-        overlay.setFillColor({0, 0, 0, 140});
+        overlay.setFillColor(colors.overlay);
         win.draw(overlay);
 
         constexpr float modalW = 340.f;
@@ -92,14 +106,14 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         const float modalX = cx - modalW / 2.f;
         const float modalY = y + h / 2.f - modalH / 2.f;
         const sf::FloatRect modalBox{modalX, modalY, modalW, modalH};
-        drawRect(win, modalBox, Col::Panel, Col::Border, 1.f);
+        drawRect(win, modalBox, colors.panel, colors.borderHi, metrics.borderWidth);
 
         const int imgNum   = generationImageNum.load();
         const int imgTotal = generationTotalImages.load();
         const std::string imgLabel = imgTotal > 1
             ? "Generating image " + std::to_string(imgNum) + " / " + std::to_string(imgTotal) + "..."
             : "Generating image...";
-        drawTextC(win, font, imgLabel, Col::GoldLt, cx, modalY + 16.f, 15, true);
+        drawTextC(win, font, imgLabel, colors.goldLt, cx, modalY + 16.f, 15, true);
 
         const int   currentStep = generationStep.load();
         const float progress    = numSteps > 0
@@ -109,30 +123,35 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         const float barW = modalW - barPad * 2.f;
         const float barX = modalX + barPad;
         const float barY = modalY + 48.f;
-        drawRect(win, {barX, barY, barW, barH}, Col::Panel2, Col::Border, 1.f);
+        drawRect(win, {barX, barY, barW, barH}, colors.surfaceInset, colors.border, metrics.borderWidth);
         if (progress > 0.f)
-            drawRect(win, {barX, barY, barW * progress, barH}, Col::Gold);
+            drawRect(win, {barX, barY, barW * progress, barH}, colors.gold);
 
         const std::string stepLabel = "Step " + std::to_string(currentStep) + " / " + std::to_string(numSteps);
-        drawTextC(win, font, stepLabel, Col::Muted, cx, modalY + 72.f, 11);
+        drawTextC(win, font, stepLabel, colors.muted, cx, modalY + 72.f, type.compact);
 
         btnCancelGenerate_ = {cx - 55.f, modalY + modalH - 34.f, 110.f, 26.f};
-        drawButton(win, btnCancelGenerate_, "Cancel", Col::Panel2, Col::RedLt, false, 12, font);
+        drawButton(win, btnCancelGenerate_, "Cancel", colors.panel2, colors.redLt, false, type.body, font);
 
     } else if (resultLoaded) {
         // ── Selected image preview ────────────────────────────────────────────
-        const float galleryH = gallery.empty() ? 0.f : 124.f;
-        const float previewBottom = y + h - galleryH - tabBarH - 64.f;
-        const float maxImgW = w - 16.f;
-        const float maxImgH = std::max(80.f, previewBottom - (y + 16.f));
+        const float galleryH = gallery.empty() ? 0.f : 132.f;
+        const float previewBottom = y + h - galleryH - tabBarH - 72.f;
+        const float frameX = x + 16.f;
+        const float frameY = y + 16.f;
+        const float frameW = w - 32.f;
+        const float frameH = std::max(120.f, previewBottom - frameY);
+        drawRect(win, {frameX, frameY, frameW, frameH}, colors.panel, colors.border, metrics.borderWidth);
+        const float maxImgW = frameW - 24.f;
+        const float maxImgH = std::max(80.f, frameH - 24.f);
         const auto  texSize = resultTexture.getSize();
         const float scale   = std::min(1.f,
                                        std::min(maxImgW / static_cast<float>(texSize.x),
                                                 maxImgH / static_cast<float>(texSize.y)));
         const float imgW    = static_cast<float>(texSize.x) * scale;
         const float imgH    = static_cast<float>(texSize.y) * scale;
-        const float imgX    = cx - imgW / 2.f;
-        const float imgY    = y + 16.f;
+        const float imgX    = frameX + (frameW - imgW) / 2.f;
+        const float imgY    = frameY + (frameH - imgH) / 2.f;
         constexpr float navBtnSize = 34.f;
         constexpr float navBtnGap = 10.f;
 
@@ -155,8 +174,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
                 navBtnSize,
                 navBtnSize
             };
-            drawButton(win, btnPrevImage_, "<", Col::Panel2, Col::GoldLt, false, 16, font);
-            drawButton(win, btnNextImage_, ">", Col::Panel2, Col::GoldLt, false, 16, font);
+            drawButton(win, btnPrevImage_, "<", colors.panel2, colors.goldLt, false, 16, font);
+            drawButton(win, btnNextImage_, ">", colors.panel2, colors.goldLt, false, 16, font);
         } else {
             btnPrevImage_ = {};
             btnNextImage_ = {};
@@ -169,9 +188,9 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             if (msg.size() > kMaxLen) msg = msg.substr(0, kMaxLen) + "... (see log)";
             constexpr float bannerW = 480.f, bannerH = 54.f;
             const float bannerY = imgY + imgH + 8.f;
-            drawRect(win, {cx - bannerW / 2.f, bannerY, bannerW, bannerH}, Col::Panel2, Col::RedLt, 1.f);
-            drawTextC(win, font, "Generation failed", Col::RedLt, cx, bannerY + 8.f, 12, true);
-            drawTextC(win, font, msg, Col::Muted, cx, bannerY + 28.f, 10);
+            drawRect(win, {cx - bannerW / 2.f, bannerY, bannerW, bannerH}, colors.panel2, colors.redLt, metrics.borderWidth);
+            drawTextC(win, font, "Generation failed", colors.redLt, cx, bannerY + 8.f, type.body, true);
+            drawTextC(win, font, msg, colors.muted, cx, bannerY + 28.f, type.helper);
         }
 
         if (!gallery.empty()) {
@@ -199,13 +218,13 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         if (msg.size() > kMaxLen) msg = msg.substr(0, kMaxLen) + "... (see log)";
         constexpr float bannerW = 480.f, bannerH = 54.f;
         const float bannerY = y + h / 2.f - bannerH;
-        drawRect(win, {cx - bannerW / 2.f, bannerY, bannerW, bannerH}, Col::Panel2, Col::RedLt, 1.f);
-        drawTextC(win, font, "Generation failed", Col::RedLt, cx, bannerY + 8.f, 12, true);
-        drawTextC(win, font, msg, Col::Muted, cx, bannerY + 28.f, 10);
+        drawRect(win, {cx - bannerW / 2.f, bannerY, bannerW, bannerH}, colors.panel2, colors.redLt, metrics.borderWidth);
+        drawTextC(win, font, "Generation failed", colors.redLt, cx, bannerY + 8.f, type.body, true);
+        drawTextC(win, font, msg, colors.muted, cx, bannerY + 28.f, type.helper);
     } else if (!gallery.empty()) {
         btnPrevImage_ = {};
         btnNextImage_ = {};
-        drawTextC(win, font, "Select an image", Col::Border, cx, y + 32.f, 13);
+        drawTextC(win, font, "Select an image", colors.borderHi, cx, y + 32.f, type.sectionTitle);
         const float stripX = x + 12.f;
         const float stripW = w - 24.f;
         const float stripY = y + 56.f + tabBarH;
@@ -220,33 +239,40 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         btnNextThumbs_ = {};
         thumbnailRects_.clear();
         thumbnailIndices_.clear();
-        drawTextC(win, font, "No image generated yet", Col::Border, cx, y + h / 2.f - 20.f, 13);
+        drawTextC(win, font, "No image generated yet", colors.borderHi, cx, y + h / 2.f - 20.f, type.sectionTitle);
     }
 
     // ── Buttons at the bottom of the panel ───────────────────────────────────
         if (!generating) {
+            drawRect(win, {actionBarX, actionBarY, actionBarW, actionBarH}, colors.panel, colors.border, metrics.borderWidth);
             if (resultLoaded) {
             if (mode == WorkflowMode::Generate && showImproveButton) {
-                btnImprove_ = {cx - 138.f, y + h - 49.f, 88.f, 30.f};
-                drawButton(win, btnImprove_, "Edit", Col::Panel2, Col::GoldLt, false, 12, font);
-                btnDelete_ = {cx - 42.f, y + h - 49.f, 88.f, 30.f};
-                btnGenerate_  = {cx + 62.f, y + h - 52.f, 160.f, 38.f};
+                const float totalW = actionAuxW + actionGap + actionAuxW + actionGap + actionGenerateW;
+                const float startX = cx - totalW / 2.f;
+                btnImprove_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
+                drawButton(win, btnImprove_, "Edit", colors.panel2, colors.goldLt, false, type.body, font);
+                btnDelete_ = {btnImprove_.left + actionAuxW + actionGap, y + h - 49.f, actionAuxW, actionButtonH};
+                btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
             } else if (mode == WorkflowMode::Generate) {
                 btnImprove_ = {};
-                btnDelete_ = {cx - 94.f, y + h - 49.f, 88.f, 30.f};
-                btnGenerate_  = {cx + 10.f, y + h - 52.f, 160.f, 38.f};
+                const float totalW = actionAuxW + actionGap + actionGenerateW;
+                const float startX = cx - totalW / 2.f;
+                btnDelete_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
+                btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
             } else {
                 btnImprove_ = {};
-                btnDelete_ = {cx - 94.f, y + h - 49.f, 88.f, 30.f};
-                btnGenerate_  = {cx + 10.f, y + h - 52.f, 160.f, 38.f};
+                const float totalW = actionAuxW + actionGap + actionGenerateW;
+                const float startX = cx - totalW / 2.f;
+                btnDelete_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
+                btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
             }
-            drawButton(win, btnDelete_, "Delete", Col::Panel2, Col::RedLt, false, 12, font);
+            drawButton(win, btnDelete_, "Delete", colors.panel2, colors.redLt, false, type.body, font);
         } else {
             btnImprove_   = {};
             btnDelete_    = {};
-            btnGenerate_  = {cx - 80.f, y + h - 52.f, 160.f, 38.f};
+            btnGenerate_  = {cx - actionGenerateW / 2.f, y + h - 52.f, actionGenerateW, 38.f};
         }
-        drawButton(win, btnGenerate_, "Generate", Col::Panel2, Col::GoldLt, false, 14, font);
+        drawButton(win, btnGenerate_, "Generate", colors.blue, colors.goldLt, false, 13, font);
     }
 }
 

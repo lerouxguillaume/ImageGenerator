@@ -65,6 +65,11 @@ This file is a **retrieval router** only. All implementation details live in `do
 → docs/70_ui/ui_architecture.md  
 → docs/70_ui/multiline_textarea.md
 
+UI theme facts:
+- `Theme` is now the authoritative UI styling source for colors, metrics, and typography
+- `constants.hpp` is compatibility glue, not the long-term styling source
+- prefer reading current UI behavior from `docs/70_ui/ui_architecture.md` before inferring from older helper usage
+
 ## Preset system — `PresetManager` (DSL-backed)
 → docs/80_presets/preset_overview.md
 

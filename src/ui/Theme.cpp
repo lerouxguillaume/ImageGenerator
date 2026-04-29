@@ -31,8 +31,17 @@ Theme::Theme() {
 }
 
 bool Theme::tryLoadAnyFont(const std::string& directory) {
+    std::error_code ec;
+    if (!std::filesystem::exists(directory, ec) || !std::filesystem::is_directory(directory, ec)) {
+        return false;
+    }
+
     // Try to find any .ttf file in the directory
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             directory,
+             std::filesystem::directory_options::skip_permission_denied,
+             ec)) {
+        if (ec) return false;
         if (entry.is_regular_file() && entry.path().extension() == ".ttf") {
             if (font_.loadFromFile(entry.path().string())) {
                 return true;

@@ -3,6 +3,7 @@
 #include <sstream>
 
 #include "Helpers.hpp"
+#include "Theme.h"
 #include "../enum/constants.hpp"
 
 namespace Helpers {
@@ -16,10 +17,11 @@ void drawRect(sf::RenderTarget& rt, sf::FloatRect r, sf::Color fill, sf::Color b
 }
 
 void drawDividers(sf::RenderWindow& win) {
+    const auto& theme = Theme::instance();
     for (const float x : {static_cast<float>(LEFT_W)}) {
         sf::RectangleShape line({1.f, static_cast<float>(BODY_H)});
         line.setPosition(x, HEADER_H);
-        line.setFillColor(Col::Border);
+        line.setFillColor(theme.colors().border);
         win.draw(line);
     }
 }
@@ -87,11 +89,12 @@ float drawWrapped(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
 }
 
 sf::Color diffColor(int d) {
+    const auto& colors = Theme::instance().colors();
     switch (d) {
-        case 1:  return Col::GreenLt;
-        case 2:  return Col::Gold;
-        case 3:  return Col::RedLt;
-        default: return Col::PurpleLt;
+        case 1:  return colors.greenLt;
+        case 2:  return colors.gold;
+        case 3:  return colors.redLt;
+        default: return colors.purpleLt;
     }
 }
 } // namespace Helpers

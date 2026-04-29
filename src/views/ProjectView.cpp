@@ -1,83 +1,91 @@
 #include "ProjectView.hpp"
-#include "../enum/constants.hpp"
 #include "../ui/Buttons.hpp"
 #include "../ui/Helpers.hpp"
+#include "../ui/Theme.h"
 #include <filesystem>
-
-static constexpr float VPAD  = 18.f;
-static constexpr float ROW_H = 40.f;
-static constexpr float GAP   = 8.f;
 
 namespace {
 void drawToolbarValue(sf::RenderWindow& win, sf::Font& font,
                       const std::string& label, const std::string& value,
-                      float x, float y, float w, bool active = false) {
-    Helpers::drawText(win, font, label, Col::Muted, x, y, 11, false);
-    Helpers::drawRect(win, {x, y + 16.f, w, 28.f}, Col::Panel, active ? Col::GoldLt : Col::Border, 1.f);
-    Helpers::drawTextC(win, font, value, Col::GoldLt, x + w / 2.f, y + 24.f, 12, false);
+                      float x, float y, float w, const Theme& theme, bool active = false) {
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    const auto& type = theme.typography();
+    Helpers::drawText(win, font, label, colors.muted, x, y, type.compact, false);
+    Helpers::drawRect(win, {x, y + metrics.toolbarLabelGap, w, metrics.toolbarFieldHeight},
+                      colors.panel, active ? colors.goldLt : colors.border, metrics.borderWidth);
+    Helpers::drawTextC(win, font, value, colors.goldLt,
+                       x + w / 2.f, y + metrics.toolbarLabelGap + 8.f, type.body, false);
 }
 }
 
 void ProjectView::render(sf::RenderWindow& win) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    const auto& metrics = theme.metrics();
+    const auto& type = theme.typography();
     const float W = static_cast<float>(win.getSize().x);
     const float H = static_cast<float>(win.getSize().y);
+    const float vPad = metrics.space2xl;
+    const float gap = metrics.spaceSm;
 
-    Helpers::drawRect(win, {0.f, 0.f, W, static_cast<float>(HEADER_H)}, Col::Panel, Col::Border, 1.f);
-    Helpers::drawText(win, font, "Projects", Col::GoldLt, VPAD, 18.f, 20, true);
+    Helpers::drawRect(win, {0.f, 0.f, W, static_cast<float>(metrics.headerHeight)},
+                      colors.panel, colors.border, metrics.borderWidth);
+    Helpers::drawText(win, font, "Projects", colors.goldLt, vPad, 18.f, type.pageTitle, true);
 
-    btnBack = {W - 248.f - VPAD, (HEADER_H - 30.f) / 2.f, 120.f, 30.f};
-    drawButton(win, btnBack, "< Back", Col::Panel2, Col::Muted, false, 13, font);
-    btnSettings = {W - 120.f - VPAD, (HEADER_H - 30.f) / 2.f, 120.f, 30.f};
-    drawButton(win, btnSettings, "Settings", Col::Panel2, Col::Muted, false, 13, font);
+    btnBack = {W - 248.f - vPad, (metrics.headerHeight - metrics.buttonHeight) / 2.f, 120.f, metrics.buttonHeight};
+    drawButton(win, btnBack, "< Back", colors.panel2, colors.muted, false, type.sectionTitle, font);
+    btnSettings = {W - 120.f - vPad, (metrics.headerHeight - metrics.buttonHeight) / 2.f, 120.f, metrics.buttonHeight};
+    drawButton(win, btnSettings, "Settings", colors.panel2, colors.muted, false, type.sectionTitle, font);
 
-    const float bodyY = static_cast<float>(HEADER_H) + VPAD;
-    const float bodyH = H - bodyY - VPAD;
+    const float bodyY = static_cast<float>(metrics.headerHeight) + vPad;
+    const float bodyH = H - bodyY - vPad;
     const bool showBrowser = showProjectBrowser || selectedProjectId.empty();
-    const float browserW = 260.f;
-    const float rightX = showBrowser ? (browserW + VPAD * 2.f) : VPAD;
-    const float rightW = showBrowser ? (W - rightX - VPAD) : (W - VPAD * 2.f);
+    const float browserW = metrics.projectBrowserWidth;
+    const float rightX = showBrowser ? (browserW + vPad * 2.f) : vPad;
+    const float rightW = showBrowser ? (W - rightX - vPad) : (W - vPad * 2.f);
 
     projectRows.clear();
     btnNewProject = {};
     if (showBrowser) {
-        Helpers::drawRect(win, {VPAD, bodyY, browserW, bodyH}, Col::Panel, Col::Border, 1.f);
-        Helpers::drawText(win, font, "Asset Packs", Col::Gold, VPAD + 10.f, bodyY + 10.f, 13, true);
+        Helpers::drawRect(win, {vPad, bodyY, browserW, bodyH}, colors.panel, colors.border, metrics.borderWidth);
+        Helpers::drawText(win, font, "Asset Packs", colors.gold, vPad + metrics.spaceMd, bodyY + metrics.spaceMd, type.sectionTitle, true);
 
         float rowY = bodyY + 36.f;
         for (const auto& proj : projects) {
             const bool selected = proj.id == selectedProjectId;
-            const sf::Color bg = selected ? Col::Blue : Col::Panel2;
-            const sf::FloatRect rowRect{VPAD + 4.f, rowY, browserW - 8.f, ROW_H};
+            const sf::Color bg = selected ? colors.blue : colors.panel2;
+            const sf::FloatRect rowRect{vPad + metrics.spaceXs, rowY, browserW - metrics.spaceSm, metrics.projectRowHeight};
 
-            Helpers::drawRect(win, rowRect, bg, selected ? Col::BorderHi : Col::Border, 1.f);
-            Helpers::drawText(win, font, proj.name, selected ? Col::GoldLt : Col::Text,
-                              rowRect.left + 8.f, rowRect.top + 12.f, 13, false);
+            Helpers::drawRect(win, rowRect, bg, selected ? colors.borderHi : colors.border, metrics.borderWidth);
+            Helpers::drawText(win, font, proj.name, selected ? colors.goldLt : colors.text,
+                              rowRect.left + metrics.spaceSm, rowRect.top + 12.f, type.sectionTitle, false);
 
             const sf::FloatRect delBtn{rowRect.left + rowRect.width - 28.f, rowRect.top + 6.f, 22.f, 28.f};
-            drawButton(win, delBtn, "x", Col::Panel, Col::Red, false, 11, font);
+            drawButton(win, delBtn, "x", colors.panel, colors.red, false, type.compact, font);
 
             projectRows.push_back({proj.id, rowRect, delBtn});
-            rowY += ROW_H + GAP;
+            rowY += metrics.projectRowHeight + gap;
         }
 
         if (newProjectInputActive) {
-            const sf::FloatRect inputRect{VPAD + 4.f, rowY, browserW - 8.f, ROW_H};
-            Helpers::drawRect(win, inputRect, Col::Panel2, Col::BorderHi, 1.f);
-            Helpers::drawText(win, font, newProjectName + "|", Col::Text,
-                              inputRect.left + 8.f, inputRect.top + 12.f, 13, false);
+            const sf::FloatRect inputRect{vPad + metrics.spaceXs, rowY, browserW - metrics.spaceSm, metrics.projectRowHeight};
+            Helpers::drawRect(win, inputRect, colors.panel2, colors.borderHi, metrics.borderWidth);
+            Helpers::drawText(win, font, newProjectName + "|", colors.text,
+                              inputRect.left + metrics.spaceSm, inputRect.top + 12.f, type.sectionTitle, false);
             btnNewProject = inputRect;
         } else {
-            btnNewProject = {VPAD + 4.f, rowY, browserW - 8.f, ROW_H};
-            drawButton(win, btnNewProject, "+ New Project", Col::Panel2, Col::Gold, false, 13, font);
+            btnNewProject = {vPad + metrics.spaceXs, rowY, browserW - metrics.spaceSm, metrics.projectRowHeight};
+            drawButton(win, btnNewProject, "+ New Project", colors.panel2, colors.gold, false, type.sectionTitle, font);
         }
     }
 
-    Helpers::drawRect(win, {rightX, bodyY, rightW, bodyH}, Col::Panel, Col::Border, 1.f);
+    Helpers::drawRect(win, {rightX, bodyY, rightW, bodyH}, colors.panel, colors.border, metrics.borderWidth);
     if (selectedProjectId.empty()) {
-        Helpers::drawTextC(win, font, "Select or create a project", Col::Muted,
+        Helpers::drawTextC(win, font, "Select or create a project", colors.muted,
                            rightX + rightW / 2.f, bodyY + bodyH / 2.f - 12.f, 16, false);
         Helpers::drawTextC(win, font, "Each project stores the shared theme and per-asset prompts.",
-                           Col::Border, rightX + rightW / 2.f, bodyY + bodyH / 2.f + 16.f, 12, false);
+                           colors.border, rightX + rightW / 2.f, bodyY + bodyH / 2.f + 16.f, type.body, false);
         assetTypeRows.clear();
         btnSaveTheme = {};
         btnAddAssetType = {};
@@ -101,163 +109,164 @@ void ProjectView::render(sf::RenderWindow& win) {
     }
     if (!proj) return;
 
-    btnChooseProject = {rightX + rightW - 132.f, bodyY + 8.f, 120.f, 28.f};
+    btnChooseProject = {rightX + rightW - 132.f, bodyY + metrics.spaceSm, 120.f, metrics.compactButtonHeight};
     drawButton(win, btnChooseProject, showBrowser ? "Hide List" : "Choose Project",
-               Col::Panel2, Col::Text, false, 12, font);
-    Helpers::drawText(win, font, proj->name, Col::GoldLt, rightX + 12.f, bodyY + 10.f, 18, true);
+               colors.panel2, colors.text, false, type.body, font);
+    Helpers::drawText(win, font, proj->name, colors.goldLt, rightX + metrics.spaceLg, bodyY + metrics.spaceMd, type.projectTitle, true);
 
-    const float sectionX = rightX + 12.f;
-    const float sectionW = rightW - 24.f;
+    const float sectionX = rightX + metrics.spaceLg;
+    const float sectionW = rightW - metrics.spaceLg * 2.f;
     const float toolbarY = bodyY + 42.f;
     const float toolbarH = 56.f;
-    const float railW = std::min(400.f, std::max(320.f, sectionW * 0.34f));
-    const float gapX = 14.f;
+    const float railW = std::min(metrics.rightRailPreferredWidth,
+                                 std::max(metrics.rightRailMinWidth, sectionW * metrics.rightRailRatio));
+    const float gapX = metrics.spaceXl;
     const float resultX = sectionX + railW + gapX;
     const float resultW = sectionW - railW - gapX;
-    const float railY = toolbarY + toolbarH + 12.f;
+    const float railY = toolbarY + toolbarH + metrics.spaceLg;
     const float railH = bodyY + bodyH - railY;
 
-    Helpers::drawRect(win, {sectionX, toolbarY, sectionW, toolbarH}, Col::Panel2, Col::Border, 1.f);
-    Helpers::drawText(win, font, "Generation", Col::Gold, sectionX + 10.f, toolbarY + 10.f, 13, true);
+    Helpers::drawRect(win, {sectionX, toolbarY, sectionW, toolbarH}, colors.panel2, colors.border, metrics.borderWidth);
+    Helpers::drawText(win, font, "Generation", colors.gold, sectionX + metrics.spaceMd, toolbarY + metrics.spaceMd, type.sectionTitle, true);
 
     auto& sp = generatorView.settingsPanel;
-    const float rowY = toolbarY + 10.f;
+    const float rowY = toolbarY + metrics.spaceMd;
     const float modelW = 170.f;
     const float genW = 106.f;
     const float seedW = 120.f;
     const float statW = 78.f;
-    const float gap = 8.f;
     const float rowW = modelW + seedW + statW * 3.f + genW + gap * 5.f;
     const float rowX = sectionX + (sectionW - rowW) / 2.f;
 
-    btnModelCycle = {rowX, rowY + 16.f, modelW, 28.f};
+    btnModelCycle = {rowX, rowY + metrics.toolbarLabelGap, modelW, metrics.toolbarFieldHeight};
     const std::string modelName = sp.availableModels.empty()
         ? "(no models)"
         : std::filesystem::path(sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
-    drawToolbarValue(win, font, "Model", modelName, rowX, rowY, modelW);
+    drawToolbarValue(win, font, "Model", modelName, rowX, rowY, modelW, theme);
 
-    seedField = {rowX + modelW + gap, rowY + 16.f, seedW, 28.f};
-    Helpers::drawText(win, font, "Seed", Col::Muted, seedField.left, rowY, 11, false);
-    Helpers::drawRect(win, seedField, Col::Panel,
-                      activeToolbarField == ToolbarField::Seed ? Col::GoldLt : Col::Border, 1.f);
+    seedField = {rowX + modelW + gap, rowY + metrics.toolbarLabelGap, seedW, metrics.toolbarFieldHeight};
+    Helpers::drawText(win, font, "Seed", colors.muted, seedField.left, rowY, type.compact, false);
+    Helpers::drawRect(win, seedField, colors.panel,
+                      activeToolbarField == ToolbarField::Seed ? colors.goldLt : colors.border, metrics.borderWidth);
     Helpers::drawText(win, font,
                       (activeToolbarField == ToolbarField::Seed ? toolbarInput + "|" :
                        (sp.seedInput.empty() ? "(random)" : sp.seedInput)),
-                      (sp.seedInput.empty() && activeToolbarField != ToolbarField::Seed) ? Col::Border : Col::GoldLt,
-                      seedField.left + 8.f, seedField.top + 7.f, 12, false);
+                      (sp.seedInput.empty() && activeToolbarField != ToolbarField::Seed) ? colors.border : colors.goldLt,
+                      seedField.left + metrics.spaceSm, seedField.top + 7.f, type.body, false);
 
     const float stepsX = seedField.left + seedW + gap;
-    stepsField = {stepsX, rowY + 16.f, statW, 28.f};
+    stepsField = {stepsX, rowY + metrics.toolbarLabelGap, statW, metrics.toolbarFieldHeight};
     drawToolbarValue(win, font,
                      "Steps",
                      activeToolbarField == ToolbarField::Steps
                         ? toolbarInput + "|"
                         : std::to_string(sp.generationParams.numSteps),
-                     stepsX, rowY, statW, activeToolbarField == ToolbarField::Steps);
+                     stepsX, rowY, statW, theme, activeToolbarField == ToolbarField::Steps);
     btnStepsDown = {stepsX + 2.f, rowY + 18.f, 16.f, 24.f};
     btnStepsUp   = {stepsX + statW - 18.f, rowY + 18.f, 16.f, 24.f};
-    drawButton(win, btnStepsDown, "-", Col::Panel2, Col::Text, false, 12, font);
-    drawButton(win, btnStepsUp, "+", Col::Panel2, Col::Text, false, 12, font);
+    drawButton(win, btnStepsDown, "-", colors.panel2, colors.text, false, type.body, font);
+    drawButton(win, btnStepsUp, "+", colors.panel2, colors.text, false, type.body, font);
 
     const float cfgX = stepsX + statW + gap;
     char cfgBuf[16];
     std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", sp.generationParams.guidanceScale);
-    cfgField = {cfgX, rowY + 16.f, statW, 28.f};
+    cfgField = {cfgX, rowY + metrics.toolbarLabelGap, statW, metrics.toolbarFieldHeight};
     drawToolbarValue(win, font, "CFG",
                      activeToolbarField == ToolbarField::Cfg ? toolbarInput + "|" : std::string(cfgBuf),
-                     cfgX, rowY, statW, activeToolbarField == ToolbarField::Cfg);
+                     cfgX, rowY, statW, theme, activeToolbarField == ToolbarField::Cfg);
     btnCfgDown = {cfgX + 2.f, rowY + 18.f, 16.f, 24.f};
     btnCfgUp   = {cfgX + statW - 18.f, rowY + 18.f, 16.f, 24.f};
-    drawButton(win, btnCfgDown, "-", Col::Panel2, Col::Text, false, 12, font);
-    drawButton(win, btnCfgUp, "+", Col::Panel2, Col::Text, false, 12, font);
+    drawButton(win, btnCfgDown, "-", colors.panel2, colors.text, false, type.body, font);
+    drawButton(win, btnCfgUp, "+", colors.panel2, colors.text, false, type.body, font);
 
     const float imagesX = cfgX + statW + gap;
-    imagesField = {imagesX, rowY + 16.f, statW, 28.f};
+    imagesField = {imagesX, rowY + metrics.toolbarLabelGap, statW, metrics.toolbarFieldHeight};
     drawToolbarValue(win, font, "Images",
                      activeToolbarField == ToolbarField::Images
                         ? toolbarInput + "|"
                         : std::to_string(sp.generationParams.numImages),
-                     imagesX, rowY, statW, activeToolbarField == ToolbarField::Images);
+                     imagesX, rowY, statW, theme, activeToolbarField == ToolbarField::Images);
     btnImagesDown = {imagesX + 2.f, rowY + 18.f, 16.f, 24.f};
     btnImagesUp   = {imagesX + statW - 18.f, rowY + 18.f, 16.f, 24.f};
-    drawButton(win, btnImagesDown, "-", Col::Panel2, Col::Text, false, 12, font);
-    drawButton(win, btnImagesUp, "+", Col::Panel2, Col::Text, false, 12, font);
+    drawButton(win, btnImagesDown, "-", colors.panel2, colors.text, false, type.body, font);
+    drawButton(win, btnImagesUp, "+", colors.panel2, colors.text, false, type.body, font);
 
-    btnGenerateAsset = {imagesX + statW + gap, rowY + 16.f, genW, 28.f};
-    drawButton(win, btnGenerateAsset, "Generate", Col::Blue, Col::GoldLt, false, 12, font);
+    btnGenerateAsset = {imagesX + statW + gap, rowY + metrics.toolbarLabelGap, genW, metrics.toolbarFieldHeight};
+    drawButton(win, btnGenerateAsset, "Generate", colors.blue, colors.goldLt, false, type.body, font);
 
     const sf::FloatRect themeBox{sectionX, railY, railW, 150.f};
-    Helpers::drawRect(win, themeBox, Col::Panel2, Col::Border, 1.f);
-    Helpers::drawText(win, font, "Project Theme", Col::Gold, themeBox.left + 10.f, themeBox.top + 10.f, 13, true);
-    Helpers::drawText(win, font, "Shared positive prompt", Col::Muted, themeBox.left + 10.f, themeBox.top + 34.f, 11, false);
-    themePositiveArea.setRect({themeBox.left + 10.f, themeBox.top + 52.f, themeBox.width - 20.f, 42.f});
+    Helpers::drawRect(win, themeBox, colors.panel2, colors.border, metrics.borderWidth);
+    Helpers::drawText(win, font, "Project Theme", colors.gold, themeBox.left + metrics.spaceMd, themeBox.top + metrics.spaceMd, type.sectionTitle, true);
+    Helpers::drawText(win, font, "Shared positive prompt", colors.muted, themeBox.left + metrics.spaceMd, themeBox.top + 34.f, type.compact, false);
+    themePositiveArea.setRect({themeBox.left + metrics.spaceMd, themeBox.top + 52.f, themeBox.width - metrics.spaceLg * 2.f, 42.f});
     themePositiveArea.render(win, font);
 
-    Helpers::drawText(win, font, "Shared negative prompt", Col::Muted, themeBox.left + 10.f, themeBox.top + 100.f, 11, false);
-    themeNegativeArea.setRect({themeBox.left + 10.f, themeBox.top + 118.f, themeBox.width - 140.f, 22.f});
-    themeNegativeArea.setTextColor(Col::Muted);
+    Helpers::drawText(win, font, "Shared negative prompt", colors.muted, themeBox.left + metrics.spaceMd, themeBox.top + 100.f, type.compact, false);
+    themeNegativeArea.setRect({themeBox.left + metrics.spaceMd, themeBox.top + 118.f, themeBox.width - 140.f, 22.f});
+    themeNegativeArea.setTextColor(colors.muted);
     themeNegativeArea.render(win, font);
 
     btnSaveTheme = {themeBox.left + themeBox.width - 122.f, themeBox.top + 114.f, 112.f, 26.f};
     drawButton(win, btnSaveTheme, themeDirty ? "Save Theme *" : "Save Theme",
-               Col::Panel, themeDirty ? Col::GoldLt : Col::Text, false, 12, font);
+               colors.panel, themeDirty ? colors.goldLt : colors.text, false, type.body, font);
 
-    const float assetWorkspaceY = themeBox.top + themeBox.height + 12.f;
+    const float assetWorkspaceY = themeBox.top + themeBox.height + metrics.spaceLg;
     const float assetWorkspaceH = 240.f;
     const float listW = 134.f;
-    const float detailX = sectionX + listW + 14.f;
-    const float detailW = railW - listW - 14.f;
+    const float detailX = sectionX + listW + metrics.spaceXl;
+    const float detailW = railW - listW - metrics.spaceXl;
 
-    Helpers::drawRect(win, {sectionX, assetWorkspaceY, railW, assetWorkspaceH}, Col::Panel2, Col::Border, 1.f);
-    Helpers::drawText(win, font, "Asset Types", Col::Gold, sectionX + 10.f, assetWorkspaceY + 10.f, 13, true);
+    Helpers::drawRect(win, {sectionX, assetWorkspaceY, railW, assetWorkspaceH}, colors.panel2, colors.border, metrics.borderWidth);
+    Helpers::drawText(win, font, "Asset Types", colors.gold, sectionX + metrics.spaceMd, assetWorkspaceY + metrics.spaceMd, type.sectionTitle, true);
 
     assetTypeRows.clear();
     const float listAreaTop = assetWorkspaceY + 36.f;
     const float listAreaBottom = assetWorkspaceY + assetWorkspaceH - 42.f;
-    const float rowStep = 38.f;
+    const float rowStep = metrics.assetRowStep;
     const int visibleRows = std::max(1, static_cast<int>((listAreaBottom - listAreaTop) / rowStep));
     const int maxScroll = std::max(0, static_cast<int>(proj->assetTypes.size()) - visibleRows);
     assetListScroll = std::clamp(assetListScroll, 0, maxScroll);
-    assetListViewport = {sectionX + 4.f, listAreaTop, listW - 8.f, listAreaBottom - listAreaTop};
+    assetListViewport = {sectionX + metrics.spaceXs, listAreaTop, listW - metrics.spaceSm, listAreaBottom - listAreaTop};
     float atY = listAreaTop;
     const int startIdx = assetListScroll;
     const int endIdx = std::min(static_cast<int>(proj->assetTypes.size()), startIdx + visibleRows);
     for (int idx = startIdx; idx < endIdx; ++idx) {
         const auto& at = proj->assetTypes[static_cast<size_t>(idx)];
         const bool selected = at.id == selectedAssetTypeId;
-        const sf::FloatRect rowRect{sectionX + 4.f, atY, listW - 8.f, 34.f};
-        Helpers::drawRect(win, rowRect, selected ? Col::Blue : Col::Panel, selected ? Col::BorderHi : Col::Border, 1.f);
-        Helpers::drawText(win, font, at.name, selected ? Col::GoldLt : Col::Text,
-                          rowRect.left + 8.f, rowRect.top + 10.f, 11, false);
+        const sf::FloatRect rowRect{sectionX + metrics.spaceXs, atY, listW - metrics.spaceSm, metrics.assetRowHeight};
+        Helpers::drawRect(win, rowRect, selected ? colors.blue : colors.panel,
+                          selected ? colors.borderHi : colors.border, metrics.borderWidth);
+        Helpers::drawText(win, font, at.name, selected ? colors.goldLt : colors.text,
+                          rowRect.left + metrics.spaceSm, rowRect.top + 10.f, type.compact, false);
         const sf::FloatRect delBtn{rowRect.left + rowRect.width - 24.f, rowRect.top + 5.f, 18.f, 24.f};
-        drawButton(win, delBtn, "x", Col::Panel2, Col::Red, false, 11, font);
+        drawButton(win, delBtn, "x", colors.panel2, colors.red, false, type.compact, font);
         assetTypeRows.push_back({proj->id, at.id, rowRect, delBtn});
-        atY += 38.f;
+        atY += rowStep;
     }
     if (maxScroll > 0) {
         Helpers::drawTextR(win, font,
                            std::to_string(startIdx + 1) + "-" + std::to_string(endIdx) + " / "
                                + std::to_string(proj->assetTypes.size()),
-                           Col::Border, sectionX + listW - 10.f, assetWorkspaceY + assetWorkspaceH - 32.f, 10);
+                           colors.border, sectionX + listW - metrics.spaceMd, assetWorkspaceY + assetWorkspaceH - 32.f, type.helper);
     }
 
     if (newAssetTypeInputActive) {
-        const sf::FloatRect inputRect{sectionX + 4.f, assetWorkspaceY + assetWorkspaceH - 38.f, listW - 8.f, 34.f};
-        Helpers::drawRect(win, inputRect, Col::Panel, Col::BorderHi, 1.f);
-        Helpers::drawText(win, font, newAssetTypeName + "|", Col::Text,
-                          inputRect.left + 8.f, inputRect.top + 10.f, 11, false);
+        const sf::FloatRect inputRect{sectionX + metrics.spaceXs, assetWorkspaceY + assetWorkspaceH - 38.f, listW - metrics.spaceSm, metrics.assetRowHeight};
+        Helpers::drawRect(win, inputRect, colors.panel, colors.borderHi, metrics.borderWidth);
+        Helpers::drawText(win, font, newAssetTypeName + "|", colors.text,
+                          inputRect.left + metrics.spaceSm, inputRect.top + 10.f, type.compact, false);
         btnAddAssetType = inputRect;
     } else {
-        btnAddAssetType = {sectionX + 4.f, assetWorkspaceY + assetWorkspaceH - 38.f, listW - 8.f, 34.f};
-        drawButton(win, btnAddAssetType, "+ Asset", Col::Panel, Col::Gold, false, 11, font);
+        btnAddAssetType = {sectionX + metrics.spaceXs, assetWorkspaceY + assetWorkspaceH - 38.f, listW - metrics.spaceSm, metrics.assetRowHeight};
+        drawButton(win, btnAddAssetType, "+ Asset", colors.panel, colors.gold, false, type.compact, font);
     }
 
-    Helpers::drawRect(win, {detailX, assetWorkspaceY + 4.f, detailW, assetWorkspaceH - 8.f}, Col::Panel, Col::Border, 1.f);
+    Helpers::drawRect(win, {detailX, assetWorkspaceY + 4.f, detailW, assetWorkspaceH - 8.f}, colors.panel, colors.border, metrics.borderWidth);
     if (selectedAssetTypeId.empty()) {
-        Helpers::drawTextC(win, font, "Select an asset type", Col::Muted,
+        Helpers::drawTextC(win, font, "Select an asset type", colors.muted,
                            detailX + detailW / 2.f, assetWorkspaceY + assetWorkspaceH / 2.f - 10.f, 14, false);
         Helpers::drawTextC(win, font, "This prompt is the subject-specific layer added on top of the project theme.",
-                           Col::Border, detailX + detailW / 2.f, assetWorkspaceY + assetWorkspaceH / 2.f + 16.f, 11, false);
+                           colors.border, detailX + detailW / 2.f, assetWorkspaceY + assetWorkspaceH / 2.f + 16.f, type.compact, false);
         btnSaveAsset = {};
         assetPositiveArea.setRect({});
         assetNegativeArea.setRect({});
@@ -271,31 +280,32 @@ void ProjectView::render(sf::RenderWindow& win) {
         }
         if (!selectedAsset) return;
 
-        Helpers::drawText(win, font, selectedAsset->name, Col::GoldLt, detailX + 10.f, assetWorkspaceY + 14.f, 14, true);
-        Helpers::drawText(win, font, "Asset prompt", Col::Muted, detailX + 10.f, assetWorkspaceY + 36.f, 11, false);
-        assetPositiveArea.setRect({detailX + 10.f, assetWorkspaceY + 52.f, detailW - 20.f, 58.f});
+        Helpers::drawText(win, font, selectedAsset->name, colors.goldLt, detailX + metrics.spaceMd, assetWorkspaceY + 14.f, type.subsectionTitle, true);
+        Helpers::drawText(win, font, "Asset prompt", colors.muted, detailX + metrics.spaceMd, assetWorkspaceY + 36.f, type.compact, false);
+        assetPositiveArea.setRect({detailX + metrics.spaceMd, assetWorkspaceY + 52.f, detailW - metrics.spaceLg * 2.f, 58.f});
         assetPositiveArea.render(win, font);
 
-        Helpers::drawText(win, font, "Asset negative prompt", Col::Muted, detailX + 10.f, assetWorkspaceY + 116.f, 11, false);
-        assetNegativeArea.setRect({detailX + 10.f, assetWorkspaceY + 132.f, detailW - 20.f, 38.f});
-        assetNegativeArea.setTextColor(Col::Muted);
+        Helpers::drawText(win, font, "Asset negative prompt", colors.muted, detailX + metrics.spaceMd, assetWorkspaceY + 116.f, type.compact, false);
+        assetNegativeArea.setRect({detailX + metrics.spaceMd, assetWorkspaceY + 132.f, detailW - metrics.spaceLg * 2.f, 38.f});
+        assetNegativeArea.setTextColor(colors.muted);
         assetNegativeArea.render(win, font);
 
-        btnSaveAsset = {detailX + 10.f, assetWorkspaceY + 186.f, 112.f, 26.f};
+        btnSaveAsset = {detailX + metrics.spaceMd, assetWorkspaceY + 186.f, 112.f, 26.f};
         drawButton(win, btnSaveAsset, assetDirty ? "Save Asset *" : "Save Asset",
-                   Col::Panel, assetDirty ? Col::GoldLt : Col::Text, false, 12, font);
+                   colors.panel, assetDirty ? colors.goldLt : colors.text, false, type.body, font);
         Helpers::drawText(win, font, "Generator below uses this asset type within the current project theme.",
-                          Col::BlueLt, detailX + 10.f, assetWorkspaceY + 220.f, 10, false);
+                          colors.blueLt, detailX + metrics.spaceMd, assetWorkspaceY + 220.f, type.helper, false);
     }
 
     generatorView.resultPanel.showImproveButton = false;
     generatorView.resultPanel.showTabs = false;
 
-    Helpers::drawRect(win, {resultX, railY, resultW, railH}, Col::Panel2, Col::Border, 1.f);
-    Helpers::drawText(win, font, "Results", Col::Gold, resultX + 10.f, railY + 10.f, 13, true);
+    Helpers::drawRect(win, {resultX, railY, resultW, railH}, colors.panel2, colors.border, metrics.borderWidth);
+    Helpers::drawText(win, font, "Results", colors.gold, resultX + metrics.spaceMd, railY + metrics.spaceMd, type.sectionTitle, true);
     Helpers::drawText(win, font, "Preview and gallery stay visible while you tweak theme, asset type, and run settings.",
-                      Col::Muted, resultX + 72.f, railY + 11.f, 11, false);
-    generatorView.resultPanel.setRect({resultX + 1.f, railY + 28.f, resultW - 2.f, railH - 29.f});
+                      colors.muted, resultX + 72.f, railY + 11.f, type.compact, false);
+    generatorView.resultPanel.setRect({resultX + metrics.panelInset, railY + 28.f,
+                                       resultW - metrics.panelInset * 2.f, railH - 29.f});
     generatorView.resultPanel.render(win, font, generatorView.settingsPanel.generationParams.numSteps);
 
     if (generatorView.showSettings)

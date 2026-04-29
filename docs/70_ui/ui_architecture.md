@@ -2,6 +2,13 @@
 
 SFML-based retained UI system with a component panel architecture.
 
+The UI now uses a centralized theme layer in `src/ui/Theme.h`:
+- `UiColors` — semantic colors for backgrounds, panels, accents, status states, and overlays
+- `UiMetrics` — spacing tokens, control heights, layout widths, and shared sizing
+- `UiTypography` — shared text scale for titles, section labels, body copy, and helper text
+
+`src/enum/constants.hpp` remains as a compatibility facade for older code paths while screens and widgets migrate to direct theme access.
+
 ---
 
 # Screen model
@@ -19,6 +26,8 @@ The standalone image workflows reuse the same panel classes, but the panels are 
 - edit mode hides preset/LLM affordances and centers the workflow on source image + edit instruction
 
 `ProjectView` is different: it is a project-native workspace rather than a thin wrapper around `ImageGeneratorView`. It reuses the embedded `ResultPanel`, `SettingsModal`, and `ImageGeneratorController` generation orchestration, but owns its own authoring layout and top-row run controls.
+
+The current visual language is a dark desktop-tool style with framed surfaces, centralized spacing/typography tokens, and cooler accent colors for active and primary actions.
 
 ---
 
@@ -48,7 +57,7 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 │  model / lora            │  generated image (native size,   │
 │  positive prompt         │   downscaled only if too large)  │
 │  token chips             │                                  │
-│  negative prompt         │  [Generate]                      │
+│  negative prompt         │  framed action bar               │
 │  compiled preview*       │  progress bar / cancel           │
 │  steps / cfg / images    │  error banner                    │
 │  seed                    │                                  │
@@ -103,8 +112,9 @@ Key differences from the standalone generate screen:
 - generation controls live in a project-native toolbar
 - the result gallery is scoped to the selected asset type
 - project asset switching happens in `ProjectView`, so gallery tabs are hidden in this context
+- toolbar, authoring rail, and results surface all read from shared theme tokens
 
-Layout constants (`src/enum/constants.hpp`):
+Layout constants (`src/enum/constants.hpp` and `Theme::metrics()`):
 - `MENU_BAR_H = 40` — top bar height
 - `LEFT_PANEL_W = 460` — SettingsPanel width (fixed)
 - `LLM_BAR_H = 44` — bottom bar height (collapsed)
@@ -134,12 +144,14 @@ Action flags: `backRequested`, `settingsRequested`, `saveConfirmed`, `selectedPr
 `setPresets(presets, activeId)` — called by controller after preset list changes  
 Mode-aware fields: `showPresetControls`, `titleOverride`  
 Save modal and overlay dim use `win.getSize()` for centering.
+The menu bar now renders as a themed header surface rather than a flat strip.
 
 ## `SettingsPanel`
 
 State: `positiveArea`, `negativeArea`, `editInstructionArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
 DSL display state (set by controller each frame): `currentDsl`, `compiledPreview`  
 All params always visible (no Advanced toggle)  
+Renders inside a framed left rail with themed surfaces and token-driven spacing.
 Tab cycles focus by mode:
 - generate mode: positive → negative → edit instruction → positive when an init image is active; otherwise positive → negative → positive
 - edit mode: edit instruction ↔ seed
@@ -191,6 +203,8 @@ Path fields: `lastImagePath` (base output path, set at generation start), `displ
 - Sorted newest-first by file modification time
 - Rendered as a 124 px strip at the bottom of the panel; clicking a thumbnail selects it and loads its full image into `resultTexture`
 - `showTabs` allows the host view to suppress gallery tab UI when asset switching is handled elsewhere (used by `ProjectView`)
+- The selected preview image is framed inside a dedicated preview surface rather than floating on the panel background
+- The action buttons live inside a dedicated bottom action row sized by the host layout
 
 **Button layout when `resultLoaded`** (left → right, bottom of panel):  
 - generate mode: `[Edit]` · `[Delete]` · `[Generate]`
@@ -215,6 +229,7 @@ State: 4 directory strings + cursors + active flags
 Action flags: `saveRequested`, `cancelRequested`, `browseTarget`  
 Rendered as a full-screen overlay when `view.showSettings == true`  
 Overlay dim and box centering use `win.getSize()` dynamically.
+The modal uses the shared theme palette and control styling so directory selection is visually consistent across screens.
 
 In `ProjectView`, the same modal is rendered from the embedded `generatorView` and opened through the shared `ImageGeneratorController` so directory settings behave consistently across workflows.
 
@@ -293,10 +308,10 @@ No callbacks or virtual dispatch — plain public bools and strings.
 
 `src/ui/Helpers.hpp` — `drawRect`, `drawText`, `drawTextC`, `drawTextR`, `drawWrapped`, `drawBar`  
 `src/ui/Buttons.hpp` — `drawButton`  
-`src/ui/Theme.cpp` — font loading singleton  
-`src/enum/constants.hpp` — `Col::*` colour palette, layout constants  
+`src/ui/Theme.h/.cpp` — font loading plus `UiColors`, `UiMetrics`, `UiTypography`
+`src/enum/constants.hpp` — compatibility `Col::*` palette aliases and legacy layout constants
 
-All panels use these helpers directly; no per-panel theming.
+Panels still use the shared helpers directly, but the shared helpers and newer screens now draw from the centralized theme tokens rather than ad hoc per-screen styling.
 
 ---
 

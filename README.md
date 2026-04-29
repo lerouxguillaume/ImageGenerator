@@ -12,7 +12,7 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 - **GPU acceleration** — CUDA (Linux/Windows) or DirectML (Windows)
 - **Three entry points** — `Projects`, `Generate Images`, and `Edit Image` from the main menu
 - **Project workspace** — build themed asset packs with a project-level theme, per-asset prompts, inline generation controls, and an embedded results gallery
-- **SFML GUI** — prompt editor, model selector, edit instruction field, strength controls, live progress overlay
+- **SFML GUI** — centralized theme system, project-native workspace, prompt editor, model selector, edit instruction field, strength controls, live progress overlay
 - **Multi-image generation** — generate N images in one run with cancellation support
 - **Image editing** — dedicated edit screen plus gallery-driven handoff from generated results
 - **Model hot-swap** — any model exported to ONNX under `models/` is automatically listed in the UI
@@ -31,8 +31,8 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 │   ├── presets/            # Preset data model and PresetManager
 │   ├── prompt/             # Prompt DSL (parse / compile / merge / JSON)
 │   ├── managers/           # Logger
-│   ├── ui/                 # Shared widgets, theme, helpers
-│   └── enum/               # Enums and layout/colour constants
+│   ├── ui/                 # Shared widgets, theme tokens, helpers
+│   └── enum/               # Enums and compatibility layout/colour constants
 ├── scripts/
 │   ├── export_onnx_models.py       # Export SD 1.5 model → ONNX
 │   ├── sdxl_export_onnx_models.py  # Export SDXL model → ONNX
@@ -160,11 +160,18 @@ Generated images are saved to `assets/generated/`.
 
 The main menu offers three entry points:
 
-**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, define per-asset prompts for asset types such as `Wall`, `Floor`, `Character`, or `Prop`, then generate directly inside the same screen. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
+**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, define per-asset prompts for asset types such as `Wall`, `Floor`, `Character`, or `Prop`, then generate directly inside the same screen. The project workspace uses a dedicated top generation toolbar, left-side authoring rail, and embedded results area. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
 
-**Generate Images** — standalone prompt-first txt2img workflow with preset support.
+**Generate Images** — standalone prompt-first txt2img workflow with preset support and the shared dark tool UI.
 
 **Edit Image** — image-first img2img workflow. From the generate screen, select a gallery image and click `Edit` to open it here with the image preselected. Enter an instruction such as `change hair color to copper red`, adjust the strength slider, and generate.
+
+UI styling is now centralized in `src/ui/Theme.h`:
+- `UiColors` — shared palette and semantic surface colors
+- `UiMetrics` — spacing, control sizes, and layout constants
+- `UiTypography` — shared text sizing
+
+`src/enum/constants.hpp` remains as a compatibility layer while older widgets continue migrating to the centralized theme tokens.
 
 ---
 

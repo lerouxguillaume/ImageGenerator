@@ -2,6 +2,7 @@
 #include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
+#include "../../ui/Theme.h"
 
 using namespace Helpers;
 
@@ -9,7 +10,9 @@ void SettingsModal::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
                                         const sf::FloatRect& field,
                                         const std::string& text,
                                         int cursor, bool active) {
-    drawRect(win, field, Col::Panel, active ? Col::GoldLt : Col::Border, 1.f);
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
+    drawRect(win, field, colors.surfaceInset, active ? colors.borderHi : colors.border, 1.f);
 
     constexpr float    padX     = 6.f;
     constexpr unsigned fontSize = 13;
@@ -26,34 +29,36 @@ void SettingsModal::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
     sf::Text textObj;
     textObj.setFont(font);
     textObj.setCharacterSize(fontSize);
-    textObj.setFillColor(Col::Text);
+    textObj.setFillColor(theme.colors().text);
     textObj.setString(text);
     textObj.setPosition(field.left + padX - scrollX, textY);
     win.draw(textObj);
 
     if (active) {
         sf::RectangleShape cur({1.f, static_cast<float>(fontSize) + 3.f});
-        cur.setFillColor(Col::GoldLt);
+        cur.setFillColor(theme.colors().goldLt);
         cur.setPosition(field.left + padX + cursorPx - scrollX, textY);
         win.draw(cur);
     }
 }
 
 void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
+    const auto& theme = Theme::instance();
+    const auto& colors = theme.colors();
     const float WIN_W_F = static_cast<float>(win.getSize().x);
     const float WIN_H_F = static_cast<float>(win.getSize().y);
 
     // Dim background
     sf::RectangleShape overlay({WIN_W_F, WIN_H_F});
-    overlay.setFillColor(Col::Overlay);
+    overlay.setFillColor(colors.overlay);
     win.draw(overlay);
 
     // Modal panel
     constexpr float boxW = 560.f, boxH = 330.f;
     const float boxX = (WIN_W_F - boxW) / 2.f;
     const float boxY = (WIN_H_F - boxH) / 2.f;
-    drawRect(win, {boxX, boxY, boxW, boxH}, Col::Panel2, Col::BorderHi, 2.f);
-    drawTextC(win, font, "Settings", Col::GoldLt, WIN_W_F / 2.f, boxY + 14.f, 15, true);
+    drawRect(win, {boxX, boxY, boxW, boxH}, colors.panel2, colors.borderHi, 2.f);
+    drawTextC(win, font, "Settings", colors.text, WIN_W_F / 2.f, boxY + 14.f, 15, true);
 
     constexpr float padX      = 20.f;
     constexpr float labelW    = 140.f;
@@ -70,7 +75,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     drawSingleLineField(win, font, settingsModelDirField, settingsModelDir,
                         settingsModelDirCursor, settingsModelDirActive);
     settingsBtnBrowseModel = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
-    drawButton(win, settingsBtnBrowseModel, "...", Col::Panel2, Col::Muted, false, 12, font);
+    drawButton(win, settingsBtnBrowseModel, "...", colors.panel, colors.text, false, 12, font);
 
     // Row 2: output directory
     rowY += 48.f;
@@ -79,7 +84,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     drawSingleLineField(win, font, settingsOutputDirField, settingsOutputDir,
                         settingsOutputDirCursor, settingsOutputDirActive);
     settingsBtnBrowseOutput = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
-    drawButton(win, settingsBtnBrowseOutput, "...", Col::Panel2, Col::Muted, false, 12, font);
+    drawButton(win, settingsBtnBrowseOutput, "...", colors.panel, colors.text, false, 12, font);
 
     // Row 3: LLM model directory
     rowY += 48.f;
@@ -88,7 +93,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     drawSingleLineField(win, font, settingsLlmModelDirField, settingsLlmModelDir,
                         settingsLlmModelDirCursor, settingsLlmModelDirActive);
     settingsBtnBrowseLlm = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
-    drawButton(win, settingsBtnBrowseLlm, "...", Col::Panel2, Col::Muted, false, 12, font);
+    drawButton(win, settingsBtnBrowseLlm, "...", colors.panel, colors.text, false, 12, font);
     if (llmLoading)
         drawText(win, font, "Loading...", Col::Muted, fieldX, rowY + fieldH + 2.f, 10);
 
@@ -99,15 +104,15 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     drawSingleLineField(win, font, settingsLoraDirField, settingsLoraDir,
                         settingsLoraDirCursor, settingsLoraDirActive);
     settingsBtnBrowseLora = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
-    drawButton(win, settingsBtnBrowseLora, "...", Col::Panel2, Col::Muted, false, 12, font);
+    drawButton(win, settingsBtnBrowseLora, "...", colors.panel, colors.text, false, 12, font);
 
     // Buttons
     constexpr float btnW = 100.f, btnH = 28.f;
     const float btnY = boxY + boxH - btnH - 16.f;
     settingsBtnCancel = {fieldX + fieldW - btnW * 2.f - 8.f, btnY, btnW, btnH};
     settingsBtnSave   = {fieldX + fieldW - btnW,              btnY, btnW, btnH};
-    drawButton(win, settingsBtnCancel, "Cancel", Col::Panel2, Col::Muted,  false, 12, font);
-    drawButton(win, settingsBtnSave,   "Save",   Col::Panel,  Col::GoldLt, false, 12, font);
+    drawButton(win, settingsBtnCancel, "Cancel", colors.panel, colors.muted,  false, 12, font);
+    drawButton(win, settingsBtnSave,   "Save",   colors.blue,  colors.goldLt, false, 12, font);
 }
 
 bool SettingsModal::handleEvent(const sf::Event& e) {

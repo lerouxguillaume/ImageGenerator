@@ -38,6 +38,11 @@ Project workflow:
 - `ProjectController` embeds and reuses `ImageGeneratorController` for generation orchestration, settings modal handling, and gallery behavior
 - `ResolvedProjectContext` remains the carrier between project-authored data and generation execution
 
+UI theme system:
+- `Theme` centralizes `UiColors`, `UiMetrics`, and `UiTypography`
+- shared rendering helpers and newer views consume theme tokens directly
+- `src/enum/constants.hpp` remains as compatibility glue while older code paths migrate
+
 ---
 
 # Prompt DSL architecture
