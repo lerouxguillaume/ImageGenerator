@@ -17,10 +17,10 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         "Wall",
         "Wall",
         makePrompt(
-            {"isometric wall segment", "modular game asset", "stone blocks", "clean silhouette"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric wall segment", "flat wall panel", "single architectural surface", "clean edges", "minimal detail"},
+            {"characters", "background scene", "text", "watermark", "ornate", "complex", "multiple objects", "top view"}
         ),
-        AssetConstraints{false, false, true, true},
+        AssetConstraints{false, false, true, false},
         {"modular", "tileable", "vertical"}
     },
     {

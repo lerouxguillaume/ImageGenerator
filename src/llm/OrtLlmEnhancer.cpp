@@ -1,6 +1,7 @@
 #include "OrtLlmEnhancer.hpp"
 #include "../managers/Logger.hpp"
 #include <chrono>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -98,6 +99,51 @@ static std::string strengthGuidance(float strength) {
            "technical quality; preserve the core subject and intent.";
 }
 
+static std::string trimCopy(const std::string& value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+static int countWords(const std::string& text) {
+    int  words   = 0;
+    bool inWord  = false;
+    for (const unsigned char ch : text) {
+        if (std::isalnum(ch)) {
+            if (!inWord) ++words;
+            inWord = true;
+        } else {
+            inWord = false;
+        }
+    }
+    return words;
+}
+
+static int countCommaGroups(const std::string& text) {
+    int groups = 0;
+    bool hasContent = false;
+    for (char ch : text) {
+        if (ch == ',') {
+            if (hasContent) ++groups;
+            hasContent = false;
+            continue;
+        }
+        if (!std::isspace(static_cast<unsigned char>(ch)))
+            hasContent = true;
+    }
+    if (hasContent) ++groups;
+    return groups;
+}
+
+static bool isMinimalPrompt(const std::string& prompt) {
+    const std::string trimmed = trimCopy(prompt);
+    if (trimmed.empty()) return false;
+    const int words = countWords(trimmed);
+    const int groups = countCommaGroups(trimmed);
+    return words <= 6 && groups <= 3;
+}
+
 // Build a Llama 3 single-turn chat prompt.
 //
 // The assistant turn is pre-filled with '{' so the model continues directly
@@ -110,6 +156,7 @@ static std::string buildTransformPrompt(const std::string& prompt,
                                         ModelType          model,
                                         float              strength) {
     const bool isSDXL = (model == ModelType::SDXL);
+    const bool minimalPrompt = isMinimalPrompt(prompt);
 
     const std::string validExample = isSDXL
         ? "{\"prompt\":\"A detailed portrait of a woman with soft studio lighting, sharp focus on "
@@ -145,6 +192,15 @@ static std::string buildTransformPrompt(const std::string& prompt,
         "- Do not remove key elements from the original prompt.\n"
         "- Do not repeat the same words.\n"
         "- Do not turn the prompt into an explanation or description of intent.\n\n"
+        + (minimalPrompt
+            ? std::string(
+                "MINIMAL SUBJECT RULES:\n"
+                "- The original prompt is intentionally simple.\n"
+                "- Keep the result simple and literal.\n"
+                "- Do not invent a room, scenery, furniture, people, props, camera drama, or narrative context.\n"
+                "- If extra detail is needed, limit it to material, color, surface finish, and lighting consistency.\n"
+                "- Prefer a plain background and straightforward framing unless explicitly requested otherwise.\n\n")
+            : std::string())
         "STRICT COMPLETION RULE:\n"
         "- Output exactly one JSON object.\n"
         "- Stop immediately after the closing brace.\n"

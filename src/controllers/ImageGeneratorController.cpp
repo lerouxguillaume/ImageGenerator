@@ -400,12 +400,12 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
     std::shared_ptr<IPromptEnhancer> enhCopy = enhancer;
 
     enhancementFuture_ = std::async(std::launch::async,
-        [posCapture, effectiveInstruction, modelType, enhCopy]() -> LLMResponse {
+        [posCapture, effectiveInstruction, modelType, enhCopy, strength = sp.generationParams.strength]() -> LLMResponse {
             LLMRequest req;
             req.prompt      = posCapture;
             req.instruction = effectiveInstruction;
             req.model       = modelType;
-            req.strength    = 0.5f;
+            req.strength    = strength;
             return enhCopy->transform(req);
         });
 }
