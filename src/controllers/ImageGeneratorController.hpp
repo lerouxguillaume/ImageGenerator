@@ -40,6 +40,8 @@ private:
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
     void launchEnhancement(ImageGeneratorView& view);
+    void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});
+    void selectGalleryImage(ImageGeneratorView& view, int index);
 
     // ── State ─────────────────────────────────────────────────────────────────
     AppConfig                        config;
@@ -67,4 +69,12 @@ private:
     enum class BrowseTarget { ModelDir, OutputDir, LlmDir, LoraDir };
     std::future<std::string> browseFuture;
     BrowseTarget             browseTarget = BrowseTarget::ModelDir;
+
+    // Async thumbnail loading (load+resize on background thread, create texture on main thread)
+    struct PendingThumb {
+        std::string            path;
+        std::future<sf::Image> imageFuture;
+    };
+    std::vector<PendingThumb> pendingThumbs_;
+    void flushPendingThumbs(ImageGeneratorView& view);
 };

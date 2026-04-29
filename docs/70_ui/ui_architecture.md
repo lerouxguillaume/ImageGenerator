@@ -99,15 +99,21 @@ Shows the full compiled positive including any quality boosters injected from `M
 ## `ResultPanel`
 
 State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
-Action flags: `generateRequested`, `useAsInitRequested`, `cancelToken`  
-Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown — differs from `lastImagePath` on multi-image runs where the last displayed image may be e.g. `img_1_3.png`).  
-Generate button at bottom of panel; progress overlay covers the image during generation.  
-Generated image displayed at native pixel size; downscaled only when larger than the panel.
+Action flags: `generateRequested`, `useAsInitRequested`, `improveRequested`, `deleteRequested`, `cancelToken`  
+Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown).
 
-When `resultLoaded`:
-- `[Use as init]` button appears to the left of `[Generate]`
-- Clicking it sets `useAsInitRequested = true`
-- Controller responds by copying `displayedImagePath` → `settingsPanel.generationParams.initImagePath`
+**Gallery** (`gallery: vector<GalleryItem>`, `selectedIndex: int`):  
+- Populated by `ImageGeneratorController::refreshGallery()` on startup, after each generation, and when the output dir changes in settings
+- Each `GalleryItem` holds `path`, `filename`, and a `shared_ptr<sf::Texture>` thumbnail (null until async load completes)
+- Thumbnails are loaded and resized to ≤92 px on background threads; `flushPendingThumbs()` promotes ready `sf::Image` results to `sf::Texture` each frame in `update()`
+- Sorted newest-first by file modification time
+- Rendered as a 124 px strip at the bottom of the panel; clicking a thumbnail selects it and loads its full image into `resultTexture`
+
+**Button layout when `resultLoaded`** (left → right, bottom of panel):  
+`[Use as init]` · `[Improve]` · `[Delete]` · `[Generate]`
+
+- `[Use as init]` / `[Improve]`: both set `useAsInitRequested` / `improveRequested`; controller copies `displayedImagePath` → `settingsPanel.generationParams.initImagePath`
+- `[Delete]`: sets `deleteRequested`; controller canonicalizes the path, verifies it is inside `config.outputDir`, removes the file, then calls `refreshGallery()`
 
 ## `LlmBar`
 
@@ -167,13 +173,24 @@ Panels set flags; the controller acts on them after the delegation chain:
 
 ```cpp
 if (view.resultPanel.handleEvent(e)) {
+    // Gallery thumbnail click — load selected image
+    const std::string selectedPath = view.resultPanel.getSelectedImagePath();
+    if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath)
+        selectGalleryImage(view, view.resultPanel.selectedIndex);
     if (view.resultPanel.generateRequested) {
         view.resultPanel.generateRequested = false;
         launchGeneration(view);   // controller launches the jthread
     }
-    if (view.resultPanel.useAsInitRequested) {
+    if (view.resultPanel.useAsInitRequested || view.resultPanel.improveRequested) {
         view.resultPanel.useAsInitRequested = false;
+        view.resultPanel.improveRequested   = false;
         view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
+    }
+    if (view.resultPanel.deleteRequested) {
+        view.resultPanel.deleteRequested = false;
+        // canonicalize + verify path is inside outputDir before removing
+        std::filesystem::remove(canonicalSelected, ec);
+        refreshGallery(view);
     }
     if (view.resultPanel.cancelToken.exchange(false))
         generationThread_.request_stop();  // bridges Cancel button → jthread stop_token

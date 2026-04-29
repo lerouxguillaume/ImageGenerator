@@ -1,15 +1,25 @@
 #pragma once
 #include <atomic>
+#include <memory>
 #include <string>
+#include <vector>
 #include <SFML/Graphics.hpp>
 
 // Right panel: displays the generated image, Generate/Cancel buttons,
 // progress bar during generation, and error banner on failure.
 class ResultPanel {
 public:
+    struct GalleryItem {
+        std::string                 path;
+        std::string                 filename;
+        std::shared_ptr<sf::Texture> thumbnail;
+    };
+
     // ── Display ───────────────────────────────────────────────────────────────
     sf::Texture resultTexture;
     bool        resultLoaded = false;
+    std::vector<GalleryItem> gallery;
+    int                      selectedIndex = -1;
 
     // ── Generation state (shared with background thread via atomics) ──────────
     bool              generating          = false;
@@ -28,6 +38,8 @@ public:
     bool generateRequested  = false;
     // Action flag: set when user clicks "Use as init"; controller copies lastImagePath → initImagePath
     bool useAsInitRequested = false;
+    bool improveRequested   = false;
+    bool deleteRequested    = false;
 
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
@@ -36,10 +48,24 @@ public:
 
     // Returns true if the event was consumed.
     bool handleEvent(const sf::Event& e);
+    std::string getSelectedImagePath() const;
 
 private:
     sf::FloatRect rect_;
     sf::FloatRect btnGenerate_;
     sf::FloatRect btnCancelGenerate_;
     sf::FloatRect btnUseAsInit_;
+    sf::FloatRect btnImprove_;
+    sf::FloatRect btnDelete_;
+    sf::FloatRect btnPrevImage_;
+    sf::FloatRect btnNextImage_;
+    sf::FloatRect btnPrevThumbs_;
+    sf::FloatRect btnNextThumbs_;
+    std::vector<sf::FloatRect> thumbnailRects_;
+    std::vector<int> thumbnailIndices_;
+    int thumbnailScrollOffset_ = 0;
+
+    void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
+                               float stripX, float stripY, float stripW);
+    void ensureSelectedThumbnailVisible(int visibleCount);
 };

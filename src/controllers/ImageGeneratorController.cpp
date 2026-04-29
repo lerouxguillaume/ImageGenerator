@@ -9,6 +9,7 @@
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -99,6 +100,48 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     return gs;
 }
 
+static bool isGalleryImageFile(const std::filesystem::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp";
+}
+
+static sf::Image resizeImage(const sf::Image& src, unsigned dstW, unsigned dstH) {
+    sf::Image dst;
+    dst.create(dstW, dstH);
+    const unsigned srcW = src.getSize().x;
+    const unsigned srcH = src.getSize().y;
+    const float scaleX = static_cast<float>(srcW) / static_cast<float>(dstW);
+    const float scaleY = static_cast<float>(srcH) / static_cast<float>(dstH);
+    for (unsigned dy = 0; dy < dstH; ++dy) {
+        for (unsigned dx = 0; dx < dstW; ++dx) {
+            const float sx = (static_cast<float>(dx) + 0.5f) * scaleX - 0.5f;
+            const float sy = (static_cast<float>(dy) + 0.5f) * scaleY - 0.5f;
+            const int x0 = std::max(0, static_cast<int>(sx));
+            const int y0 = std::max(0, static_cast<int>(sy));
+            const int x1 = std::min(static_cast<int>(srcW) - 1, x0 + 1);
+            const int y1 = std::min(static_cast<int>(srcH) - 1, y0 + 1);
+            const float fx = sx - std::floor(sx);
+            const float fy = sy - std::floor(sy);
+            const auto c00 = src.getPixel(static_cast<unsigned>(x0), static_cast<unsigned>(y0));
+            const auto c10 = src.getPixel(static_cast<unsigned>(x1), static_cast<unsigned>(y0));
+            const auto c01 = src.getPixel(static_cast<unsigned>(x0), static_cast<unsigned>(y1));
+            const auto c11 = src.getPixel(static_cast<unsigned>(x1), static_cast<unsigned>(y1));
+            auto blerp = [&](sf::Uint8 a, sf::Uint8 b, sf::Uint8 c, sf::Uint8 d) -> sf::Uint8 {
+                const float top = static_cast<float>(a) + fx * (static_cast<float>(b) - static_cast<float>(a));
+                const float bot = static_cast<float>(c) + fx * (static_cast<float>(d) - static_cast<float>(c));
+                return static_cast<sf::Uint8>(top + fy * (bot - top));
+            };
+            dst.setPixel(dx, dy, {blerp(c00.r,c10.r,c01.r,c11.r),
+                                   blerp(c00.g,c10.g,c01.g,c11.g),
+                                   blerp(c00.b,c10.b,c01.b,c11.b),
+                                   blerp(c00.a,c10.a,c01.a,c11.a)});
+        }
+    }
+    return dst;
+}
+
 // ── Model defaults ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
@@ -158,6 +201,7 @@ void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
 
 void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     auto& m = view.settingsModal;
+    const std::string previousOutputDir = config.outputDir;
     config.modelBaseDir             = m.settingsModelDir;
     config.outputDir                = m.settingsOutputDir;
     config.loraBaseDir              = m.settingsLoraDir;
@@ -180,6 +224,8 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
         view.llmBar.promptEnhancerAvailable = false;
         if (!newLlmDir.empty()) startLlmLoad(newLlmDir);
     }
+    if (config.outputDir != previousOutputDir)
+        refreshGallery(view);
 }
 
 // ── Prompt helpers ────────────────────────────────────────────────────────────
@@ -304,6 +350,113 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
         });
 }
 
+void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int index) {
+    auto& rp = view.resultPanel;
+    if (index < 0 || index >= static_cast<int>(rp.gallery.size())) {
+        rp.selectedIndex = -1;
+        rp.resultLoaded = false;
+        rp.displayedImagePath.clear();
+        return;
+    }
+
+    rp.selectedIndex = index;
+    const auto& item = rp.gallery[static_cast<size_t>(index)];
+    if (rp.resultTexture.loadFromFile(item.path)) {
+        rp.resultLoaded = true;
+        rp.displayedImagePath = item.path;
+    } else {
+        rp.resultLoaded = false;
+        rp.displayedImagePath.clear();
+    }
+}
+
+void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection) {
+    auto& rp = view.resultPanel;
+    struct ImageEntry {
+        std::string path;
+        std::string filename;
+        std::filesystem::file_time_type modified;
+    };
+
+    std::vector<ImageEntry> entries;
+    std::error_code ec;
+    const std::filesystem::path outputDir(config.outputDir);
+    if (std::filesystem::exists(outputDir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(outputDir, ec)) {
+            if (!entry.is_regular_file()) continue;
+            if (!isGalleryImageFile(entry.path())) continue;
+            entries.push_back({
+                entry.path().string(),
+                entry.path().filename().string(),
+                entry.last_write_time(ec)
+            });
+        }
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        return a.modified > b.modified;
+    });
+
+    pendingThumbs_.clear();
+    std::vector<ResultPanel::GalleryItem> gallery;
+    gallery.reserve(entries.size());
+    for (const auto& entry : entries) {
+        gallery.push_back({entry.path, entry.filename, nullptr});
+        pendingThumbs_.push_back({
+            entry.path,
+            std::async(std::launch::async, [path = entry.path]() -> sf::Image {
+                sf::Image img;
+                if (!img.loadFromFile(path)) return {};
+                const unsigned w = img.getSize().x;
+                const unsigned h = img.getSize().y;
+                if (w == 0 || h == 0) return {};
+                constexpr unsigned kThumbSz = 92;
+                const float scale = std::min(static_cast<float>(kThumbSz) / w,
+                                             static_cast<float>(kThumbSz) / h);
+                return resizeImage(img,
+                    static_cast<unsigned>(w * scale),
+                    static_cast<unsigned>(h * scale));
+            })
+        });
+    }
+    rp.gallery = std::move(gallery);
+
+    std::string target = preferredSelection.empty() ? rp.displayedImagePath : preferredSelection;
+    int selected = -1;
+    for (int i = 0; i < static_cast<int>(rp.gallery.size()); ++i) {
+        if (rp.gallery[static_cast<size_t>(i)].path == target) {
+            selected = i;
+            break;
+        }
+    }
+    if (selected < 0 && !rp.gallery.empty())
+        selected = 0;
+
+    selectGalleryImage(view, selected);
+}
+
+void ImageGeneratorController::flushPendingThumbs(ImageGeneratorView& view) {
+    auto& gallery = view.resultPanel.gallery;
+    for (auto it = pendingThumbs_.begin(); it != pendingThumbs_.end();) {
+        if (it->imageFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        sf::Image img = it->imageFuture.get();
+        if (img.getSize().x > 0) {
+            for (auto& item : gallery) {
+                if (item.path == it->path) {
+                    auto tex = std::make_shared<sf::Texture>();
+                    if (tex->loadFromImage(img))
+                        item.thumbnail = std::move(tex);
+                    break;
+                }
+            }
+        }
+        it = pendingThumbs_.erase(it);
+    }
+}
+
 // ── Event handling ────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
@@ -395,13 +548,29 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     }
 
     if (view.resultPanel.handleEvent(e)) {
+        const std::string selectedPath = view.resultPanel.getSelectedImagePath();
+        if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath)
+            selectGalleryImage(view, view.resultPanel.selectedIndex);
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
             launchGeneration(view);
         }
-        if (view.resultPanel.useAsInitRequested) {
+        if (view.resultPanel.useAsInitRequested || view.resultPanel.improveRequested) {
             view.resultPanel.useAsInitRequested = false;
+            view.resultPanel.improveRequested = false;
             view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
+        }
+        if (view.resultPanel.deleteRequested) {
+            view.resultPanel.deleteRequested = false;
+            const std::filesystem::path selected = view.resultPanel.getSelectedImagePath();
+            std::error_code ec2;
+            const std::filesystem::path outputDir = std::filesystem::weakly_canonical(config.outputDir, ec2);
+            const std::filesystem::path canonicalSelected = std::filesystem::weakly_canonical(selected, ec2);
+            if (!ec2 && !selected.empty() && !outputDir.empty()
+                && canonicalSelected.parent_path() == outputDir) {
+                std::filesystem::remove(canonicalSelected, ec2);
+                refreshGallery(view);
+            }
         }
         if (view.resultPanel.cancelToken.exchange(false))
             generationThread_.request_stop();
@@ -435,7 +604,10 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         viewInitialized  = true;
         cachedModelType_ = inferModelType(sp.getSelectedModelDir());
         dslDirty_        = true;
+        refreshGallery(view);
     }
+
+    flushPendingThumbs(view);
 
     // Poll async LLM load
     if (llmLoadFuture.valid()) {
@@ -515,20 +687,16 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         if (rp.generating) { // false when user cancelled
             rp.generating = false;
             if (!rp.generationFailed.load()) {
-                // Multi-image: load the last image (has _N suffix)
-                std::string pathToLoad = rp.lastImagePath;
+                std::string preferred = rp.lastImagePath;
                 const int n = sp.generationParams.numImages;
                 if (n > 1) {
                     const auto dot = rp.lastImagePath.rfind('.');
                     const std::string idx = std::to_string(n);
-                    pathToLoad = (dot == std::string::npos)
+                    preferred = (dot == std::string::npos)
                         ? rp.lastImagePath + "_" + idx
                         : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
                 }
-                if (rp.resultTexture.loadFromFile(pathToLoad)) {
-                    rp.resultLoaded = true;
-                    rp.displayedImagePath = pathToLoad;
-                }
+                refreshGallery(view, preferred);
             }
         }
     }
