@@ -8,6 +8,8 @@
 // and SDXL-specific UNet inputs (text_embeds, time_ids).
 enum class ModelType : std::uint8_t { SD15, SDXL };
 
+enum class WorkflowMode : std::uint8_t { Generate, Edit };
+
 // ─── Game domain ──────────────────────────────────────────────────────────────
 
 // Adventurer archetype; None = unassigned/generic NPC.

@@ -5,6 +5,7 @@
 #include <SFML/Graphics.hpp>
 #include "../../portraits/PortraitGeneratorAi.hpp"  // GenerationParams, LoraEntry
 #include "../../prompt/Prompt.hpp"
+#include "../../enum/enums.hpp"
 #include "MultiLineTextArea.hpp"
 #include "../SliderTypes.hpp"
 
@@ -13,6 +14,7 @@
 class SettingsPanel {
 public:
     // ── Prompt fields ─────────────────────────────────────────────────────────
+    WorkflowMode mode = WorkflowMode::Generate;
     MultiLineTextArea positiveArea{2000};
     MultiLineTextArea negativeArea{2000, 3};
     MultiLineTextArea editInstructionArea{400, 2};

@@ -8,6 +8,9 @@
 // Owns its own rendering and input handling for the bar region.
 class MenuBar {
 public:
+    bool        showPresetControls = true;
+    std::string titleOverride;
+
     // ── Preset dropdown state ─────────────────────────────────────────────────
     bool showPresetDropdown = false;
 

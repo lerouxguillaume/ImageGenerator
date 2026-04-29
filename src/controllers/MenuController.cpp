@@ -13,5 +13,7 @@ void MenuController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
 void MenuController::handleClick(sf::Vector2f pos, MenuView& screen, AppScreen& appScreen) {
     if (screen.btnImageGen.contains(pos)) {
         appScreen = AppScreen::ImageGenerator;
+    } else if (screen.btnImageEdit.contains(pos)) {
+        appScreen = AppScreen::ImageEditor;
     }
 }

@@ -177,10 +177,11 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
     }
 
     sp.positiveArea.setText((md && !md->positivePrompt.empty()) ? md->positivePrompt : std::string{});
-    sp.positiveArea.setActive(true);
+    sp.positiveArea.setActive(mode_ == WorkflowMode::Generate);
 
     sp.negativeArea.setText((md && !md->negativePrompt.empty()) ? md->negativePrompt : std::string{});
     sp.negativeArea.setActive(false);
+    sp.editInstructionArea.setActive(mode_ == WorkflowMode::Edit);
 
     sp.generationParams.numSteps = (md && md->numSteps > 0)
         ? md->numSteps : config.defaultNumSteps;
@@ -267,6 +268,13 @@ static void injectBoosters(Prompt& dsl, const ModelDefaults& md) {
 void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     auto& rp = view.resultPanel;
+
+    if (mode_ == WorkflowMode::Edit && sp.generationParams.initImagePath.empty()) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "Select an image to edit first.";
+        return;
+    }
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
     rp.lastImagePath = config.outputDir + "/img_" + std::to_string(now) + ".png";
@@ -491,7 +499,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.showSettings)                { view.showSettings = false;          return; }
         if (view.menuBar.showPresetDropdown)  { view.menuBar.showPresetDropdown = false; return; }
         if (view.settingsPanel.showModelDropdown) { view.settingsPanel.showModelDropdown = false; return; }
-        appScreen = AppScreen::MENU;
+        appScreen = (mode_ == WorkflowMode::Edit) ? backScreen_ : AppScreen::MENU;
         return;
     }
 
@@ -528,7 +536,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     if (view.menuBar.handleEvent(e)) {
         if (view.menuBar.backRequested) {
             view.menuBar.backRequested = false;
-            appScreen = AppScreen::MENU;
+            appScreen = (mode_ == WorkflowMode::Edit) ? backScreen_ : AppScreen::MENU;
         }
         if (view.menuBar.settingsRequested) {
             view.menuBar.settingsRequested = false;
@@ -572,20 +580,20 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
 
     if (view.resultPanel.handleEvent(e)) {
         const std::string selectedPath = view.resultPanel.getSelectedImagePath();
-        if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath)
+        if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath) {
             selectGalleryImage(view, view.resultPanel.selectedIndex);
+            if (mode_ == WorkflowMode::Edit)
+                view.settingsPanel.generationParams.initImagePath = selectedPath;
+        }
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
             launchGeneration(view);
         }
         if (view.resultPanel.improveRequested) {
             view.resultPanel.improveRequested = false;
-            view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
-            view.settingsPanel.generationParams.strength = 0.5f;
-            view.settingsPanel.editInstructionArea.setActive(true);
-            view.settingsPanel.positiveArea.setActive(false);
-            view.settingsPanel.negativeArea.setActive(false);
-            view.settingsPanel.seedInputActive = false;
+            if (mode_ == WorkflowMode::Generate) {
+                pendingEditNavigationPath_ = view.resultPanel.displayedImagePath;
+            }
         }
         if (view.resultPanel.deleteRequested) {
             view.resultPanel.deleteRequested = false;
@@ -612,7 +620,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         return;
     }
 
-    if (view.llmBar.handleEvent(e)) {
+    if (mode_ == WorkflowMode::Generate && view.llmBar.handleEvent(e)) {
         if (view.llmBar.instructionArea.isActive()) {
             view.settingsPanel.positiveArea.setActive(false);
             view.settingsPanel.negativeArea.setActive(false);
@@ -760,4 +768,24 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             sp.compiledPreview = std::string{};
         }
     }
+}
+
+void ImageGeneratorController::prepareEditSession(ImageGeneratorView& view, const std::string& imagePath) {
+    view.settingsPanel.generationParams.initImagePath = imagePath;
+    view.settingsPanel.generationParams.strength = 0.5f;
+    view.settingsPanel.editInstructionArea.setActive(true);
+    view.settingsPanel.positiveArea.setActive(false);
+    view.settingsPanel.negativeArea.setActive(false);
+    view.settingsPanel.seedInputActive = false;
+    refreshGallery(view, imagePath);
+}
+
+std::string ImageGeneratorController::consumePendingEditNavigation() {
+    std::string path = pendingEditNavigationPath_;
+    pendingEditNavigationPath_.clear();
+    return path;
+}
+
+void ImageGeneratorController::setBackScreen(AppScreen screen) {
+    backScreen_ = screen;
 }

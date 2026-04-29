@@ -192,11 +192,17 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     // ── Buttons at the bottom of the panel ───────────────────────────────────
     if (!generating) {
         if (resultLoaded) {
-            btnImprove_ = {cx - 138.f, y + h - 49.f, 88.f, 30.f};
-            drawButton(win, btnImprove_, "Edit", Col::Panel2, Col::GoldLt, false, 12, font);
-            btnDelete_ = {cx - 42.f, y + h - 49.f, 88.f, 30.f};
+            if (mode == WorkflowMode::Generate) {
+                btnImprove_ = {cx - 138.f, y + h - 49.f, 88.f, 30.f};
+                drawButton(win, btnImprove_, "Edit", Col::Panel2, Col::GoldLt, false, 12, font);
+                btnDelete_ = {cx - 42.f, y + h - 49.f, 88.f, 30.f};
+                btnGenerate_  = {cx + 62.f, y + h - 52.f, 160.f, 38.f};
+            } else {
+                btnImprove_ = {};
+                btnDelete_ = {cx - 94.f, y + h - 49.f, 88.f, 30.f};
+                btnGenerate_  = {cx + 10.f, y + h - 52.f, 160.f, 38.f};
+            }
             drawButton(win, btnDelete_, "Delete", Col::Panel2, Col::RedLt, false, 12, font);
-            btnGenerate_  = {cx + 62.f, y + h - 52.f, 160.f, 38.f};
         } else {
             btnImprove_   = {};
             btnDelete_    = {};

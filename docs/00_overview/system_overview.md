@@ -5,6 +5,7 @@ Image generator is a C++20 / SFML application embedding a full Stable Diffusion 
 It supports:
 - Stable Diffusion 1.5
 - Stable Diffusion XL (SDXL)
+- Separate generate and edit screens over a shared inference backend
 - Txt2img and gallery-driven img2img editing (VAE encode → noise → denoise)
 - LoRA injection via external initializer patching
 - Optional LLM prompt transformation via ORT GenAI
@@ -14,7 +15,7 @@ It supports:
 
 # Core runtime flow
 
-1. User enters prompt text (UI layer)
+1. User chooses either the generate or edit workflow (UI layer)
 2. `PromptParser::parse()` converts raw text → `Prompt` DSL
 3. Optional LLM transforms the DSL (merge, not replace)
 4. At generation time, `PromptCompiler::compile(dsl, modelType)` produces the final string
@@ -61,6 +62,7 @@ The system is fully synchronous per generation request:
 - LoRA system → `LoraInjector`
 - ONNX parsing → external tensor resolution
 - UI system → SFML widgets (resizable window, min 700×550)
+- Workflow split → separate generate/edit views and controllers sharing config and backend state
 - LLM system → optional ORT GenAI wrapper
 - Prompt DSL → `src/prompt/` — parse, compile, merge, JSON serialisation
 - Preset system → `PresetManager`, DSL-backed reusable generation configs

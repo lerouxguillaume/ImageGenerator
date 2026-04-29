@@ -108,99 +108,119 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     }
     y += 30.f;
 
-    // Positive prompt
-    drawText(win, font, "Positive prompt:", Col::Muted, x + pad, y, 12);
-    y += 18.f;
     constexpr float fieldH    = 86.f;
     constexpr float fieldH_sm = 68.f;
-    positiveArea.setRect({x + pad, y, fw, fieldH});
-    positiveArea.render(win, font);
-    y += fieldH + 4.f;
+    if (mode == WorkflowMode::Generate) {
+        drawText(win, font, "Positive prompt:", Col::Muted, x + pad, y, 12);
+        y += 18.f;
+        positiveArea.setRect({x + pad, y, fw, fieldH});
+        positiveArea.render(win, font);
+        y += fieldH + 4.f;
 
-    // ── Token chips (Phase 8 — read-only DSL visualisation) ──────────────────
-    if (currentDsl.subject || !currentDsl.positive.empty()) {
-        constexpr float chipH    = 20.f;
-        constexpr float chipPadX =  6.f;
-        constexpr float chipGap  =  4.f;
-        const float     startY   = y;
-        float cx = x + pad;
-        float cy = startY;
-        int   rows = 1;
+        if (currentDsl.subject || !currentDsl.positive.empty()) {
+            constexpr float chipH    = 20.f;
+            constexpr float chipPadX =  6.f;
+            constexpr float chipGap  =  4.f;
+            const float     startY   = y;
+            float cx = x + pad;
+            float cy = startY;
+            int   rows = 1;
 
-        sf::Text measure;
-        measure.setFont(font);
-        measure.setCharacterSize(11);
+            sf::Text measure;
+            measure.setFont(font);
+            measure.setCharacterSize(11);
 
-        struct Chip { std::string label; sf::Color border; sf::Color text; };
-        std::vector<Chip> chips;
+            struct Chip { std::string label; sf::Color border; sf::Color text; };
+            std::vector<Chip> chips;
 
-        if (currentDsl.subject) {
-            const auto& subj = *currentDsl.subject;
-            std::string lbl  = subj.value;
-            if (std::abs(subj.weight - 1.0f) > 0.01f) {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight);
-                lbl += buf;
+            if (currentDsl.subject) {
+                const auto& subj = *currentDsl.subject;
+                std::string lbl  = subj.value;
+                if (std::abs(subj.weight - 1.0f) > 0.01f) {
+                    char buf[16];
+                    std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight);
+                    lbl += buf;
+                }
+                chips.push_back({lbl, Col::Gold, Col::GoldLt});
             }
-            chips.push_back({lbl, Col::Gold, Col::GoldLt});
+
+            for (const auto& tok : currentDsl.positive) {
+                std::string lbl = tok.value;
+                if (std::abs(tok.weight - 1.0f) > 0.01f) {
+                    char buf[16];
+                    std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight);
+                    lbl += buf;
+                }
+                const sf::Color border = (tok.weight > 1.f) ? Col::BlueLt
+                                       : (tok.weight < 1.f) ? Col::Muted
+                                                             : Col::Border;
+                chips.push_back({lbl, border, Col::Text});
+            }
+
+            for (const auto& chip : chips) {
+                measure.setString(chip.label);
+                const float cw = measure.getLocalBounds().width + chipPadX * 2.f;
+                if (cx + cw > x + pad + fw && cx > x + pad) {
+                    cy += chipH + 2.f;
+                    cx  = x + pad;
+                    if (++rows > 2) break;
+                }
+                drawRect(win, {cx, cy, cw, chipH}, Col::Panel2, chip.border, 1.f);
+                drawText(win, font, chip.label, chip.text, cx + chipPadX, cy + 4.f, 11);
+                cx += cw + chipGap;
+            }
+            y = startY + static_cast<float>(rows) * (chipH + 2.f) + 4.f;
+        } else {
+            y += pad * 2.f;
         }
 
-        for (const auto& tok : currentDsl.positive) {
-            std::string lbl = tok.value;
-            if (std::abs(tok.weight - 1.0f) > 0.01f) {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight); // × (UTF-8)
-                lbl += buf;
-            }
-            const sf::Color border = (tok.weight > 1.f) ? Col::BlueLt
-                                   : (tok.weight < 1.f) ? Col::Muted
-                                                         : Col::Border;
-            chips.push_back({lbl, border, Col::Text});
-        }
+        drawText(win, font, "Negative prompt:", Col::Muted, x + pad, y, 12);
+        y += 18.f;
+        negativeArea.setRect({x + pad, y, fw, fieldH_sm});
+        negativeArea.setTextColor(Col::Muted);
+        negativeArea.render(win, font);
+        y += fieldH_sm + 4.f;
 
-        for (const auto& chip : chips) {
-            measure.setString(chip.label);
-            const float cw = measure.getLocalBounds().width + chipPadX * 2.f;
-            if (cx + cw > x + pad + fw && cx > x + pad) {
-                cy += chipH + 2.f;
-                cx  = x + pad;
-                if (++rows > 2) break;
-            }
-            drawRect(win, {cx, cy, cw, chipH}, Col::Panel2, chip.border, 1.f);
-            drawText(win, font, chip.label, chip.text, cx + chipPadX, cy + 4.f, 11);
-            cx += cw + chipGap;
-        }
-        y = startY + static_cast<float>(rows) * (chipH + 2.f) + 4.f;
-    } else {
-        y += pad * 2.f;
-    }
-
-    // Negative prompt
-    drawText(win, font, "Negative prompt:", Col::Muted, x + pad, y, 12);
-    y += 18.f;
-    negativeArea.setRect({x + pad, y, fw, fieldH_sm});
-    negativeArea.setTextColor(Col::Muted);
-    negativeArea.render(win, font);
-    y += fieldH_sm + 4.f;
-
-    // ── Compiled preview (Phase 6 — SD1.5 only, shows model-adjusted output) ─
-    if (!compiledPreview.empty()) {
-        sf::Text measure;
-        measure.setFont(font);
-        measure.setCharacterSize(10);
-        const float maxW = fw - 4.f;
-        std::string txt = compiledPreview;
-        measure.setString(txt);
-        while (!txt.empty() && measure.getLocalBounds().width > maxW) {
-            txt.pop_back();
+        if (!compiledPreview.empty()) {
+            sf::Text measure;
+            measure.setFont(font);
+            measure.setCharacterSize(10);
+            const float maxW = fw - 4.f;
+            std::string txt = compiledPreview;
             measure.setString(txt);
+            while (!txt.empty() && measure.getLocalBounds().width > maxW) {
+                txt.pop_back();
+                measure.setString(txt);
+            }
+            if (txt.size() < compiledPreview.size()) txt += "\xe2\x80\xa6";
+            drawText(win, font, "\xe2\x86\x92 " + txt, Col::Muted, x + pad, y, 10);
+            y += 16.f;
         }
-        if (txt.size() < compiledPreview.size()) txt += "\xe2\x80\xa6"; // … (UTF-8)
-        drawText(win, font, "\xe2\x86\x92 " + txt, Col::Muted, x + pad, y, 10); // → prefix
-        y += 16.f;
-    }
 
-    y += pad * 2.f;
+        y += pad * 2.f;
+    } else {
+        positiveArea.setRect({});
+        negativeArea.setRect({});
+        drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
+        y += 18.f;
+        constexpr float editFieldH = 60.f;
+        editInstructionArea.setRect({x + pad, y, fw, editFieldH});
+        editInstructionArea.render(win, font);
+        y += editFieldH + 8.f;
+
+        if (!generationParams.initImagePath.empty()) {
+            const std::string stem =
+                std::filesystem::path(generationParams.initImagePath).filename().string();
+            const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
+            drawText(win, font, "Source: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
+            btnClearInit_ = {};
+        } else {
+            drawText(win, font, "Select an image in the gallery to choose a source.",
+                     Col::Border, x + pad, y + 6.f, 11);
+            btnClearInit_ = {};
+        }
+        y += 28.f;
+    }
 
     // ── Sliders (always visible) ──────────────────────────────────────────────
     const float sliderW = fw;
@@ -232,23 +252,25 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     btnStrengthMedium_ = {};
     btnStrengthStrong_ = {};
 
-    // ── Img2img edit controls (only when init image is set) ──────────────────
+    // ── Img2img edit controls (edit mode or init image set) ──────────────────
     if (!generationParams.initImagePath.empty()) {
         // Info row: filename + Clear button
-        const std::string stem =
-            std::filesystem::path(generationParams.initImagePath).filename().string();
-        const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
-        drawText(win, font, "Init: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
-        btnClearInit_ = {x + pad + sliderW - 38.f, y + 2.f, 38.f, 18.f};
-        drawButton(win, btnClearInit_, "Clear", Col::Panel2, Col::Muted, false, 10, font);
-        y += 26.f;
+        if (mode == WorkflowMode::Generate) {
+            const std::string stem =
+                std::filesystem::path(generationParams.initImagePath).filename().string();
+            const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
+            drawText(win, font, "Init: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
+            btnClearInit_ = {x + pad + sliderW - 38.f, y + 2.f, 38.f, 18.f};
+            drawButton(win, btnClearInit_, "Clear", Col::Panel2, Col::Muted, false, 10, font);
+            y += 26.f;
 
-        drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
-        y += 18.f;
-        constexpr float editFieldH = 46.f;
-        editInstructionArea.setRect({x + pad, y, fw, editFieldH});
-        editInstructionArea.render(win, font);
-        y += editFieldH + 6.f;
+            drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
+            y += 18.f;
+            constexpr float editFieldH = 46.f;
+            editInstructionArea.setRect({x + pad, y, fw, editFieldH});
+            editInstructionArea.render(win, font);
+            y += editFieldH + 6.f;
+        }
 
         drawText(win, font, "Strength presets:", Col::Muted, x + pad, y + 4.f, 11);
         const sf::Color subtleCol = generationParams.strength <= 0.35f ? Col::GoldLt : Col::Text;
@@ -272,6 +294,8 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                    "Strength", strBuf);
         y += 34.f;
     } else {
+        if (mode == WorkflowMode::Generate)
+            editInstructionArea.setRect({});
         btnClearInit_        = {};
         strengthSliderTrack_ = {};
         y += 10.f;
@@ -583,9 +607,17 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         return false;
     }
 
-    // Tab: cycle focus positive → negative → edit → positive
+    // Tab: cycle focus between the active fields for the current workflow.
     if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab) {
-        if (positiveArea.isActive()) {
+        if (mode == WorkflowMode::Edit) {
+            if (editInstructionArea.isActive()) {
+                editInstructionArea.setActive(false);
+                seedInputActive = true;
+            } else {
+                editInstructionArea.setActive(true);
+                seedInputActive = false;
+            }
+        } else if (positiveArea.isActive()) {
             positiveArea.setActive(false);
             negativeArea.setActive(true);
         } else if (negativeArea.isActive()) {

@@ -4,11 +4,22 @@
 
 using namespace Helpers;
 
+ImageGeneratorView::ImageGeneratorView(WorkflowMode workflowMode)
+    : mode(workflowMode)
+{
+    settingsPanel.mode = workflowMode;
+    resultPanel.mode   = workflowMode;
+}
+
 void ImageGeneratorView::render(sf::RenderWindow& win) {
     // Fill window background
     win.clear(Col::Bg);
 
-    const bool  hasLlm = llmBar.promptEnhancerAvailable || llmBar.llmLoading;
+    menuBar.titleOverride = (mode == WorkflowMode::Edit) ? "Edit image" : std::string{};
+    menuBar.showPresetControls = (mode == WorkflowMode::Generate);
+
+    const bool  hasLlm = (mode == WorkflowMode::Generate)
+        && (llmBar.promptEnhancerAvailable || llmBar.llmLoading);
     const float llmH   = hasLlm ? (llmBar.expanded ? LLM_BAR_H + LLM_EXPANDED_H : LLM_BAR_H) : 0.f;
     const float winW   = static_cast<float>(win.getSize().x);
     const float winH   = static_cast<float>(win.getSize().y);

@@ -13,10 +13,13 @@ class App {
     sf::RenderWindow      win;
 
     AppScreen             screen = AppScreen::MENU;
+    AppScreen             imageEditBackScreen = AppScreen::MENU;
     MenuView              menuScreen;
-    ImageGeneratorView    imageGenScreen;
+    ImageGeneratorView    imageGenScreen{WorkflowMode::Generate};
+    ImageGeneratorView    imageEditScreen{WorkflowMode::Edit};
     MenuController        menuController;
     ImageGeneratorController imageGenController;
+    ImageGeneratorController imageEditController;
 
 public:
     App();

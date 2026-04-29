@@ -12,21 +12,24 @@ Image generator is structured around a strict separation of:
 
 # Component structure
 
-View (`ImageGeneratorView`):
-- Thin composition root — holds five panel instances
-- `render()` delegates to each panel; no logic
+Views:
+- `MenuView` — top-level launcher with `Generate Images` and `Edit Image`
+- `ImageGeneratorView(Generate)` — prompt-first txt2img composition root
+- `ImageGeneratorView(Edit)` — image-first img2img composition root
+- Each `ImageGeneratorView` remains thin and delegates `render()` to shared panels
 
 Panels (own state + rendering + event handling):
-- `MenuBar` — top bar: Back, title, Presets dropdown, Settings
-- `SettingsPanel` — left panel: model, prompts, token chips, compiled preview, sliders, seed, LoRA
-- `ResultPanel` — right panel: image display, Generate/Cancel, progress
-- `LlmBar` — bottom bar: LLM toggle, instruction, Enhance
+- `MenuBar` — top bar: Back, title, optional Presets dropdown, Settings
+- `SettingsPanel` — left panel; generate mode shows prompts/preview, edit mode shows source/edit controls
+- `ResultPanel` — right panel: image display, Generate/Cancel, progress, gallery actions
+- `LlmBar` — bottom bar: LLM toggle, instruction, Enhance (generate screen only)
 - `SettingsModal` — settings overlay modal
 
 Controller (`ImageGeneratorController`):
+- One instance per workflow mode (`Generate`, `Edit`)
 - Thin coordinator: routes events to panels, acts on their action flags
 - Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
-- Updates DSL display state (token chips, compiled preview) every frame
+- Updates DSL display state (token chips, compiled preview) every frame in generate mode
 - Accesses panels directly via `view.panelName.*`
 
 ---

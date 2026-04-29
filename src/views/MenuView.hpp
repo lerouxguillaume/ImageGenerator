@@ -7,6 +7,7 @@
 class MenuView : public Screen {
 public:
     sf::FloatRect btnImageGen;
+    sf::FloatRect btnImageEdit;
 
     void render(sf::RenderWindow& win) override;
 
