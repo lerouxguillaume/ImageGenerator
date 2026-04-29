@@ -103,9 +103,17 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         drawTextC(win, font, "No image generated yet", Col::Border, cx, y + h / 2.f - 20.f, 13);
     }
 
-    // ── Generate button (always at the bottom of the panel) ──────────────────
+    // ── Buttons at the bottom of the panel ───────────────────────────────────
     if (!generating) {
-        btnGenerate_ = {cx - 80.f, y + h - 52.f, 160.f, 38.f};
+        if (resultLoaded) {
+            // Two-button layout: "Use as init" left, "Generate" right
+            btnUseAsInit_ = {cx - 204.f, y + h - 49.f, 118.f, 30.f};
+            drawButton(win, btnUseAsInit_, "Use as init", Col::Panel2, Col::BlueLt, false, 12, font);
+            btnGenerate_  = {cx - 78.f, y + h - 52.f, 160.f, 38.f};
+        } else {
+            btnUseAsInit_ = {};
+            btnGenerate_  = {cx - 80.f, y + h - 52.f, 160.f, 38.f};
+        }
         drawButton(win, btnGenerate_, "Generate", Col::Panel2, Col::GoldLt, false, 14, font);
     }
 }
@@ -124,6 +132,10 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
             return true;
         }
 
+        if (btnUseAsInit_.contains(pos)) {
+            useAsInitRequested = true;
+            return true;
+        }
         if (btnGenerate_.contains(pos)) {
             generateRequested = true;
             return true;

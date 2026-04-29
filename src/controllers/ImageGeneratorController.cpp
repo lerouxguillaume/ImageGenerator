@@ -272,7 +272,6 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
     auto& llm = view.llmBar;
 
     llm.enhancing = true;
-    llm.enhanceDone.store(false);
     llm.originalPositive = sp.positiveArea.getText();
     llm.originalNegative = sp.negativeArea.getText();
 
@@ -398,6 +397,10 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
             launchGeneration(view);
+        }
+        if (view.resultPanel.useAsInitRequested) {
+            view.resultPanel.useAsInitRequested = false;
+            view.settingsPanel.generationParams.initImagePath = view.resultPanel.lastImagePath;
         }
         if (view.resultPanel.cancelToken.exchange(false))
             generationThread_.request_stop();

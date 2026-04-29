@@ -11,4 +11,15 @@ namespace sd {
 // SetTerminate() from the cancellation watcher.
 cv::Mat decodeLatent(const std::vector<float>& x, GenerationContext& ctx);
 
+// Encode a BGR image to a latent vector using the VAE encoder.
+// img is resized to (cfg_w × cfg_h), converted BGR→RGB, normalised to [-1,1],
+// and transposed to CHW before inference. The encoder output has shape
+// [1, 8, H/8, W/8]: the first 4 channels are the mean; the remaining 4 are
+// log-variance (used when sampling; pass sample=false to use mean only).
+// Requires ctx.vaeEncoderAvailable — caller must check before calling.
+std::vector<float> encodeImage(const cv::Mat& img,
+                                int cfg_w, int cfg_h,
+                                GenerationContext& ctx,
+                                bool sample = true);
+
 } // namespace sd

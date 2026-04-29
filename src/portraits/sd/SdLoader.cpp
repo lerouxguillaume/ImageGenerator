@@ -234,6 +234,7 @@ namespace sd {
         auto teBundle   = resolveBundle(mdir / "text_encoder.onnx");
         auto unetBundle = resolveBundle(mdir / "unet.onnx");
         auto vaeBundle  = resolveBundle(mdir / "vae_decoder.onnx");
+        const bool hasVaeEncoder = fs::exists(mdir / "vae_encoder.onnx");
         for (const auto* p : {"models/vocab.json", "models/merges.txt"})
             Logger::info((fs::exists(p) ? "  [OK] " : "  [MISSING] ") + std::string(p));
         // text_encoder_2 (SDXL only) is resolved at the point of use below.
@@ -290,6 +291,11 @@ namespace sd {
             }
 #endif
             ctx.vae_decoder = loadSession("vae_decoder", vaeBundle.onnxPath, auxOpts);
+            if (hasVaeEncoder) {
+                auto vaeEncBundle = resolveBundle(mdir / "vae_encoder.onnx");
+                ctx.vae_encoder = loadSession("vae_encoder", vaeEncBundle.onnxPath, auxOpts);
+                ctx.vaeEncoderAvailable = true;
+            }
 
             if (cfg.type == ModelType::SDXL) {
                 auto te2Bundle = resolveBundle(mdir / "text_encoder_2.onnx");
@@ -363,6 +369,11 @@ namespace sd {
 #endif
             // VAE has no LoRA layers in any known kohya adapter — load natively.
             ctx.vae_decoder = loadSession("vae_decoder", vaeBundle.onnxPath, auxOpts);
+            if (hasVaeEncoder) {
+                auto vaeEncBundle = resolveBundle(mdir / "vae_encoder.onnx");
+                ctx.vae_encoder = loadSession("vae_encoder", vaeEncBundle.onnxPath, auxOpts);
+                ctx.vaeEncoderAvailable = true;
+            }
 
             if (cfg.type == ModelType::SDXL) {
                 auto te2Bundle = resolveBundle(mdir / "text_encoder_2.onnx");
@@ -376,6 +387,8 @@ namespace sd {
         logModelIO("text_encoder", ctx.text_encoder, ctx.allocator);
         logModelIO("unet",         ctx.unet,         ctx.allocator);
         logModelIO("vae_decoder",  ctx.vae_decoder,  ctx.allocator);
+        if (ctx.vaeEncoderAvailable)
+            logModelIO("vae_encoder", ctx.vae_encoder, ctx.allocator);
         if (cfg.type == ModelType::SDXL)
             logModelIO("text_encoder_2", ctx.text_encoder_2, ctx.allocator);
 
@@ -388,6 +401,10 @@ namespace sd {
         ctx.unet_out0 = ctx.unet.GetOutputNameAllocated(0, ctx.allocator).get();
         ctx.vae_in    = ctx.vae_decoder.GetInputNameAllocated(0,  ctx.allocator).get();
         ctx.vae_out   = ctx.vae_decoder.GetOutputNameAllocated(0, ctx.allocator).get();
+        if (ctx.vaeEncoderAvailable) {
+            ctx.vae_enc_in  = ctx.vae_encoder.GetInputNameAllocated(0,  ctx.allocator).get();
+            ctx.vae_enc_out = ctx.vae_encoder.GetOutputNameAllocated(0, ctx.allocator).get();
+        }
 
         if (cfg.type == ModelType::SDXL) {
             ctx.te2_input  = ctx.text_encoder_2.GetInputNameAllocated(0,  ctx.allocator).get();
@@ -403,9 +420,17 @@ namespace sd {
         ctx.vaeExpectsFp32 =
             (ctx.vae_decoder.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetElementType()
              == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+        if (ctx.vaeEncoderAvailable) {
+            ctx.vaeEncoderExpectsFp32 =
+                (ctx.vae_encoder.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetElementType()
+                 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+        }
 
         Logger::info("UNet input dtype : " + std::string(ctx.unetExpectsFp32 ? "float32" : "float16"));
         Logger::info("VAE  input dtype : " + std::string(ctx.vaeExpectsFp32  ? "float32" : "float16"));
+        Logger::info("VAE encoder      : " + std::string(ctx.vaeEncoderAvailable
+            ? (ctx.vaeEncoderExpectsFp32 ? "float32" : "float16")
+            : "not loaded"));
         Logger::info("Latent shape     : [1, 4, " + std::to_string(latent_h) + ", " + std::to_string(latent_w) + "]");
 #ifdef USE_CUDA
         Logger::info("Session EP       : text_encoder=CUDA  unet=CUDA  vae=CUDA");
@@ -426,6 +451,8 @@ namespace sd {
         if (ctx.cpuFallbackAvailable)
             warmupSession("cpu_unet", ctx.cpu_unet,        ctx.memory_info, ctx.allocator);
         warmupSession("vae_decoder",  ctx.vae_decoder,     ctx.memory_info, ctx.allocator);
+        if (ctx.vaeEncoderAvailable)
+            warmupSession("vae_encoder", ctx.vae_encoder,  ctx.memory_info, ctx.allocator);
         if (cfg.type == ModelType::SDXL)
             warmupSession("text_encoder_2", ctx.text_encoder_2, ctx.memory_info, ctx.allocator);
 

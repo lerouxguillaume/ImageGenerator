@@ -24,7 +24,9 @@ public:
     std::string       lastImagePath;
 
     // Action flag: set by handleEvent on Generate click; cleared by controller after launching
-    bool generateRequested = false;
+    bool generateRequested  = false;
+    // Action flag: set when user clicks "Use as init"; controller copies lastImagePath → initImagePath
+    bool useAsInitRequested = false;
 
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
@@ -38,4 +40,5 @@ private:
     sf::FloatRect rect_;
     sf::FloatRect btnGenerate_;
     sf::FloatRect btnCancelGenerate_;
+    sf::FloatRect btnUseAsInit_;
 };

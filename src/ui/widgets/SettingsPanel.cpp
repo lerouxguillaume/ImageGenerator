@@ -226,7 +226,32 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     const float imagesNorm = (generationParams.numImages - 1.f) / 9.f;
     drawSlider(win, font, imagesSliderTrack_, std::clamp(imagesNorm, 0.f, 1.f),
                "Images", std::to_string(generationParams.numImages));
-    y += 44.f;
+    y += 34.f;
+
+    // ── Img2img (only when init image is set) ────────────────────────────────
+    if (!generationParams.initImagePath.empty()) {
+        // Info row: filename + Clear button
+        const std::string stem =
+            std::filesystem::path(generationParams.initImagePath).filename().string();
+        const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
+        drawText(win, font, "Init: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
+        btnClearInit_ = {x + pad + sliderW - 38.f, y + 2.f, 38.f, 18.f};
+        drawButton(win, btnClearInit_, "Clear", Col::Panel2, Col::Muted, false, 10, font);
+        y += 26.f;
+
+        // Strength slider (range 0.05–1.0 step 0.05)
+        strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
+        const float strengthNorm = (generationParams.strength - 0.05f) / 0.95f;
+        char strBuf[8];
+        std::snprintf(strBuf, sizeof(strBuf), "%.2f", generationParams.strength);
+        drawSlider(win, font, strengthSliderTrack_, std::clamp(strengthNorm, 0.f, 1.f),
+                   "Strength", strBuf);
+        y += 34.f;
+    } else {
+        btnClearInit_        = {};
+        strengthSliderTrack_ = {};
+        y += 10.f;
+    }
 
     // Seed input
     drawText(win, font, "Seed:", Col::Muted, x + pad, y + 6.f, 12);
@@ -362,9 +387,16 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     }
 
     // Slider tracks — initiate drag
-    if (stepsSliderTrack_.contains(pos))  { draggingSlider_ = DraggingSlider::Steps;  return true; }
-    if (cfgSliderTrack_.contains(pos))    { draggingSlider_ = DraggingSlider::Cfg;    return true; }
-    if (imagesSliderTrack_.contains(pos)) { draggingSlider_ = DraggingSlider::Images; return true; }
+    if (stepsSliderTrack_.contains(pos))    { draggingSlider_ = DraggingSlider::Steps;    return true; }
+    if (cfgSliderTrack_.contains(pos))      { draggingSlider_ = DraggingSlider::Cfg;      return true; }
+    if (imagesSliderTrack_.contains(pos))   { draggingSlider_ = DraggingSlider::Images;   return true; }
+    if (strengthSliderTrack_.contains(pos)) { draggingSlider_ = DraggingSlider::Strength; return true; }
+
+    // Clear init image
+    if (btnClearInit_.contains(pos)) {
+        generationParams.initImagePath.clear();
+        return true;
+    }
 
     // Text field focus
     if (positiveArea.getRect().contains(pos)) {
@@ -410,6 +442,10 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         } else if (draggingSlider_ == DraggingSlider::Images) {
             const float t = std::clamp((mousePos.x - imagesSliderTrack_.left) / imagesSliderTrack_.width, 0.f, 1.f);
             generationParams.numImages = static_cast<int>(std::round(1.f + t * 9.f));
+        } else if (draggingSlider_ == DraggingSlider::Strength) {
+            const float t = std::clamp((mousePos.x - strengthSliderTrack_.left) / strengthSliderTrack_.width, 0.f, 1.f);
+            const float raw = 0.05f + t * 0.95f;
+            generationParams.strength = std::round(raw / 0.05f) * 0.05f;
         }
         return true;
     }

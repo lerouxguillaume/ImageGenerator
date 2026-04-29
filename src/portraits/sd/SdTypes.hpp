@@ -36,6 +36,7 @@ struct GenerationContext {
     Ort::Session          unet;
     Ort::Session          cpu_unet;          // GPU-fallback copy of unet
     Ort::Session          vae_decoder;
+    Ort::Session          vae_encoder;       // optional — null when vae_encoder.onnx absent
     Ort::MemoryInfo       memory_info;
     Ort::AllocatorWithDefaultOptions allocator;
 
@@ -43,6 +44,8 @@ struct GenerationContext {
     bool cpuFallbackAvailable = false;  // true only if cpu_unet was loaded successfully
     bool unetExpectsFp32      = false;  // queried at load time
     bool vaeExpectsFp32       = false;  // queried at load time
+    bool vaeEncoderAvailable  = false;  // true only if vae_encoder.onnx was loaded
+    bool vaeEncoderExpectsFp32 = false;
 
     ModelType model_type = ModelType::SD15;
 
@@ -53,6 +56,7 @@ struct GenerationContext {
                 unet_in3, unet_in4,                      // SDXL: text_embeds, time_ids
                 unet_out0;
     std::string vae_in, vae_out;
+    std::string vae_enc_in, vae_enc_out;     // VAE encoder I/O names
 
     // Computed embeddings — filled by the text-encoding stage of runPipeline().
     std::vector<float>   text_embed,   uncond_embed;
@@ -75,6 +79,7 @@ struct GenerationContext {
         , unet(nullptr)
         , cpu_unet(nullptr)
         , vae_decoder(nullptr)
+        , vae_encoder(nullptr)
 #if defined(USE_CUDA)
         // Pinned (page-locked) memory avoids an extra copy on the H2D transfer path.
         , memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeCPUInput))

@@ -65,6 +65,8 @@ private:
     sf::FloatRect stepsSliderTrack_;
     sf::FloatRect cfgSliderTrack_;
     sf::FloatRect imagesSliderTrack_;
+    sf::FloatRect strengthSliderTrack_;
+    sf::FloatRect btnClearInit_;
     sf::FloatRect seedField_;
 
     // Slider drag state

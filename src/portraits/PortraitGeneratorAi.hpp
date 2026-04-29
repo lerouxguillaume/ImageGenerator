@@ -18,6 +18,8 @@ struct GenerationParams {
     int     height               = 0;    // Output height in pixels; 0 = use model default
     int64_t seed                 = -1;   // RNG seed; -1 = generate randomly. For multi-image runs, seed+i is used per image.
     std::vector<LoraEntry> loras;        // LoRA adapters to apply; empty = none
+    std::string initImagePath;           // img2img: path to input image; empty = txt2img
+    float       strength         = 1.0f; // img2img: denoising strength [0,1]; 1 = full noise (txt2img)
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).

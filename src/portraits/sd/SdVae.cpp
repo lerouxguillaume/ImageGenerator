@@ -1,6 +1,8 @@
 #include "SdVae.hpp"
 #include "SdUtils.hpp"
 #include "../../managers/Logger.hpp"
+#include <algorithm>
+#include <cmath>
 
 namespace sd {
 
@@ -68,6 +70,91 @@ cv::Mat decodeLatent(const std::vector<float>& x, GenerationContext& ctx) {
     }
 
     return latentToImage(img_float.data(), img_w, img_h);
+}
+
+
+std::vector<float> encodeImage(const cv::Mat& img,
+                                int cfg_w, int cfg_h,
+                                GenerationContext& ctx,
+                                bool sample) {
+    // Resize and convert BGR→RGB
+    cv::Mat resized;
+    cv::resize(img, resized, {cfg_w, cfg_h}, 0, 0, cv::INTER_LINEAR);
+    cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+
+    // HWC uint8 → CHW float32 normalised to [-1, 1]
+    const int plane = cfg_w * cfg_h;
+    std::vector<float> chw(3 * plane);
+    for (int y = 0; y < cfg_h; ++y)
+        for (int x = 0; x < cfg_w; ++x)
+            for (int c = 0; c < 3; ++c)
+                chw[c * plane + y * cfg_w + x] =
+                    (static_cast<float>(resized.at<cv::Vec3b>(y, x)[c]) / 127.5f) - 1.0f;
+
+    const std::vector<int64_t> shape = {1, 3, cfg_h, cfg_w};
+
+    std::vector<Ort::Float16_t> chw_fp16;
+    Ort::Value enc_input{nullptr};
+    if (ctx.vaeEncoderExpectsFp32) {
+        enc_input = Ort::Value::CreateTensor<float>(
+            ctx.memory_info, chw.data(), chw.size(), shape.data(), shape.size());
+    } else {
+        chw_fp16 = toFp16(chw);
+        enc_input = Ort::Value::CreateTensor<Ort::Float16_t>(
+            ctx.memory_info, chw_fp16.data(), chw_fp16.size(), shape.data(), shape.size());
+    }
+
+    const char* enc_in_names[]  = {ctx.vae_enc_in.c_str()};
+    const char* enc_out_names[] = {ctx.vae_enc_out.c_str()};
+    Logger::info("VAE encoding image " + std::to_string(cfg_w) + "x" + std::to_string(cfg_h) + "...");
+    auto tEnc = Clock::now();
+    auto enc_out = ctx.vae_encoder.Run(Ort::RunOptions{nullptr},
+                                        enc_in_names, &enc_input, 1, enc_out_names, 1);
+    Logger::info("VAE encode done in " + fmtMs(tEnc));
+
+    auto& enc_tensor = enc_out.front();
+    auto  type_info  = enc_tensor.GetTensorTypeAndShapeInfo();
+    auto  out_shape  = type_info.GetShape();
+    const size_t total   = type_info.GetElementCount();
+    const size_t latent_size = total / 2;   // first half = mean, second half = logvar
+    const auto   elem_type  = type_info.GetElementType();
+
+    std::vector<float> params_f(total);
+    if (elem_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+        const auto* raw = enc_tensor.GetTensorData<Ort::Float16_t>();
+        for (size_t j = 0; j < total; ++j)
+            params_f[j] = static_cast<float>(raw[j]);
+    } else {
+        const auto* raw = enc_tensor.GetTensorData<float>();
+        std::copy(raw, raw + total, params_f.begin());
+    }
+
+    std::vector<float> latent(latent_size);
+    if (!sample) {
+        // Use posterior mean directly (deterministic).
+        std::copy(params_f.begin(), params_f.begin() + static_cast<ptrdiff_t>(latent_size),
+                  latent.begin());
+    } else {
+        // Sample: z = mean + std * eps, std = exp(0.5 * logvar), clamped as in diffusers.
+        for (size_t j = 0; j < latent_size; ++j) {
+            float mean   = params_f[j];
+            float logvar = std::max(-30.0f, std::min(params_f[latent_size + j], 20.0f));
+            float std_   = std::exp(0.5f * logvar);
+            latent[j]    = mean + std_ * randNormal();
+        }
+    }
+
+    // Scale by the VAE encoder constant (matches diffusers DiagonalGaussianDistribution).
+    for (float& v : latent) v *= 0.18215f;
+
+    {
+        float mn = 1e9f, mx = -1e9f, sum = 0.0f;
+        for (float v : latent) { mn = std::min(mn, v); mx = std::max(mx, v); sum += v; }
+        Logger::info("Encoded latent — min: " + std::to_string(mn)
+                     + "  max: " + std::to_string(mx)
+                     + "  mean: " + std::to_string(sum / static_cast<float>(latent_size)));
+    }
+    return latent;
 }
 
 } // namespace sd

@@ -1140,3 +1140,21 @@ class VAEDecoderWrapper(torch.nn.Module):
 
     def forward(self, latent):
         return self.vae.decode(latent / self.vae.config.scaling_factor).sample
+
+
+class VAEEncoderWrapper(torch.nn.Module):
+    """Wrap diffusers VAE encoder.
+
+    Outputs raw moments [1, 8, H/8, W/8]: first 4 channels are the posterior
+    mean, last 4 are log-variance.  No sampling and no scaling_factor are
+    applied here — the C++ side handles both after the ONNX call.
+    """
+
+    def __init__(self, vae):
+        super().__init__()
+        self.vae = vae
+
+    def forward(self, image):
+        # image: [1, 3, H, W] normalised to [-1, 1]
+        h = self.vae.encoder(image)
+        return self.vae.quant_conv(h)

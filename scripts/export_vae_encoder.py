@@ -1,0 +1,136 @@
+"""
+Retrofit tool: export vae_encoder.onnx into an already-exported model directory.
+
+Use this to add img2img support to a model directory that was exported before
+the VAE encoder was part of the pipeline.  The VAE decoder and all other
+components are left untouched.
+
+The output is vae_encoder.onnx (+ vae_encoder.onnx.data) in the same directory.
+The C++ runtime loads it automatically when present; existing txt2img runs are
+unaffected when it is absent.
+
+Usage:
+    python export_vae_encoder.py <model_dir> <model.safetensors>
+
+Example (SD 1.5):
+    python export_vae_encoder.py models/my_model checkpoints/my_model.safetensors
+
+Example (SDXL):
+    python export_vae_encoder.py models/my_sdxl_model checkpoints/sdxl.safetensors
+"""
+import argparse
+import json
+import os
+import sys
+import time
+
+import torch
+
+from export_common import (
+    ExportComponentSpec,
+    VAEEncoderWrapper,
+    check_dependencies,
+    check_model_file,
+    export_component_to_dir,
+    patch_fp32_upcasts_for_tracing,
+)
+
+
+def _detect_model_type(model_dir: str) -> str:
+    json_path = os.path.join(model_dir, "model.json")
+    if os.path.exists(json_path):
+        with open(json_path, encoding="utf-8") as f:
+            return json.load(f).get("type", "sd15")
+    return "sd15"
+
+
+def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) -> None:
+    check_dependencies(
+        required=["torch", "diffusers", "transformers", "onnx"],
+        optional=["onnxsim"],
+    )
+    check_model_file(model_file)
+
+    out_path = os.path.join(model_dir, "vae_encoder.onnx")
+    if os.path.exists(out_path) and os.path.exists(out_path + ".data") and not force:
+        print(f"vae_encoder.onnx already exists in {model_dir} — use --force to overwrite.")
+        return
+
+    model_type = _detect_model_type(model_dir)
+    is_sdxl = (model_type == "sdxl")
+    print(f"Model type : {model_type}")
+    print(f"Output dir : {model_dir}")
+
+    t_total = time.time()
+
+    if is_sdxl:
+        patch_fp32_upcasts_for_tracing()
+        from diffusers import StableDiffusionXLPipeline
+        print("Loading SDXL pipeline (VAE only) ...")
+        pipe = StableDiffusionXLPipeline.from_single_file(
+            model_file, torch_dtype=torch.float32
+        )
+        pipe.vae.to(torch.float16)
+        latent_h, latent_w = 128, 128
+        fix_fp32 = True
+        fix_resize = True
+    else:
+        from diffusers import StableDiffusionPipeline
+        print("Loading SD 1.5 pipeline (VAE only) ...")
+        pipe = StableDiffusionPipeline.from_single_file(
+            model_file, torch_dtype=torch.float16
+        )
+        latent_h, latent_w = 64, 64
+        fix_fp32 = False
+        fix_resize = False
+
+    img_h = latent_h * 8
+    img_w = latent_w * 8
+
+    vae_enc = VAEEncoderWrapper(pipe.vae).eval()
+    dummy_image = torch.randn(1, 3, img_h, img_w, dtype=torch.float16)
+
+    spec = ExportComponentSpec(
+        step_name="VAE encoder",
+        component_name="vae_encoder",
+        filename="vae_encoder.onnx",
+        model=vae_enc,
+        dummy_inputs=(dummy_image,),
+        input_names=["image"],
+        output_names=["moments"],
+        dynamic_axes=None,       # static shape — same policy as VAE decoder
+        exporter="dynamo",
+        fix_fp32_constants=fix_fp32,
+        fix_resize_fp16=fix_resize,
+        export_lora_weights=False,
+        skip_if_complete=False,
+        release_after=(vae_enc, pipe.vae, pipe),
+    )
+    export_component_to_dir(model_dir, spec)
+
+    print(f"\n✅ vae_encoder.onnx exported to {model_dir}  "
+          f"(total: {time.time() - t_total:.0f}s)")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export vae_encoder.onnx into an existing model directory")
+    parser.add_argument("model_dir",  help="Existing model directory (contains vae_decoder.onnx)")
+    parser.add_argument("model_file", help="Path to the original .safetensors checkpoint")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite vae_encoder.onnx even if it already exists",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    try:
+        export_vae_encoder(args.model_dir, args.model_file, force=args.force)
+    except (FileNotFoundError, ImportError) as e:
+        print(f"\n❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        sys.exit(1)

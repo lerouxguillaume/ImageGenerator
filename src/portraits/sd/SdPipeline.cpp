@@ -24,15 +24,25 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
                                               const std::vector<float>& alphas_cumprod,
                                               GenerationContext& ctx,
                                               std::atomic<int>*  progressStep,
-                                              std::stop_token    stopToken) {
+                                              std::stop_token    stopToken,
+                                              int                startStep = 0,
+                                              const std::vector<float>& initLatent = {}) {
     std::vector<float> x(ctx.latent_size);
-    for (auto& v : x) v = randNormal() * sigmas[0];
+    if (initLatent.empty() || startStep == 0) {
+        // txt2img: pure noise at sigmas[0]
+        for (int j = 0; j < ctx.latent_size; ++j) x[j] = randNormal() * sigmas[0];
+    } else {
+        // img2img: init latent + noise at the truncated start sigma
+        const float sigma0 = sigmas[startStep];
+        for (int j = 0; j < ctx.latent_size; ++j)
+            x[j] = initLatent[j] + randNormal() * sigma0;
+    }
 
     std::vector<float> prev_denoised;
     float h_prev = 0.0f;
     auto tDenoise = Clock::now();
 
-    for (int step = 0; step < num_steps; ++step) {
+    for (int step = startStep; step < num_steps; ++step) {
         if (stopToken.stop_requested()) {
             Logger::info("Denoising cancelled at step " + std::to_string(step));
             return {};
@@ -157,6 +167,28 @@ void runPipeline(const std::string& prompt,
     auto alphas_cumprod = buildAlphasCumprod(cfg.T, cfg.beta_start, cfg.beta_end);
     auto sigmas         = buildKarrasSchedule(alphas_cumprod, num_steps);
 
+    // img2img: encode input image once, before the per-image loop.
+    std::vector<float> initLatent;
+    int startStep = 0;
+    if (!params.initImagePath.empty()) {
+        if (!ctx.vaeEncoderAvailable) {
+            Logger::error("img2img requested but vae_encoder.onnx is not loaded — falling back to txt2img.");
+        } else {
+            cv::Mat initImg = cv::imread(params.initImagePath, cv::IMREAD_COLOR);
+            if (initImg.empty()) {
+                Logger::error("img2img: could not read '" + params.initImagePath + "' — falling back to txt2img.");
+            } else {
+                const float clampedStrength = std::max(0.0f, std::min(params.strength, 1.0f));
+                startStep   = static_cast<int>((1.0f - clampedStrength) * static_cast<float>(num_steps));
+                startStep   = std::max(0, std::min(startStep, num_steps - 1));
+                initLatent  = encodeImage(initImg, cfg.image_w, cfg.image_h, ctx, /*sample=*/true);
+                Logger::info("img2img: strength=" + std::to_string(clampedStrength)
+                             + "  startStep=" + std::to_string(startStep)
+                             + "/" + std::to_string(num_steps));
+            }
+        }
+    }
+
     // When request_stop() is called on the owning jthread, this callback fires
     // immediately (no polling delay) and aborts any in-progress ORT Run().
     std::stop_callback stopCallback(stopToken, [&ctx]() {
@@ -185,7 +217,8 @@ void runPipeline(const std::string& prompt,
             }
 
             Logger::info("--- Image " + std::to_string(i + 1) + "/" + std::to_string(num_images) + " ---");
-            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx, progressStep, stopToken);
+            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx,
+                                              progressStep, stopToken, startStep, initLatent);
 
             if (stopToken.stop_requested()) break;
 
