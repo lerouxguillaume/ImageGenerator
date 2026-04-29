@@ -2,6 +2,10 @@
 
 The project system organises generation work into **asset packs**. Each pack holds a shared style theme, a list of asset types, and a set of generation constraints that compile into prompts automatically.
 
+Asset types can now be created either:
+- from `Blank`
+- from built-in templates in the project workspace `+ Asset` picker
+
 ---
 
 ## Data model
@@ -21,6 +25,7 @@ Project
 Key files:
 - `src/projects/Project.hpp` — all structs
 - `src/projects/ProjectManager.cpp` — JSON persistence (`projects.json`)
+- `src/projects/AssetTypeTemplate.*` — built-in asset template registry
 - `src/controllers/ProjectController.cpp` — resolution and UI handling
 
 ---
@@ -69,6 +74,36 @@ stylePrompt
 Each layer is merged via `PromptMerge::merge(base, patch)` — patch tokens deduplicate against base, subject overrides if set, weights are taken from the patch on collision.
 
 The compiled constraint tokens are stored in `ResolvedProjectContext::constraintTokens` and merged in `ImageGeneratorController.cpp` during generation setup.
+
+---
+
+## Asset templates
+
+Built-in templates are defined in code in `src/projects/AssetTypeTemplate.cpp`.
+
+Current first-pass templates:
+- `Wall`
+- `Floor Tile`
+- `Corner Wall`
+- `Door`
+- `Stairs`
+- `Prop`
+
+Each template provides:
+- `id`
+- `label`
+- `defaultName`
+- starter `Prompt` tokens
+- starter `AssetConstraints`
+- tags for future UI use
+
+Templates are **not** persisted directly. Only the created `AssetType` result is written to `projects.json`.
+
+Creation flow:
+- click `+ Asset` in `ProjectView`
+- choose `Blank` or a built-in template
+- if a template is chosen, `ProjectController` creates the asset type immediately using the template prompt tokens and constraints
+- the resulting asset type remains fully editable like any other asset type
 
 ---
 

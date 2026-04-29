@@ -16,7 +16,7 @@ The UI now uses a centralized theme layer in `src/ui/Theme.h`:
 The application now has three top-level screens:
 
 - `MenuView` — launcher with `Projects`, `Generate Images`, and `Edit Image`
-- `ProjectView` — themed asset-pack workspace with project theme editing, asset-type editing, top-row generation controls, and embedded results
+- `ProjectView` — themed asset-pack workspace with project theme editing, asset-type editing, template-based asset creation, top-row generation controls, and embedded results
 - `ImageGeneratorView(Generate)` — prompt-first txt2img workflow
 - `ImageGeneratorView(Edit)` — image-first img2img workflow
 
@@ -101,6 +101,7 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 ├──────────────────────────┬──────────────────────────────────┤
 │  Theme + Asset authoring │  ResultPanel                    │
 │  asset type list         │  selected image preview         │
+│  + Asset template picker │                                  │
 │  project theme prompt    │  progress overlay / errors      │
 │  asset prompt            │  gallery for current asset type │
 └──────────────────────────┴──────────────────────────────────┘
@@ -108,6 +109,7 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 
 Key differences from the standalone generate screen:
 - project theme + asset prompt are the authored prompt layers
+- asset types can be created from `Blank` or built-in templates from the `+ Asset` picker
 - no standalone positive/negative prompt editor from `SettingsPanel`
 - generation controls live in a project-native toolbar
 - the result gallery is scoped to the selected asset type
@@ -136,6 +138,12 @@ Each panel (`src/ui/widgets/`):
 - Exposes `setRect(FloatRect)`, `render(win, font)`, `handleEvent(event) → bool`
 - Exposes **action flags** (`bool`/`std::string`) the controller checks after `handleEvent`
 - Does **not** call into the controller; all cross-panel coordination is in the controller
+
+`ProjectView` itself also owns lightweight view-only state for:
+- project list rows
+- asset type rows
+- asset template picker options and hit rects
+- constraint toggle hit rects
 
 ## `MenuBar`
 

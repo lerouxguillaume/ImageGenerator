@@ -160,7 +160,7 @@ Generated images are saved to `assets/generated/`.
 
 The main menu offers three entry points:
 
-**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, define per-asset prompts for asset types such as `Wall`, `Floor`, `Character`, or `Prop`, then generate directly inside the same screen. The project workspace uses a dedicated top generation toolbar, left-side authoring rail, and embedded results area. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
+**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, create asset types from `Blank` or built-in templates such as `Wall`, `Floor Tile`, `Corner Wall`, `Door`, `Stairs`, and `Prop`, then generate directly inside the same screen. The project workspace uses a dedicated top generation toolbar, left-side authoring rail, and embedded results area. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
 
 **Generate Images** — standalone prompt-first txt2img workflow with preset support and the shared dark tool UI.
 

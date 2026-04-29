@@ -208,7 +208,8 @@ void ProjectManager::deleteProject(const std::string& id) {
 
 AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        const std::string& name,
-                                       const Prompt&      promptTokens) {
+                                       const Prompt&      promptTokens,
+                                       const AssetConstraints& constraints) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -218,6 +219,7 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.id           = makeAssetTypeId();
     a.name         = name;
     a.promptTokens = promptTokens;
+    a.constraints  = constraints;
     p->assetTypes.push_back(a);
     save();
     return a;

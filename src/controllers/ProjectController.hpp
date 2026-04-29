@@ -5,6 +5,7 @@
 #include "ImageGeneratorController.hpp"
 #include "../projects/ProjectManager.hpp"
 #include "../projects/Project.hpp"
+#include "../projects/AssetTypeTemplate.hpp"
 #include "../views/ProjectView.hpp"
 
 class ProjectController {
@@ -23,6 +24,7 @@ private:
     void handleClick(sf::Vector2f pos, sf::RenderWindow& win, ProjectView& view, AppScreen& appScreen);
     void commitNewProject(ProjectView& view);
     void commitNewAssetType(ProjectView& view);
+    void createAssetTypeFromTemplate(ProjectView& view, const AssetTypeTemplate& assetTemplate);
     void populateEditors(ProjectView& view) const;
     void syncGeneratorSession(ProjectView& view);
     void saveTheme(ProjectView& view, bool clearDirty = true);

@@ -55,6 +55,22 @@ ProjectController::ProjectController(AppConfig& cfg)
 
 void ProjectController::update(ProjectView& view) {
     view.projects = projectManager_.getAllProjects();
+    const auto& templates = AssetTypeTemplates::all();
+    const size_t expectedTemplateCount = templates.size() + 1; // + Blank
+    if (view.assetTemplateOptions.size() != expectedTemplateCount) {
+        view.assetTemplateOptions.clear();
+        view.assetTemplateOptions.push_back({"blank", "Blank", {}});
+        for (const auto& tmpl : templates)
+            view.assetTemplateOptions.push_back({tmpl.id, tmpl.label, {}});
+    } else {
+        view.assetTemplateOptions.front().id = "blank";
+        view.assetTemplateOptions.front().label = "Blank";
+        for (size_t i = 0; i < templates.size(); ++i) {
+            auto& option = view.assetTemplateOptions[i + 1];
+            option.id = templates[i].id;
+            option.label = templates[i].label;
+        }
+    }
     if (!view.selectedProjectId.empty()) {
         const Project* selected = nullptr;
         for (const auto& p : view.projects) {
@@ -66,6 +82,7 @@ void ProjectController::update(ProjectView& view) {
         if (!selected) {
             view.selectedProjectId.clear();
             view.selectedAssetTypeId.clear();
+            view.showAssetTemplatePicker = false;
         } else if (!view.selectedAssetTypeId.empty()) {
             bool assetFound = false;
             for (const auto& at : selected->assetTypes) {
@@ -160,6 +177,8 @@ void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
                 view.newProjectInputActive = false;
                 view.newProjectName.clear();
                 view.newProjectCursor = 0;
+            } else if (view.showAssetTemplatePicker) {
+                view.showAssetTemplatePicker = false;
             } else if (view.newAssetTypeInputActive) {
                 view.newAssetTypeInputActive = false;
                 view.newAssetTypeName.clear();
@@ -246,6 +265,25 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
     const bool clickedThemeNeg = view.themeNegativeArea.getRect().contains(pos);
     const bool clickedAssetPos = view.assetPositiveArea.getRect().contains(pos);
     const bool clickedAssetNeg = view.assetNegativeArea.getRect().contains(pos);
+    if (view.showAssetTemplatePicker) {
+        if (!view.assetTemplatePickerRect.contains(pos))
+            view.showAssetTemplatePicker = false;
+        else {
+        for (const auto& option : view.assetTemplateOptions) {
+            if (!option.rect.contains(pos)) continue;
+            view.showAssetTemplatePicker = false;
+            if (option.id == "blank") {
+                view.newAssetTypeInputActive = true;
+                view.newAssetTypeName.clear();
+                view.newAssetTypeCursor = 0;
+            } else if (const auto* tmpl = AssetTypeTemplates::findById(option.id)) {
+                createAssetTypeFromTemplate(view, *tmpl);
+            }
+            return;
+        }
+            return;
+        }
+    }
     view.themePositiveArea.setActive(clickedThemePos);
     view.themeNegativeArea.setActive(clickedThemeNeg);
     view.assetPositiveArea.setActive(clickedAssetPos);
@@ -271,6 +309,7 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         view.showProjectBrowser = !view.showProjectBrowser;
         view.newProjectInputActive = false;
         view.newAssetTypeInputActive = false;
+        view.showAssetTemplatePicker = false;
         return;
     }
 
@@ -414,6 +453,7 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
             view.showProjectBrowser = false;
             view.newAssetTypeInputActive = false;
             view.newAssetTypeName.clear();
+            view.showAssetTemplatePicker = false;
             return;
         }
     }
@@ -435,6 +475,16 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         return;
     }
 
+    // Add asset type button / input commit
+    if (!view.selectedProjectId.empty() && view.btnAddAssetType.contains(pos)) {
+        if (!view.newAssetTypeInputActive) {
+            view.showAssetTemplatePicker = !view.showAssetTemplatePicker;
+        } else {
+            commitNewAssetType(view);
+        }
+        return;
+    }
+
     // Asset type rows: select or delete
     for (const auto& row : view.assetTypeRows) {
         if (row.btnDelete.contains(pos)) {
@@ -450,20 +500,9 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
             if (!view.selectedAssetTypeId.empty() && view.assetDirty)
                 saveAssetType(view);
             view.selectedAssetTypeId = row.assetTypeId;
+            view.showAssetTemplatePicker = false;
             return;
         }
-    }
-
-    // Add asset type button / input commit
-    if (!view.selectedProjectId.empty() && view.btnAddAssetType.contains(pos)) {
-        if (!view.newAssetTypeInputActive) {
-            view.newAssetTypeInputActive = true;
-            view.newAssetTypeName.clear();
-            view.newAssetTypeCursor = 0;
-        } else {
-            commitNewAssetType(view);
-        }
-        return;
     }
 
     if (!view.selectedAssetTypeId.empty() && view.btnSaveAsset.contains(pos)) {
@@ -484,6 +523,7 @@ void ProjectController::commitNewProject(ProjectView& view) {
     view.selectedProjectId = p.id;
     view.selectedAssetTypeId.clear();
     view.showProjectBrowser = false;
+    view.showAssetTemplatePicker = false;
     Logger::info("ProjectController: created project '" + name + "' id=" + p.id);
 }
 
@@ -495,7 +535,27 @@ void ProjectController::commitNewAssetType(ProjectView& view) {
     if (name.empty() || view.selectedProjectId.empty()) return;
     const AssetType assetType = projectManager_.addAssetType(view.selectedProjectId, name);
     view.selectedAssetTypeId = assetType.id;
+    view.showAssetTemplatePicker = false;
     Logger::info("ProjectController: added asset type '" + name
+                 + "' to project=" + view.selectedProjectId);
+}
+
+void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const AssetTypeTemplate& assetTemplate) {
+    if (view.selectedProjectId.empty()) return;
+    const AssetType assetType = projectManager_.addAssetType(
+        view.selectedProjectId,
+        assetTemplate.defaultName,
+        assetTemplate.promptTokens,
+        assetTemplate.constraints);
+    if (assetType.id.empty())
+        return;
+    view.newAssetTypeInputActive = false;
+    view.newAssetTypeName.clear();
+    view.newAssetTypeCursor = 0;
+    view.selectedAssetTypeId = assetType.id;
+    view.loadedAssetTypeId.clear();
+    view.assetDirty = false;
+    Logger::info("ProjectController: added asset type from template '" + assetTemplate.id
                  + "' to project=" + view.selectedProjectId);
 }
 

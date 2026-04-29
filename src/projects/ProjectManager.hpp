@@ -22,7 +22,8 @@ public:
     // Returns the new AssetType; logs a warning and returns default if projectId not found.
     AssetType addAssetType(const std::string& projectId,
                            const std::string& name,
-                           const Prompt&      promptTokens = {});
+                           const Prompt&      promptTokens = {},
+                           const AssetConstraints& constraints = {});
 
     // Replace an existing asset type (matched by id) within a project and persist.
     // No-op with a log warning if either id is not found.

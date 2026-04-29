@@ -296,6 +296,32 @@ void ProjectView::render(sf::RenderWindow& win) {
         drawButton(win, btnAddAssetType, "+ Asset", colors.panel, colors.gold, false, type.compact, font);
     }
 
+    assetTemplatePickerRect = {};
+    if (showAssetTemplatePicker && !assetTemplateOptions.empty()) {
+        const float optionH = 28.f;
+        const float pickerGap = 6.f;
+        const float pickerW = std::max(140.f, listW + 48.f);
+        const float pickerH = 8.f + optionH * static_cast<float>(assetTemplateOptions.size());
+        float pickerX = btnAddAssetType.left;
+        float pickerY = btnAddAssetType.top - pickerH - pickerGap;
+        if (pickerY < assetWorkspaceY + 28.f)
+            pickerY = btnAddAssetType.top + btnAddAssetType.height + pickerGap;
+        assetTemplatePickerRect = {pickerX, pickerY, pickerW, pickerH};
+        Helpers::drawRect(win, assetTemplatePickerRect, colors.panel2, colors.borderHi, metrics.borderWidth);
+        float optionY = pickerY + 4.f;
+        for (auto& option : assetTemplateOptions) {
+            option.rect = {pickerX + 4.f, optionY, pickerW - 8.f, optionH - 2.f};
+            drawButton(win, option.rect, option.label,
+                       option.id == "blank" ? colors.panel : colors.surfaceRaised,
+                       option.id == "blank" ? colors.text : colors.goldLt,
+                       false, type.compact, font);
+            optionY += optionH;
+        }
+    } else {
+        for (auto& option : assetTemplateOptions)
+            option.rect = {};
+    }
+
     Helpers::drawRect(win, {detailX, assetWorkspaceY + 4.f, detailW, assetWorkspaceH - 8.f}, colors.panel, colors.border, metrics.borderWidth);
     if (selectedAssetTypeId.empty()) {
         Helpers::drawTextC(win, font, "Select an asset type", colors.muted,

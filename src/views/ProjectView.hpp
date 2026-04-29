@@ -50,6 +50,15 @@ public:
     };
     std::vector<AssetTypeRow> assetTypeRows;
 
+    struct AssetTemplateOption {
+        std::string   id;
+        std::string   label;
+        sf::FloatRect rect;
+    };
+    std::vector<AssetTemplateOption> assetTemplateOptions;
+    bool                             showAssetTemplatePicker = false;
+    sf::FloatRect                    assetTemplatePickerRect;
+
     bool        newProjectInputActive = false;
     std::string newProjectName;
     int         newProjectCursor = 0;

@@ -79,6 +79,7 @@ UI theme facts:
 Key facts:
 - `ProjectView` is a first-class themed asset-pack workspace, not just a launcher into the standalone generator
 - The embedded project workspace reuses `ImageGeneratorController` for generation, settings modal, and gallery behavior, but owns its own theme/asset authoring UI
+- Built-in asset templates live in `AssetTypeTemplate.*` and are applied only at asset-type creation time
 - Gallery is scoped to the currently selected asset type subfolder in the project workspace; project asset selection happens in `ProjectView`, not through `ResultPanel::tabs`
 - `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier

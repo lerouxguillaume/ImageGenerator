@@ -63,31 +63,47 @@ Persisted to `projects.json` with `false` defaults for backward compatibility.
 
 ---
 
-# Phase 2 — Asset-type templates
+# Phase 2 — Asset-type templates ✓ FIRST PASS DONE
 
 ## Goal
 
 Remove blank-page prompting for common isometric pack pieces.
 
-## Work
+## Implemented
 
-- Introduce built-in asset templates for common categories:
+- Added a built-in in-code template registry in `src/projects/AssetTypeTemplate.*`
+- Added first-pass templates:
   - wall
   - floor tile
   - corner wall
   - door
   - stairs
   - prop
+- Each template currently provides:
+  - label
+  - default asset name
+  - starter prompt tokens
+  - starter asset constraints
+  - tags
+- Added a `+ Asset` picker in the project workspace with:
+  - `Blank`
+  - built-in template entries
+- Template selection creates the asset type immediately with starter prompt tokens and starter constraints.
+- Blank asset creation remains available.
+
+## Remaining work
+
+- Introduce built-in asset templates for common categories:
   - tree
   - rock
   - torch
   - roof piece
 - Each template should carry:
-  - starter subject prompt
-  - starter negative prompt
+  - stronger starter subject prompt coverage
+  - clearer negative prompt conventions
   - recommended constraints
   - optional tags such as `tileable`, `modular`, `transparent background`
-- Add a `New Asset Type From Template` flow in the project workspace.
+- Add short descriptions or affordance hints in the picker.
 - Preserve support for fully custom asset types.
 
 ## Files likely affected
@@ -97,11 +113,11 @@ Remove blank-page prompting for common isometric pack pieces.
 - `src/views/ProjectView.*`
 - new template definitions under a small dedicated module, likely `src/projects/` or `src/prompt/`
 
-## Acceptance criteria
+## Current acceptance status
 
-- The user can add a new asset type from a template in one action.
-- Generated starter prompts are visibly better than starting from empty text areas.
-- Templates remain editable after creation.
+- The user can add a new asset type from a template in one action. ✓
+- Templates remain editable after creation. ✓
+- Generated starter prompts are visibly better than starting from empty text areas. Partially met; still worth tuning template content over time.
 
 ---
 
