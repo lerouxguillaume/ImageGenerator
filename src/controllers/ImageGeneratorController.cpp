@@ -802,22 +802,25 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     }
 
     // Handle user switching gallery tab
-    if (rp.tabChanged) {
-        rp.tabChanged = false;
-        const int idx = rp.activeTabIndex;
-        if (!rp.tabs.empty() && idx >= 0 && idx < static_cast<int>(rp.tabs.size())) {
-            const auto& tab = rp.tabs[static_cast<size_t>(idx)];
+        if (rp.tabChanged) {
+            rp.tabChanged = false;
+            const int idx = rp.activeTabIndex;
+            if (!rp.tabs.empty() && idx >= 0 && idx < static_cast<int>(rp.tabs.size())) {
+                const auto& tab = rp.tabs[static_cast<size_t>(idx)];
             projectContext_.assetTypeId     = tab.assetTypeId;
             projectContext_.assetTypeName   = tab.name;
             projectContext_.outputSubpath   = tab.outputSubpath;
-            for (const auto& at : projectContext_.allAssetTypes) {
-                if (at.id == tab.assetTypeId) {
-                    projectContext_.assetTypeTokens = at.promptTokens;
-                    break;
+                for (const auto& at : projectContext_.allAssetTypes) {
+                    if (at.id == tab.assetTypeId) {
+                        projectContext_.assetTypeTokens = at.promptTokens;
+                        view.settingsPanel.positiveArea.setText(PromptCompiler::compile(at.promptTokens, ModelType::SDXL));
+                        view.settingsPanel.negativeArea.setText(PromptCompiler::compileNegative(at.promptTokens));
+                        dslDirty_ = true;
+                        break;
+                    }
                 }
+                refreshGallery(view);
             }
-            refreshGallery(view);
-        }
     }
 
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
@@ -863,6 +866,25 @@ std::string ImageGeneratorController::consumePendingEditNavigation() {
 
 void ImageGeneratorController::setBackScreen(AppScreen screen) {
     backScreen_ = screen;
+}
+
+void ImageGeneratorController::activateProjectSession(ImageGeneratorView& view, const ResolvedProjectContext& ctx) {
+    setProjectContext(ctx);
+    view.settingsPanel.positiveArea.setText(PromptCompiler::compile(ctx.assetTypeTokens, ModelType::SDXL));
+    view.settingsPanel.negativeArea.setText(PromptCompiler::compileNegative(ctx.assetTypeTokens));
+    dslDirty_ = true;
+}
+
+ResolvedProjectContext ImageGeneratorController::getProjectContext() const {
+    return projectContext_;
+}
+
+void ImageGeneratorController::triggerGeneration(ImageGeneratorView& view) {
+    launchGeneration(view);
+}
+
+void ImageGeneratorController::openSettingsDialog(ImageGeneratorView& view) {
+    openSettings(view);
 }
 
 void ImageGeneratorController::setProjectContext(const ResolvedProjectContext& ctx) {

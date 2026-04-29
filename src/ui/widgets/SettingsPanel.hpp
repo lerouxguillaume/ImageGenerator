@@ -55,6 +55,7 @@ public:
 
     // Returns the full path of the selected model dir, or "models" if none.
     std::string getSelectedModelDir() const;
+    sf::FloatRect getRect() const;
 
 private:
     sf::FloatRect rect_;

@@ -19,6 +19,10 @@ std::string SettingsPanel::getSelectedModelDir() const {
     return availableModels[static_cast<size_t>(selectedModelIdx)];
 }
 
+sf::FloatRect SettingsPanel::getRect() const {
+    return rect_;
+}
+
 // ── Draw helpers ──────────────────────────────────────────────────────────────
 
 void SettingsPanel::drawSlider(sf::RenderWindow& win, sf::Font& font,

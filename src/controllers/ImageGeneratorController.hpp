@@ -30,6 +30,10 @@ public:
     void prepareEditSession(ImageGeneratorView& screen, const std::string& imagePath);
     std::string consumePendingEditNavigation();
     void setBackScreen(AppScreen screen);
+    void activateProjectSession(ImageGeneratorView& view, const ResolvedProjectContext& ctx);
+    ResolvedProjectContext getProjectContext() const;
+    void triggerGeneration(ImageGeneratorView& view);
+    void openSettingsDialog(ImageGeneratorView& view);
 
     // Sets the active project context for the next generation session.
     // Resets the gallery to the project/asset-type subfolder.

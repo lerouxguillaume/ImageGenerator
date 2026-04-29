@@ -29,6 +29,8 @@ public:
     bool        resultLoaded = false;
     std::vector<GalleryItem> gallery;
     int                      selectedIndex = -1;
+    bool                     showImproveButton = true;
+    bool                     showTabs = true;
 
     // ── Gallery tabs (populated by controller when a project context is active) ─
     std::vector<GalleryTab> tabs;
@@ -61,6 +63,7 @@ public:
     // Returns true if the event was consumed.
     bool handleEvent(const sf::Event& e);
     std::string getSelectedImagePath() const;
+    sf::FloatRect getRect() const { return rect_; }
 
 private:
     sf::FloatRect rect_;

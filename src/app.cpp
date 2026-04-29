@@ -60,16 +60,22 @@ void App::run() {
             if (!editTarget.empty()) {
                 imageEditBackScreen = AppScreen::ImageGenerator;
                 imageEditController.setBackScreen(imageEditBackScreen);
+                const ResolvedProjectContext projectCtx = imageGenController.getProjectContext();
+                if (!projectCtx.empty())
+                    imageEditController.activateProjectSession(imageEditScreen, projectCtx);
+                else
+                    imageEditController.clearProjectContext();
                 imageEditController.prepareEditSession(imageEditScreen, editTarget);
                 screen = AppScreen::ImageEditor;
             } else if (screenBeforeEvent == AppScreen::MENU && screen == AppScreen::ImageEditor) {
                 imageEditBackScreen = AppScreen::MENU;
                 imageEditController.setBackScreen(imageEditBackScreen);
+                imageEditController.clearProjectContext();
             }
 
             const ResolvedProjectContext pendingCtx = projectController.consumePendingGeneration();
             if (!pendingCtx.empty()) {
-                imageGenController.setProjectContext(pendingCtx);
+                imageGenController.activateProjectSession(imageGenScreen, pendingCtx);
                 imageGenController.setBackScreen(AppScreen::Projects);
                 screen = AppScreen::ImageGenerator;
             }

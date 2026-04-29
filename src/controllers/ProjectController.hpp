@@ -2,6 +2,7 @@
 #include <SFML/Graphics.hpp>
 #include "../config/AppConfig.hpp"
 #include "../controllers/MenuController.hpp"
+#include "ImageGeneratorController.hpp"
 #include "../projects/ProjectManager.hpp"
 #include "../projects/Project.hpp"
 #include "../views/ProjectView.hpp"
@@ -19,12 +20,17 @@ public:
     ResolvedProjectContext consumePendingGeneration();
 
 private:
-    void handleClick(sf::Vector2f pos, ProjectView& view, AppScreen& appScreen);
-    void handleTextInput(sf::Uint32 unicode, ProjectView& view);
+    void handleClick(sf::Vector2f pos, sf::RenderWindow& win, ProjectView& view, AppScreen& appScreen);
     void commitNewProject(ProjectView& view);
     void commitNewAssetType(ProjectView& view);
+    void populateEditors(ProjectView& view) const;
+    void syncGeneratorSession(ProjectView& view);
+    void saveTheme(ProjectView& view, bool clearDirty = true);
+    void saveAssetType(ProjectView& view, bool clearDirty = true);
+    ResolvedProjectContext buildSelectedContext(const ProjectView& view) const;
 
     AppConfig&             config_;
     ProjectManager         projectManager_;
     ResolvedProjectContext pendingGeneration_;
+    ImageGeneratorController generatorController_;
 };

@@ -69,7 +69,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const float h  = rect_.height;
     const float cx = x + w / 2.f;
 
-    const float tabBarH = tabs.empty() ? 0.f : TAB_H;
+    const float tabBarH = (showTabs && !tabs.empty()) ? TAB_H : 0.f;
 
     // Panel background
     drawRect(win, rect_, Col::Bg);
@@ -178,7 +178,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             const float stripX = x + 12.f;
             const float stripW = w - 24.f;
             const float stripY = y + h - galleryH - 60.f;
-            if (!tabs.empty())
+            if (showTabs && !tabs.empty())
                 renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
             renderThumbnailStrip(win, font, stripX, stripY, stripW);
         } else {
@@ -209,7 +209,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         const float stripX = x + 12.f;
         const float stripW = w - 24.f;
         const float stripY = y + 56.f + tabBarH;
-        if (!tabs.empty())
+        if (showTabs && !tabs.empty())
             renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
         renderThumbnailStrip(win, font, stripX, stripY, stripW);
     } else {
@@ -224,13 +224,17 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     }
 
     // ── Buttons at the bottom of the panel ───────────────────────────────────
-    if (!generating) {
-        if (resultLoaded) {
-            if (mode == WorkflowMode::Generate) {
+        if (!generating) {
+            if (resultLoaded) {
+            if (mode == WorkflowMode::Generate && showImproveButton) {
                 btnImprove_ = {cx - 138.f, y + h - 49.f, 88.f, 30.f};
                 drawButton(win, btnImprove_, "Edit", Col::Panel2, Col::GoldLt, false, 12, font);
                 btnDelete_ = {cx - 42.f, y + h - 49.f, 88.f, 30.f};
                 btnGenerate_  = {cx + 62.f, y + h - 52.f, 160.f, 38.f};
+            } else if (mode == WorkflowMode::Generate) {
+                btnImprove_ = {};
+                btnDelete_ = {cx - 94.f, y + h - 49.f, 88.f, 30.f};
+                btnGenerate_  = {cx + 10.f, y + h - 52.f, 160.f, 38.f};
             } else {
                 btnImprove_ = {};
                 btnDelete_ = {cx - 94.f, y + h - 49.f, 88.f, 30.f};
@@ -296,11 +300,13 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
                 return true;
             }
         }
-        for (int i = 0; i < static_cast<int>(tabRects_.size()); ++i) {
-            if (tabRects_[static_cast<size_t>(i)].contains(pos) && i != activeTabIndex) {
-                activeTabIndex = i;
-                tabChanged     = true;
-                return true;
+        if (showTabs) {
+            for (int i = 0; i < static_cast<int>(tabRects_.size()); ++i) {
+                if (tabRects_[static_cast<size_t>(i)].contains(pos) && i != activeTabIndex) {
+                    activeTabIndex = i;
+                    tabChanged     = true;
+                    return true;
+                }
             }
         }
         if (btnGenerate_.contains(pos)) {
