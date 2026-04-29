@@ -34,6 +34,12 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
     j["id"]           = a.id;
     j["name"]         = a.name;
     j["promptTokens"] = a.promptTokens;
+    j["constraints"]  = {
+        {"allowFloorPlane",    a.constraints.allowFloorPlane},
+        {"allowSceneContext",  a.constraints.allowSceneContext},
+        {"tileableEdge",       a.constraints.tileableEdge},
+        {"topSurfaceVisible",  a.constraints.topSurfaceVisible}
+    };
     return j;
 }
 
@@ -43,6 +49,13 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
     a.name = j.value("name", std::string{});
     if (j.contains("promptTokens") && j["promptTokens"].is_object())
         a.promptTokens = j["promptTokens"].get<Prompt>();
+    if (j.contains("constraints") && j["constraints"].is_object()) {
+        const auto& c          = j["constraints"];
+        a.constraints.allowFloorPlane   = c.value("allowFloorPlane",   false);
+        a.constraints.allowSceneContext = c.value("allowSceneContext",  false);
+        a.constraints.tileableEdge      = c.value("tileableEdge",       false);
+        a.constraints.topSurfaceVisible = c.value("topSurfaceVisible",  false);
+    }
     return a;
 }
 
@@ -55,6 +68,14 @@ static nlohmann::json projectToJson(const Project& p) {
     j["width"]       = p.width;
     j["height"]      = p.height;
     j["createdAt"]   = p.createdAt;
+    j["constraints"] = {
+        {"transparentBg",        p.constraints.transparentBg},
+        {"isometricAngle",       p.constraints.isometricAngle},
+        {"centeredComposition",  p.constraints.centeredComposition},
+        {"subjectFullyVisible",  p.constraints.subjectFullyVisible},
+        {"noEnvironmentClutter", p.constraints.noEnvironmentClutter},
+        {"noFloorPlane",         p.constraints.noFloorPlane}
+    };
 
     nlohmann::json loras = nlohmann::json::array();
     for (const auto& lo : p.loraEntries)
@@ -80,6 +101,16 @@ static Project projectFromJson(const nlohmann::json& j) {
 
     if (j.contains("stylePrompt") && j["stylePrompt"].is_object())
         p.stylePrompt = j["stylePrompt"].get<Prompt>();
+
+    if (j.contains("constraints") && j["constraints"].is_object()) {
+        const auto& c              = j["constraints"];
+        p.constraints.transparentBg        = c.value("transparentBg",        false);
+        p.constraints.isometricAngle       = c.value("isometricAngle",        false);
+        p.constraints.centeredComposition  = c.value("centeredComposition",   false);
+        p.constraints.subjectFullyVisible  = c.value("subjectFullyVisible",   false);
+        p.constraints.noEnvironmentClutter = c.value("noEnvironmentClutter",  false);
+        p.constraints.noFloorPlane         = c.value("noFloorPlane",          false);
+    }
 
     if (j.contains("loraEntries") && j["loraEntries"].is_array()) {
         for (const auto& lo : j["loraEntries"]) {

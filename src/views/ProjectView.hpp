@@ -3,6 +3,7 @@
 #include "ImageGeneratorView.hpp"
 #include "../projects/Project.hpp"
 #include "../ui/widgets/MultiLineTextArea.hpp"
+#include <array>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,12 @@ public:
     MultiLineTextArea themeNegativeArea{2000, 3};
     MultiLineTextArea assetPositiveArea{1200, 4};
     MultiLineTextArea assetNegativeArea{1200, 3};
+
+    // Constraint toggle hit-rects (set each frame by render).
+    // Pack: [0]=transparentBg [1]=isometric [2]=centered [3]=fullVisible [4]=noClutter [5]=noFloor
+    std::array<sf::FloatRect, 6> packConstraintToggles = {};
+    // Asset: [0]=allowFloor [1]=allowScene [2]=tileable [3]=topSurface
+    std::array<sf::FloatRect, 4> assetConstraintToggles = {};
 
     bool        themeDirty = false;
     bool        assetDirty = false;

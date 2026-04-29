@@ -92,6 +92,8 @@ void ProjectView::render(sf::RenderWindow& win) {
         btnSaveAsset = {};
         btnGenerateAsset = {};
         btnChooseProject = {};
+        packConstraintToggles = {};
+        assetConstraintToggles = {};
         themePositiveArea.setRect({});
         themeNegativeArea.setRect({});
         assetPositiveArea.setRect({});
@@ -194,7 +196,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     btnGenerateAsset = {imagesX + statW + gap, rowY + metrics.toolbarLabelGap, genW, metrics.toolbarFieldHeight};
     drawButton(win, btnGenerateAsset, "Generate", colors.blue, colors.goldLt, false, type.body, font);
 
-    const sf::FloatRect themeBox{sectionX, railY, railW, 150.f};
+    const sf::FloatRect themeBox{sectionX, railY, railW, 212.f};
     Helpers::drawRect(win, themeBox, colors.panel2, colors.border, metrics.borderWidth);
     Helpers::drawText(win, font, "Project Theme", colors.gold, themeBox.left + metrics.spaceMd, themeBox.top + metrics.spaceMd, type.sectionTitle, true);
     Helpers::drawText(win, font, "Shared positive prompt", colors.muted, themeBox.left + metrics.spaceMd, themeBox.top + 34.f, type.compact, false);
@@ -210,8 +212,41 @@ void ProjectView::render(sf::RenderWindow& win) {
     drawButton(win, btnSaveTheme, themeDirty ? "Save Theme *" : "Save Theme",
                colors.panel, themeDirty ? colors.goldLt : colors.text, false, type.body, font);
 
+    // Pack constraint toggles
+    Helpers::drawText(win, font, "Pack constraints", colors.muted,
+                      themeBox.left + metrics.spaceMd, themeBox.top + 148.f, type.compact, false);
+    {
+        const float chipH  = 22.f;
+        const float chipY0 = themeBox.top + 162.f;
+        const float chipAreaW = themeBox.width - metrics.spaceMd * 2.f;
+        const float chipW  = (chipAreaW - metrics.spaceSm * 2.f) / 3.f;
+        const float chipX0 = themeBox.left + metrics.spaceMd;
+        const char* labels[6] = {
+            "Transp. BG", "Isometric", "Centered",
+            "Full Visible", "No Clutter", "No Floor"
+        };
+        const bool active[6] = {
+            proj->constraints.transparentBg,
+            proj->constraints.isometricAngle,
+            proj->constraints.centeredComposition,
+            proj->constraints.subjectFullyVisible,
+            proj->constraints.noEnvironmentClutter,
+            proj->constraints.noFloorPlane
+        };
+        for (int i = 0; i < 6; ++i) {
+            const float cx = chipX0 + static_cast<float>(i % 3) * (chipW + metrics.spaceSm);
+            const float cy = chipY0 + static_cast<float>(i / 3) * (chipH + metrics.spaceXs);
+            const sf::FloatRect chip{cx, cy, chipW, chipH};
+            drawButton(win, chip, labels[i],
+                       active[i] ? colors.blue : colors.panel,
+                       active[i] ? colors.goldLt : colors.muted,
+                       false, type.compact, font);
+            packConstraintToggles[static_cast<size_t>(i)] = chip;
+        }
+    }
+
     const float assetWorkspaceY = themeBox.top + themeBox.height + metrics.spaceLg;
-    const float assetWorkspaceH = 240.f;
+    const float assetWorkspaceH = 278.f;
     const float listW = 134.f;
     const float detailX = sectionX + listW + metrics.spaceXl;
     const float detailW = railW - listW - metrics.spaceXl;
@@ -270,6 +305,7 @@ void ProjectView::render(sf::RenderWindow& win) {
         btnSaveAsset = {};
         assetPositiveArea.setRect({});
         assetNegativeArea.setRect({});
+        assetConstraintToggles = {};
     } else {
         const AssetType* selectedAsset = nullptr;
         for (const auto& at : proj->assetTypes) {
@@ -294,7 +330,38 @@ void ProjectView::render(sf::RenderWindow& win) {
         drawButton(win, btnSaveAsset, assetDirty ? "Save Asset *" : "Save Asset",
                    colors.panel, assetDirty ? colors.goldLt : colors.text, false, type.body, font);
         Helpers::drawText(win, font, "Generator below uses this asset type within the current project theme.",
-                          colors.blueLt, detailX + metrics.spaceMd, assetWorkspaceY + 220.f, type.helper, false);
+                          colors.blueLt, detailX + metrics.spaceMd, assetWorkspaceY + 218.f, type.helper, false);
+
+        // Asset constraint toggles
+        Helpers::drawText(win, font, "Asset constraints", colors.muted,
+                          detailX + metrics.spaceMd, assetWorkspaceY + 232.f, type.compact, false);
+        {
+            const float chipH  = 22.f;
+            const float chipY0 = assetWorkspaceY + 246.f;
+            const float chipAreaW = detailW - metrics.spaceMd * 2.f;
+            const float chipW  = (chipAreaW - metrics.spaceSm) / 2.f;
+            const float chipX0 = detailX + metrics.spaceMd;
+            const char* labels[4] = {
+                "Allow Floor", "Allow Scene",
+                "Tileable", "Top Surface"
+            };
+            const bool active[4] = {
+                selectedAsset->constraints.allowFloorPlane,
+                selectedAsset->constraints.allowSceneContext,
+                selectedAsset->constraints.tileableEdge,
+                selectedAsset->constraints.topSurfaceVisible
+            };
+            for (int i = 0; i < 4; ++i) {
+                const float cx = chipX0 + static_cast<float>(i % 2) * (chipW + metrics.spaceSm);
+                const float cy = chipY0 + static_cast<float>(i / 2) * (chipH + metrics.spaceXs);
+                const sf::FloatRect chip{cx, cy, chipW, chipH};
+                drawButton(win, chip, labels[i],
+                           active[i] ? colors.blue : colors.panel,
+                           active[i] ? colors.goldLt : colors.muted,
+                           false, type.compact, font);
+                assetConstraintToggles[static_cast<size_t>(i)] = chip;
+            }
+        }
     }
 
     generatorView.resultPanel.showImproveButton = false;

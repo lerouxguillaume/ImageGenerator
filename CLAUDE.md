@@ -74,18 +74,15 @@ UI theme facts:
 → docs/80_presets/preset_overview.md
 
 ## Project system — `src/projects/` (`Project`, `AssetType`, `ProjectManager`)
-Key facts (no doc file yet — treat this section as the source of truth):
-- `Project` owns a `stylePrompt` (Prompt DSL) + `vector<AssetType>` + model/LoRA/resolution config
-- `AssetType` owns `promptTokens` (Prompt DSL) for category-specific tokens
-- `ProjectManager` persists to `projects.json`; mirrors `PresetManager` API
-- `ResolvedProjectContext` carries the resolved prompts + `outputSubpath` + `allAssetTypes` from `ProjectController` to `ImageGeneratorController`
-- Generation: `merge(project.stylePrompt, assetType.promptTokens)` → `merge(result, userDsl)` via existing `PromptMerge::merge()`
-- Output routing: `{outputDir}/{sanitiseName(project)}/{sanitiseName(assetType)}/img_<ts>.png`
+→ docs/75_projects/project_overview.md
+
+Key facts:
 - `ProjectView` is a first-class themed asset-pack workspace, not just a launcher into the standalone generator
 - The embedded project workspace reuses `ImageGeneratorController` for generation, settings modal, and gallery behavior, but owns its own theme/asset authoring UI
 - Gallery is scoped to the currently selected asset type subfolder in the project workspace; project asset selection happens in `ProjectView`, not through `ResultPanel::tabs`
 - `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
+- Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
 → docs/85_prompt/prompt_dsl.md

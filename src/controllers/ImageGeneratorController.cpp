@@ -312,10 +312,13 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const std::string modelDir  = sp.getSelectedModelDir();
     Prompt            userDsl   = PromptParser::parse(sp.positiveArea.getText(),
                                                       sp.negativeArea.getText());
-    // Merge project style → asset type tokens → user input (each layer adds to the previous)
+    // Merge project style → constraints → asset type tokens → user input
     Prompt dsl = userDsl;
     if (!projectContext_.empty()) {
         Prompt base = projectContext_.stylePrompt;
+        if (!projectContext_.constraintTokens.positive.empty()
+            || !projectContext_.constraintTokens.negative.empty())
+            base = PromptMerge::merge(base, projectContext_.constraintTokens);
         if (!projectContext_.assetTypeTokens.positive.empty()
             || projectContext_.assetTypeTokens.subject.has_value())
             base = PromptMerge::merge(base, projectContext_.assetTypeTokens);

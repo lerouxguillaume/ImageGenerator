@@ -66,6 +66,7 @@ The system is fully synchronous per generation request:
 - LLM system → optional ORT GenAI wrapper
 - Prompt DSL → `src/prompt/` — parse, compile, merge, JSON serialisation
 - Preset system → `PresetManager`, DSL-backed reusable generation configs
+- Project system → `src/projects/` — asset-pack workspaces with `PackConstraints` / `AssetConstraints` that compile into prompt tokens automatically
 
 ---
 

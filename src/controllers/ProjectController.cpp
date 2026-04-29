@@ -1,7 +1,39 @@
 #include "ProjectController.hpp"
 #include "../managers/Logger.hpp"
 #include "../prompt/PromptCompiler.hpp"
+#include "../prompt/PromptMerge.hpp"
 #include "../prompt/PromptParser.hpp"
+
+static Prompt buildConstraintTokens(const PackConstraints& pack,
+                                    const AssetConstraints& asset) {
+    Prompt p;
+    if (pack.transparentBg)
+        p.positive.push_back({"transparent background", 1.0f});
+    if (pack.isometricAngle) {
+        p.positive.push_back({"isometric view", 1.0f});
+        p.positive.push_back({"isometric perspective", 1.0f});
+    }
+    if (pack.centeredComposition)
+        p.positive.push_back({"centered composition", 1.0f});
+    if (pack.subjectFullyVisible)
+        p.positive.push_back({"full object visible", 1.0f});
+    if (asset.tileableEdge)
+        p.positive.push_back({"seamless edges, tileable", 1.0f});
+    if (asset.topSurfaceVisible)
+        p.positive.push_back({"top surface visible", 1.0f});
+
+    if (pack.noEnvironmentClutter && !asset.allowSceneContext) {
+        p.negative.push_back({"background", 1.0f});
+        p.negative.push_back({"environment", 1.0f});
+        p.negative.push_back({"clutter", 1.0f});
+    }
+    if (pack.noFloorPlane && !asset.allowFloorPlane) {
+        p.negative.push_back({"floor plane", 1.0f});
+        p.negative.push_back({"ground plane", 1.0f});
+        p.negative.push_back({"shadow", 1.0f});
+    }
+    return p;
+}
 
 static std::string sanitiseName(const std::string& s) {
     std::string r;
@@ -314,6 +346,50 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         return;
     }
 
+    // Pack constraint toggles
+    if (!view.selectedProjectId.empty()) {
+        for (int i = 0; i < 6; ++i) {
+            if (view.packConstraintToggles[static_cast<size_t>(i)].contains(pos)) {
+                auto proj = projectManager_.getProject(view.selectedProjectId);
+                if (!proj) return;
+                switch (i) {
+                    case 0: proj->constraints.transparentBg        = !proj->constraints.transparentBg;        break;
+                    case 1: proj->constraints.isometricAngle       = !proj->constraints.isometricAngle;       break;
+                    case 2: proj->constraints.centeredComposition  = !proj->constraints.centeredComposition;  break;
+                    case 3: proj->constraints.subjectFullyVisible  = !proj->constraints.subjectFullyVisible;  break;
+                    case 4: proj->constraints.noEnvironmentClutter = !proj->constraints.noEnvironmentClutter; break;
+                    case 5: proj->constraints.noFloorPlane         = !proj->constraints.noFloorPlane;         break;
+                    default: break;
+                }
+                projectManager_.updateProject(*proj);
+                return;
+            }
+        }
+    }
+
+    // Asset constraint toggles
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
+        for (int i = 0; i < 4; ++i) {
+            if (view.assetConstraintToggles[static_cast<size_t>(i)].contains(pos)) {
+                auto proj = projectManager_.getProject(view.selectedProjectId);
+                if (!proj) return;
+                for (auto& at : proj->assetTypes) {
+                    if (at.id != view.selectedAssetTypeId) continue;
+                    switch (i) {
+                        case 0: at.constraints.allowFloorPlane   = !at.constraints.allowFloorPlane;   break;
+                        case 1: at.constraints.allowSceneContext = !at.constraints.allowSceneContext; break;
+                        case 2: at.constraints.tileableEdge      = !at.constraints.tileableEdge;      break;
+                        case 3: at.constraints.topSurfaceVisible = !at.constraints.topSurfaceVisible; break;
+                        default: break;
+                    }
+                    projectManager_.updateAssetType(proj->id, at);
+                    return;
+                }
+                return;
+            }
+        }
+    }
+
     // Project rows: select or delete
     for (const auto& row : view.projectRows) {
         if (row.btnDelete.contains(pos)) {
@@ -467,6 +543,11 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
             == PromptCompiler::compile(ctx.stylePrompt, ModelType::SDXL)
         && PromptCompiler::compileNegative(current.stylePrompt)
             == PromptCompiler::compileNegative(ctx.stylePrompt);
+    const bool sameConstraints =
+        PromptCompiler::compile(current.constraintTokens, ModelType::SDXL)
+            == PromptCompiler::compile(ctx.constraintTokens, ModelType::SDXL)
+        && PromptCompiler::compileNegative(current.constraintTokens)
+            == PromptCompiler::compileNegative(ctx.constraintTokens);
     const bool sameAsset =
         PromptCompiler::compile(current.assetTypeTokens, ModelType::SDXL)
             == PromptCompiler::compile(ctx.assetTypeTokens, ModelType::SDXL)
@@ -475,6 +556,7 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
     if (current.projectId == ctx.projectId
         && current.assetTypeId == ctx.assetTypeId
         && sameTheme
+        && sameConstraints
         && sameAsset) {
         return;
     }
@@ -527,7 +609,8 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.projectName = proj->name;
         ctx.assetTypeId = at.id;
         ctx.assetTypeName = at.name;
-        ctx.stylePrompt = proj->stylePrompt;
+        ctx.stylePrompt     = proj->stylePrompt;
+        ctx.constraintTokens = buildConstraintTokens(proj->constraints, at.constraints);
         ctx.assetTypeTokens = at.promptTokens;
         ctx.outputSubpath = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
         ctx.allAssetTypes = proj->assetTypes;
