@@ -64,6 +64,7 @@ private:
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
     int thumbnailScrollOffset_ = 0;
+    int lastVisibleSelectedIndex_ = -1;
 
     void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
                                float stripX, float stripY, float stripW);

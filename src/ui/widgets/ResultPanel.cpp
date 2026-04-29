@@ -13,12 +13,18 @@ void ResultPanel::setRect(const sf::FloatRect& rect) {
 void ResultPanel::ensureSelectedThumbnailVisible(int visibleCount) {
     if (gallery.empty() || visibleCount <= 0) {
         thumbnailScrollOffset_ = 0;
+        lastVisibleSelectedIndex_ = -1;
         return;
     }
 
     const int maxOffset = std::max(0, static_cast<int>(gallery.size()) - visibleCount);
     thumbnailScrollOffset_ = std::clamp(thumbnailScrollOffset_, 0, maxOffset);
-    if (selectedIndex < 0) return;
+    if (selectedIndex < 0) {
+        lastVisibleSelectedIndex_ = -1;
+        return;
+    }
+
+    if (selectedIndex == lastVisibleSelectedIndex_) return;
 
     if (selectedIndex < thumbnailScrollOffset_) {
         thumbnailScrollOffset_ = selectedIndex;
@@ -26,6 +32,7 @@ void ResultPanel::ensureSelectedThumbnailVisible(int visibleCount) {
         thumbnailScrollOffset_ = selectedIndex - visibleCount + 1;
     }
     thumbnailScrollOffset_ = std::clamp(thumbnailScrollOffset_, 0, maxOffset);
+    lastVisibleSelectedIndex_ = selectedIndex;
 }
 
 void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
@@ -240,12 +247,14 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
         if (btnPrevThumbs_.contains(pos) && !gallery.empty()) {
             const int page = std::max(1, static_cast<int>(thumbnailIndices_.size()));
             thumbnailScrollOffset_ = std::max(0, thumbnailScrollOffset_ - page);
+            lastVisibleSelectedIndex_ = -1;
             return true;
         }
         if (btnNextThumbs_.contains(pos) && !gallery.empty()) {
             const int page = std::max(1, static_cast<int>(thumbnailIndices_.size()));
             const int maxOffset = std::max(0, static_cast<int>(gallery.size()) - page);
             thumbnailScrollOffset_ = std::min(maxOffset, thumbnailScrollOffset_ + page);
+            lastVisibleSelectedIndex_ = -1;
             return true;
         }
         for (int i = 0; i < static_cast<int>(thumbnailRects_.size()); ++i) {

@@ -19,6 +19,7 @@ Example (SDXL):
     python export_vae_encoder.py models/my_sdxl_model checkpoints/sdxl.safetensors
 """
 import argparse
+import gc
 import json
 import os
 import sys
@@ -83,7 +84,6 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
         pipe = StableDiffusionXLPipeline.from_single_file(
             model_file, torch_dtype=torch.float32
         )
-        pipe.vae.to(torch.float16)
         latent_h, latent_w = 128, 128
         fix_fp32 = True
         fix_resize = True
@@ -99,10 +99,19 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
 
     vae_scaling_factor = float(pipe.vae.config.scaling_factor)
 
+    # Extract VAE and free the rest of the pipeline (UNet, text encoders, …)
+    # before the tracing step — those components are not needed and keeping them
+    # in RAM throughout export is the main cause of OOM on SDXL checkpoints.
+    vae = pipe.vae
+    if is_sdxl:
+        vae.to(torch.float16)
+    del pipe
+    gc.collect()
+
     img_h = latent_h * 8
     img_w = latent_w * 8
 
-    vae_enc = VAEEncoderWrapper(pipe.vae).eval()
+    vae_enc = VAEEncoderWrapper(vae).eval()
     dummy_image = torch.randn(1, 3, img_h, img_w, dtype=torch.float16)
 
     spec = ExportComponentSpec(
@@ -119,7 +128,7 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
         fix_resize_fp16=fix_resize,
         export_lora_weights=False,
         skip_if_complete=False,
-        release_after=(vae_enc, pipe.vae, pipe),
+        release_after=(vae_enc, vae),
     )
     export_component_to_dir(model_dir, spec)
     _update_model_json(model_dir, model_type=model_type, vae_scaling_factor=vae_scaling_factor)
