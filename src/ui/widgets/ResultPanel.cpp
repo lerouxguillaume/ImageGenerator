@@ -247,14 +247,14 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
         if (btnPrevThumbs_.contains(pos) && !gallery.empty()) {
             const int page = std::max(1, static_cast<int>(thumbnailIndices_.size()));
             thumbnailScrollOffset_ = std::max(0, thumbnailScrollOffset_ - page);
-            lastVisibleSelectedIndex_ = -1;
+            lastVisibleSelectedIndex_ = selectedIndex;
             return true;
         }
         if (btnNextThumbs_.contains(pos) && !gallery.empty()) {
             const int page = std::max(1, static_cast<int>(thumbnailIndices_.size()));
             const int maxOffset = std::max(0, static_cast<int>(gallery.size()) - page);
             thumbnailScrollOffset_ = std::min(maxOffset, thumbnailScrollOffset_ + page);
-            lastVisibleSelectedIndex_ = -1;
+            lastVisibleSelectedIndex_ = selectedIndex;
             return true;
         }
         for (int i = 0; i < static_cast<int>(thumbnailRects_.size()); ++i) {

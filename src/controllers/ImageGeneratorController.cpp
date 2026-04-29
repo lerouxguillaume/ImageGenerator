@@ -563,13 +563,21 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.resultPanel.deleteRequested) {
             view.resultPanel.deleteRequested = false;
             const std::filesystem::path selected = view.resultPanel.getSelectedImagePath();
+            std::string nextSelection;
+            if (view.resultPanel.selectedIndex > 0
+                && view.resultPanel.selectedIndex - 1 < static_cast<int>(view.resultPanel.gallery.size())) {
+                nextSelection = view.resultPanel.gallery[static_cast<size_t>(view.resultPanel.selectedIndex - 1)].path;
+            } else if (view.resultPanel.selectedIndex >= 0
+                       && view.resultPanel.selectedIndex + 1 < static_cast<int>(view.resultPanel.gallery.size())) {
+                nextSelection = view.resultPanel.gallery[static_cast<size_t>(view.resultPanel.selectedIndex + 1)].path;
+            }
             std::error_code ec2;
             const std::filesystem::path outputDir = std::filesystem::weakly_canonical(config.outputDir, ec2);
             const std::filesystem::path canonicalSelected = std::filesystem::weakly_canonical(selected, ec2);
             if (!ec2 && !selected.empty() && !outputDir.empty()
                 && canonicalSelected.parent_path() == outputDir) {
                 std::filesystem::remove(canonicalSelected, ec2);
-                refreshGallery(view);
+                refreshGallery(view, nextSelection);
             }
         }
         if (view.resultPanel.cancelToken.exchange(false))
