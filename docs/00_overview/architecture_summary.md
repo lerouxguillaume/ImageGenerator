@@ -13,7 +13,8 @@ Image generator is structured around a strict separation of:
 # Component structure
 
 Views:
-- `MenuView` — top-level launcher with `Generate Images` and `Edit Image`
+- `MenuView` — top-level launcher with `Projects`, `Generate Images`, and `Edit Image`
+- `ProjectView` — themed asset-pack workspace with embedded generation/results
 - `ImageGeneratorView(Generate)` — prompt-first txt2img composition root
 - `ImageGeneratorView(Edit)` — image-first img2img composition root
 - Each `ImageGeneratorView` remains thin and delegates `render()` to shared panels
@@ -31,6 +32,11 @@ Controller (`ImageGeneratorController`):
 - Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
 - Updates DSL display state (token chips, compiled preview) every frame in generate mode
 - Accesses panels directly via `view.panelName.*`
+
+Project workflow:
+- `ProjectController` owns project CRUD, theme/asset authoring, and the embedded project workspace layout
+- `ProjectController` embeds and reuses `ImageGeneratorController` for generation orchestration, settings modal handling, and gallery behavior
+- `ResolvedProjectContext` remains the carrier between project-authored data and generation execution
 
 ---
 

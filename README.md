@@ -10,8 +10,8 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 
 - **Local SD inference** — SD 1.5 and SDXL pipelines implemented from scratch (DPM++ 2M Karras scheduler, CFG, CLIP tokenizer)
 - **GPU acceleration** — CUDA (Linux/Windows) or DirectML (Windows)
-- **Three screens** — `Projects`, `Generate Images`, and `Edit Image` from the main menu
-- **Project system** — organise generation into named projects with user-defined asset types (walls, floors, characters, props…); each type has its own style tokens, output subfolder, and gallery tab
+- **Three entry points** — `Projects`, `Generate Images`, and `Edit Image` from the main menu
+- **Project workspace** — build themed asset packs with a project-level theme, per-asset prompts, inline generation controls, and an embedded results gallery
 - **SFML GUI** — prompt editor, model selector, edit instruction field, strength controls, live progress overlay
 - **Multi-image generation** — generate N images in one run with cancellation support
 - **Image editing** — dedicated edit screen plus gallery-driven handoff from generated results
@@ -160,7 +160,7 @@ Generated images are saved to `assets/generated/`.
 
 The main menu offers three entry points:
 
-**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project holds user-defined asset types (Wall, Floor, Character, Prop…). Each asset type has its own prompt tokens that are silently merged with the project's style tokens before every generation. Outputs are saved to `assets/generated/<project>/<asset_type>/` and the gallery tabs let you browse by type without leaving the generator.
+**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, define per-asset prompts for asset types such as `Wall`, `Floor`, `Character`, or `Prop`, then generate directly inside the same screen. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
 
 **Generate Images** — standalone prompt-first txt2img workflow with preset support.
 

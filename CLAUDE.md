@@ -76,8 +76,10 @@ Key facts (no doc file yet — treat this section as the source of truth):
 - `ResolvedProjectContext` carries the resolved prompts + `outputSubpath` + `allAssetTypes` from `ProjectController` to `ImageGeneratorController`
 - Generation: `merge(project.stylePrompt, assetType.promptTokens)` → `merge(result, userDsl)` via existing `PromptMerge::merge()`
 - Output routing: `{outputDir}/{sanitiseName(project)}/{sanitiseName(assetType)}/img_<ts>.png`
-- Gallery scoped to the active asset type subfolder; `ResultPanel::tabs` provides per-type switching
-- `ProjectController` navigates back to `AppScreen::Projects`; generator back-screen is set to `AppScreen::Projects` on entry
+- `ProjectView` is a first-class themed asset-pack workspace, not just a launcher into the standalone generator
+- The embedded project workspace reuses `ImageGeneratorController` for generation, settings modal, and gallery behavior, but owns its own theme/asset authoring UI
+- Gallery is scoped to the currently selected asset type subfolder in the project workspace; project asset selection happens in `ProjectView`, not through `ResultPanel::tabs`
+- `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)

@@ -8,14 +8,17 @@ SFML-based retained UI system with a component panel architecture.
 
 The application now has three top-level screens:
 
-- `MenuView` — launcher with `Generate Images` and `Edit Image`
+- `MenuView` — launcher with `Projects`, `Generate Images`, and `Edit Image`
+- `ProjectView` — themed asset-pack workspace with project theme editing, asset-type editing, top-row generation controls, and embedded results
 - `ImageGeneratorView(Generate)` — prompt-first txt2img workflow
 - `ImageGeneratorView(Edit)` — image-first img2img workflow
 
-Both image workflows reuse the same panel classes, but the panels are mode-aware:
+The standalone image workflows reuse the same panel classes, but the panels are mode-aware:
 
 - generate mode shows prompt DSL controls, presets, and the LLM bar
 - edit mode hides preset/LLM affordances and centers the workflow on source image + edit instruction
+
+`ProjectView` is different: it is a project-native workspace rather than a thin wrapper around `ImageGeneratorView`. It reuses the embedded `ResultPanel`, `SettingsModal`, and `ImageGeneratorController` generation orchestration, but owns its own authoring layout and top-row run controls.
 
 ---
 
@@ -75,6 +78,31 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 │  seed                    │                                  │
 └──────────────────────────┴──────────────────────────────────┘
 ```
+
+## Project workspace
+
+```
+┌─────────────────────────────────────────────────────────────┐  y=0
+│  App header: title, Back, Settings                         │
+├─────────────────────────────────────────────────────────────┤
+│  Project header: project name, Choose Project              │
+├─────────────────────────────────────────────────────────────┤
+│  Generation toolbar (single centered row)                  │
+│  model / seed / steps / cfg / images / generate            │
+├──────────────────────────┬──────────────────────────────────┤
+│  Theme + Asset authoring │  ResultPanel                    │
+│  asset type list         │  selected image preview         │
+│  project theme prompt    │  progress overlay / errors      │
+│  asset prompt            │  gallery for current asset type │
+└──────────────────────────┴──────────────────────────────────┘
+```
+
+Key differences from the standalone generate screen:
+- project theme + asset prompt are the authored prompt layers
+- no standalone positive/negative prompt editor from `SettingsPanel`
+- generation controls live in a project-native toolbar
+- the result gallery is scoped to the selected asset type
+- project asset switching happens in `ProjectView`, so gallery tabs are hidden in this context
 
 Layout constants (`src/enum/constants.hpp`):
 - `MENU_BAR_H = 40` — top bar height
@@ -162,6 +190,7 @@ Path fields: `lastImagePath` (base output path, set at generation start), `displ
 - Thumbnails are loaded and resized to ≤92 px on background threads; `flushPendingThumbs()` promotes ready `sf::Image` results to `sf::Texture` each frame in `update()`
 - Sorted newest-first by file modification time
 - Rendered as a 124 px strip at the bottom of the panel; clicking a thumbnail selects it and loads its full image into `resultTexture`
+- `showTabs` allows the host view to suppress gallery tab UI when asset switching is handled elsewhere (used by `ProjectView`)
 
 **Button layout when `resultLoaded`** (left → right, bottom of panel):  
 - generate mode: `[Edit]` · `[Delete]` · `[Generate]`
@@ -186,6 +215,8 @@ State: 4 directory strings + cursors + active flags
 Action flags: `saveRequested`, `cancelRequested`, `browseTarget`  
 Rendered as a full-screen overlay when `view.showSettings == true`  
 Overlay dim and box centering use `win.getSize()` dynamically.
+
+In `ProjectView`, the same modal is rendered from the embedded `generatorView` and opened through the shared `ImageGeneratorController` so directory settings behave consistently across workflows.
 
 ---
 
