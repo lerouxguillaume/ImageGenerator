@@ -1,12 +1,17 @@
 # Isometric Asset Pack Implementation Plan
 
-Goal: turn the current project workspace into a tool that helps a user produce game-ready isometric 2D assets with minimal cleanup before adding them to a game.
+Goal: evolve the current project workspace from a prompt-first image generator into a production tool for game-ready isometric asset production and replacement.
+
+The key product shift is this:
+- current workflow: "generate a nice image for this prompt"
+- target workflow: "produce a usable asset that fits an existing game slot"
 
 This plan assumes the primary target is:
 - stylized isometric 2D game assets
 - transparent-background deliverables
 - pack-level visual consistency
-- low manual prompt work
+- both net-new assets and slot-compatible replacement assets
+- low manual cleanup before engine import
 
 ---
 
@@ -14,239 +19,543 @@ This plan assumes the primary target is:
 
 The tool should optimize for:
 
-1. defining a pack-wide theme once
-2. generating asset types with game-safe defaults
-3. producing consistent variants quickly
-4. normalizing outputs so they are closer to drop-in game assets
-5. showing progress at the pack level, not only per image
+1. defining pack-wide visual language once
+2. defining hard asset-slot requirements per asset type
+3. generating assets that respect existing silhouette/orientation constraints
+4. validating that outputs are actually usable in-game
+5. exporting consumer-ready assets with minimal external tooling
+
+The system should treat each asset as a production artifact with:
+- a target canvas size
+- a target orientation
+- a target occupied shape or silhouette
+- a target anchor point
+- background and export requirements
+- style consistency requirements
+
+Prompt quality still matters, but it is no longer the main control surface.
 
 ---
 
-# Phase 1 — Game-ready generation constraints ✓ DONE
+# Current gap summary
 
-## Goal
+What is missing today is not another prompt enhancer. The missing pieces are the controls that turn image generation into asset production:
 
-Make the system enforce the rules that users currently have to remember manually.
+1. formal asset specifications
+2. reference-driven generation
+3. shape and silhouette control
+4. transparent-background export workflow
+5. post-generation validation
+6. in-context preview against the target slot
 
-## Implemented
-
-**`PackConstraints`** (on `Project`) — 6 boolean flags:
-- `transparentBg` → positive: `transparent background`
-- `isometricAngle` → positive: `isometric view`, `isometric perspective`
-- `centeredComposition` → positive: `centered composition`
-- `subjectFullyVisible` → positive: `full object visible`
-- `noEnvironmentClutter` → negative: `background`, `environment`, `clutter`
-- `noFloorPlane` → negative: `floor plane`, `ground plane`, `shadow`
-
-**`AssetConstraints`** (on `AssetType`) — 4 boolean flags:
-- `allowFloorPlane` — suppresses `noFloorPlane` for this asset type
-- `allowSceneContext` — suppresses `noEnvironmentClutter` for this asset type
-- `tileableEdge` → positive: `seamless edges, tileable`
-- `topSurfaceVisible` → positive: `top surface visible`
-
-Prompt layering order: `stylePrompt → constraintTokens → assetTypeTokens → userDsl`
-
-UI: pack constraint chips (2 rows × 3) in the theme box; asset constraint chips (2 × 2) in the asset detail panel. Toggling auto-saves immediately.
-
-Persisted to `projects.json` with `false` defaults for backward compatibility.
-
-→ See `docs/75_projects/project_overview.md` for full data model and invariants.
-
-## Files changed
-
-- `src/projects/Project.hpp`
-- `src/projects/ProjectManager.cpp`
-- `src/controllers/ProjectController.cpp`
-- `src/controllers/ImageGeneratorController.cpp`
-- `src/views/ProjectView.hpp`
-- `src/views/ProjectView.cpp`
+These requirements drive the phases below.
 
 ---
 
-# Phase 2 — Asset-type templates ✓ FIRST PASS DONE
+# Cross-phase pipeline work
 
-## Goal
+The phases below describe product capabilities, but several pipeline capabilities cut across all of them. These should be treated as first-class implementation tracks, not incidental follow-up work.
 
-Remove blank-page prompting for common isometric pack pieces.
+## 1. Reference conditioning modes
 
-## Implemented
+The pipeline should support more than prompt-only generation. At minimum it needs a defined contract for:
+- txt2img
+- img2img from a source asset
+- masked img2img
+- reference-driven structure preservation
 
-- Added a built-in in-code template registry in `src/projects/AssetTypeTemplate.*`
-- Added first-pass templates:
-  - wall
-  - floor tile
-  - corner wall
-  - door
-  - stairs
-  - prop
-- Each template currently provides:
-  - label
-  - default asset name
-  - starter prompt tokens
-  - starter asset constraints
-  - tags
-- Added a `+ Asset` picker in the project workspace with:
-  - `Blank`
-  - built-in template entries
-- Template selection creates the asset type immediately with starter prompt tokens and starter constraints.
-- Blank asset creation remains available.
+This matters especially for modular or slot-constrained assets where text alone is not enough to preserve usable geometry.
 
-## Remaining work
+## 2. Mask ingestion and normalization
 
-- Introduce built-in asset templates for common categories:
-  - tree
-  - rock
-  - torch
-  - roof piece
-- Each template should carry:
-  - stronger starter subject prompt coverage
-  - clearer negative prompt conventions
-  - recommended constraints
-  - optional tags such as `tileable`, `modular`, `transparent background`
-- Add short descriptions or affordance hints in the picker.
-- Preserve support for fully custom asset types.
+Masks should be a real pipeline input, not just a UI concept.
 
-## Files likely affected
+Required support:
+- alpha mask ingestion
+- silhouette mask ingestion
+- occupied-bounds mask support
+- deterministic resizing and rasterization rules before inference
 
-- `src/projects/*`
-- `src/controllers/ProjectController.*`
-- `src/views/ProjectView.*`
-- new template definitions under a small dedicated module, likely `src/projects/` or `src/prompt/`
+This is necessary for preserving shape, controlling background removal, and validating fit.
 
-## Current acceptance status
+## 3. Transparent-output strategy
 
-- The user can add a new asset type from a template in one action. ✓
-- Templates remain editable after creation. ✓
-- Generated starter prompts are visibly better than starting from empty text areas. Partially met; still worth tuning template content over time.
+Transparency should be defined as a pipeline concern rather than an export-only detail.
+
+The implementation needs a clear strategy for one or more of:
+- native transparent-background generation where supported
+- mask-guided cutout
+- background removal pass
+- hybrid generation plus post-processing
+
+The chosen strategy affects both generation quality and cleanup complexity.
+
+## 4. Separate structure and style control
+
+The current strength concept is too coarse for constrained asset production.
+
+The pipeline should distinguish between:
+- structure preservation strength
+- style variation strength
+- mask adherence strength
+
+Without that separation, it is hard to iterate on materials or polish without breaking composition.
+
+## 5. Deterministic refinement workflow
+
+Asset production needs reproducible iteration.
+
+The pipeline should make it easy to:
+- reuse seeds
+- regenerate from a selected candidate
+- preserve structure while varying materials, surface detail, or lighting
+- compare revision output against a known baseline
+
+This is important for review, approval, and pack consistency work.
+
+## 6. Metadata emission for validation
+
+Validation should not rely only on UI-side guesses. The pipeline should emit machine-usable metadata such as:
+- output canvas size
+- alpha presence and alpha bounds
+- occupied content bounds
+- optional silhouette deviation metrics
+- generation mode used
+- reference or mask inputs used
+
+This metadata can drive validation, export checks, and contextual preview.
+
+## 7. Post-processing as a formal pipeline stage
+
+Post-processing should be modeled as a named and testable stage, not a loose collection of export options.
+
+Expected operations include:
+- trim transparent bounds
+- add padding
+- center subject
+- normalize canvas size
+- alpha cleanup
+- export conversion
+
+This stage should be composable and reusable across asset types.
+
+## 8. Preview artifact generation
+
+If contextual review is a product requirement, the pipeline should be able to produce artifacts that support it:
+- raw candidate image
+- processed export image
+- overlay preview against source or mask
+- context composite preview inputs
+
+This reduces ad hoc logic in the UI layer.
+
+## 9. Asset-profile-aware prompt compilation
+
+Prompt compilation should become more aware of asset class.
+
+Different asset profiles should be able to compile prompts differently, for example:
+- freeform asset
+- slot-constrained asset
+- tileable asset
+- isolated transparent object
+
+This prevents one general prompt strategy from overfitting all asset types.
+
+## 10. Constrained-asset failure handling
+
+The pipeline should define failure behavior for common constrained-asset problems:
+- missing reference image
+- mask and canvas mismatch
+- no usable transparency in output
+- silhouette drift beyond threshold
+- post-processing that removes too much content
+
+These should surface as actionable errors or warnings rather than silent bad output.
 
 ---
 
-# Phase 3 — Pack consistency controls
+# Phase 1 — Asset slot specification
 
 ## Goal
 
-Make consistency a first-class feature rather than an implicit hope.
+Make each asset type describe the contract the generated asset must satisfy.
+
+## Why this is required
+
+Some assets are freeform pack pieces. Others are strict replacements for an existing runtime slot. Without a formal asset spec, the generator optimizes for appearance rather than compatibility.
 
 ## Work
 
-- Extend the project theme model with structured style controls:
-  - material language
-  - palette keywords
-  - detail density
-  - outline/edge preference
-  - lighting direction
-  - stylization level
-- Add optional “style lock” toggles for:
-  - palette consistency
-  - silhouette cleanliness
-  - lighting consistency
-  - camera/framing consistency
-- Show a compact “effective pack style” summary in the project workspace.
-- Use these structured settings when building prompts for all asset types.
+Add a structured asset specification model to project asset types.
+
+Each asset type should be able to define:
+- target canvas width and height
+- anchor point
+- orientation / plane:
+  - left wall
+  - right wall
+  - floor tile
+  - prop
+  - character
+- expected occupied bounds
+- transparency requirement
+- shape policy:
+  - freeform
+  - bounded
+  - silhouette-locked
+- export format preference
+
+Optional but useful:
+- intended render scale in the consumer game
+- minimum readable detail level
+- mirrorability flag
+
+## UI work
+
+In the project workspace, each asset type should expose a compact "Asset Spec" section with:
+- canvas size inputs
+- anchor editor
+- orientation selector
+- transparency toggle
+- shape policy selector
 
 ## Files likely affected
 
 - `src/projects/Project.hpp`
 - `src/projects/ProjectManager.cpp`
+- `src/controllers/ProjectController.*`
 - `src/views/ProjectView.*`
+- `docs/75_projects/project_overview.md`
+
+## Acceptance criteria
+
+- The user can define a replacement-target contract for each asset type.
+- An asset type can express a slot equivalent to `door-left`, not just a prompt.
+- The specification persists in `projects.json`.
+
+---
+
+# Phase 2 — Reference and silhouette inputs
+
+## Goal
+
+Make the generator start from the target asset shape instead of guessing it from text.
+
+## Why this is required
+
+Prompt-only generation is too loose for modular wall pieces, door inserts, tile-aligned props, and other structurally constrained assets. For those cases, structure must come from a reference, mask, or template. Freeform asset types should still be allowed to skip this path.
+
+## Work
+
+Add support for asset-reference inputs per asset type:
+- reference image input
+- optional rasterized source SVG input
+- optional silhouette mask
+- optional bounds mask
+
+Generation modes should include:
+- text-only
+- img2img from reference asset
+- masked img2img
+- style transfer from reference shape
+
+The most important initial path is:
+1. rasterize existing SVG or source art
+2. use it as structure reference
+3. regenerate style/material/detail while preserving placement and silhouette
+
+## UI work
+
+Add a "Reference Shape" block in the asset detail panel:
+- source asset picker
+- mask preview
+- reference enable/disable
+- strength control specific to structure preservation
+
+## Files likely affected
+
+- `src/projects/Project.hpp`
+- `src/projects/ProjectManager.cpp`
+- `src/controllers/ImageGeneratorController.*`
+- `src/controllers/ProjectController.*`
+- `src/views/ProjectView.*`
+- `src/portraits/PortraitGeneratorAi.*`
+- pipeline docs under `docs/10_pipeline/`
+
+## Acceptance criteria
+
+- The user can attach a source asset as a structural reference.
+- The generator can preserve left-wall vs right-wall composition instead of drifting into a new scene.
+- Existing SVG assets can be used as a starting point for replacement generation.
+- Asset types that do not need structural references can continue using a lighter prompt-first workflow.
+
+---
+
+# Phase 3 — Asset-type locked prompt constraints
+
+## Goal
+
+Move critical geometry and composition rules out of freeform prompting and into hard asset-type constraints.
+
+## Why this is required
+
+For slot-compatible assets, the asset type should own more of the generation intent than the ad hoc prompt. The user should refine style and material, not restate geometry every time.
+
+## Work
+
+Extend asset templates and project constraints so asset types can inject locked prompt behavior:
+- orientation locks
+- "single isolated asset" locks
+- "transparent background" locks
+- "no environment" locks
+- "no floor plane" locks
+- silhouette-preservation hints
+- framing constraints
+
+Example asset-type policies:
+- `door-left` always means left wall plane, narrow wall segment, no room scene
+- `door-right` always means mirrored equivalent
+- `wall-left` and `wall-right` preserve shared structural proportions
+
+Prompt assembly should distinguish:
+- pack-wide style tokens
+- asset-type locked structural tokens
+- user-editable refinement tokens
+- negative constraints
+
+## Files likely affected
+
+- `src/projects/AssetTypeTemplate.*`
+- `src/controllers/ImageGeneratorController.*`
 - `src/controllers/ProjectController.*`
 - `src/prompt/*`
+- `docs/85_prompt/prompt_dsl.md`
 
 ## Acceptance criteria
 
-- Two different asset types generated from the same project look materially closer in style than they do today.
-- The user can inspect and edit pack-wide consistency rules without digging through long freeform prompts.
+- Users no longer need to repeatedly type orientation and isolation constraints.
+- Asset templates are materially better at producing slot-compatible assets than a blank prompt.
+- The generator is less likely to invent background scenes for modular pieces.
 
 ---
 
-# Phase 4 — Variant generation workflow
+# Phase 4 — Transparent asset workflow
 
 ## Goal
 
-Help the user generate controlled variations from an existing asset result with minimal friction.
+Produce actual game-usable assets instead of opaque full-frame images.
+
+## Why this is required
+
+Many game assets need to sit cleanly on top of a scene or tile map. The pipeline therefore needs a proper transparency path, whether the asset is a replacement piece or a newly authored pack element.
 
 ## Work
 
-- Add quick variant actions from a selected result:
-  - more damaged
-  - cleaner
-  - mossy
-  - icy
-  - ruined
-  - darker material
-  - lighter material
-- Support “generate N variants from this asset” in the project workspace.
-- Treat variant requests as a structured delta layered on top of the asset type, not as a full rewrite.
-- Store variant provenance so the user can tell which result was derived from which base.
+Add a transparent-output workflow with:
+- transparent background prompting where the model supports it
+- optional background removal pass
+- alpha edge cleanup
+- transparent padding normalization
+- export preview on checkerboard
+
+Keep both:
+- raw generated image
+- processed transparent export
+
+This phase should explicitly support isolated asset extraction, even when the base model does not natively produce perfect transparency.
 
 ## Files likely affected
 
+- `src/controllers/ImageGeneratorController.*`
+- `src/controllers/ProjectController.*`
+- new image post-processing helpers
+- project persistence files
+- export docs
+
+## Acceptance criteria
+
+- The user can produce a transparent asset export from a project workflow.
+- Edge halos are reduced enough for in-game use.
+- Transparency is visible and reviewable before export.
+
+---
+
+# Phase 5 — Validation and compatibility checks
+
+## Goal
+
+Check whether a generated asset is actually compatible with its target slot before it is accepted.
+
+## Why this is required
+
+A visually good asset can still fail production requirements:
+- wrong silhouette
+- wrong occupied bounds
+- wrong anchor
+- opaque background
+- unreadable detail at runtime scale
+
+## Work
+
+Add post-generation validation rules for project assets:
+- canvas size check
+- alpha presence / transparency check
+- occupied-bounds check
+- silhouette overlap or deviation check
+- anchor compatibility check
+- orientation consistency check
+
+Validation output should be lightweight but actionable:
+- pass
+- warning
+- fail
+
+## UI work
+
+Show a small validation summary on selected results:
+- canvas
+- transparency
+- shape fit
+- anchor fit
+- export readiness
+
+## Files likely affected
+
+- `src/controllers/ProjectController.*`
+- `src/controllers/ImageGeneratorController.*`
+- `src/ui/widgets/ResultPanel.*`
+- new validation helpers module
+
+## Acceptance criteria
+
+- The tool can flag an asset that looks good but does not fit its slot.
+- The user can tell whether a result is game-ready without manually exporting and testing it first.
+
+---
+
+# Phase 6 — Contextual preview and review loop
+
+## Goal
+
+Let the user judge asset fit in the context where the asset will actually be used.
+
+## Why this is required
+
+Prompt-only review is too indirect. Asset review needs context:
+- overlay against the source silhouette
+- anchor preview
+- occupied-bounds preview
+- target-context preview
+
+## Work
+
+Add a review mode for generated assets with:
+- current asset vs candidate comparison
+- overlay / onion-skin comparison
+- mask and occupied-bounds overlay
+- anchor visualization
+- preview in the target context where available
+
+The core system should support context-aware preview in a general way. Specific preview adapters can then be added for particular consumer contexts, such as isometric rooms, tile maps, or inventory presentation.
+
+## UI work
+
+The result panel should allow:
+- compare to source
+- compare to approved asset
+- preview in context
+- approve
+- reject
+- regenerate from this candidate
+
+## Files likely affected
+
+- `src/views/ProjectView.*`
 - `src/ui/widgets/ResultPanel.*`
 - `src/controllers/ProjectController.*`
-- `src/controllers/ImageGeneratorController.*`
-- possibly `src/projects/*` if variant history is persisted
+- possibly dedicated preview helpers
 
 ## Acceptance criteria
 
-- The user can produce multiple related variants from a selected asset without leaving the project workflow.
-- Variant prompts are derived from the selected asset context rather than typed from scratch each time.
+- The user can review an asset in context before exporting it.
+- Anchor and silhouette mistakes are visible immediately.
+- The workflow supports iterative replacement rather than blind batch generation.
 
 ---
 
-# Phase 5 — Post-processing for game readiness
+# Phase 7 — Consumer-ready export
 
 ## Goal
 
-Reduce cleanup work between generation and engine import.
+Export assets directly into the format expected by the game or downstream repo.
+
+## Why this is required
+
+The final output is not just "an image in the gallery". It is a file that can be imported directly into a game or UI runtime, sometimes as a replacement for an existing asset, sometimes as a new asset under a project-defined convention.
 
 ## Work
 
-- Add post-processing options:
-  - trim transparent bounds
-  - add configurable padding
-  - center subject on canvas
-  - normalize export canvas size
-  - optional scale-to-target sprite size
-  - alpha cleanup / edge cleanup
-- Add project-level export defaults:
-  - target sprite canvas
-  - padding
-  - naming scheme
-- Keep original generated image and processed export as separate outputs where useful.
+Add export controls for:
+- exact target dimensions
+- output format (`png`, `webp`)
+- naming rules
+- optional sidecar metadata for anchor / footprint
+- output directory mapping by asset type
+
+Support an export profile per project or target consumer app.
+
+For example, an asset profile should be able to say:
+- export as `door_left.png`
+- canvas `128x256`
+- anchor metadata `96,224`
+- save under a configured destination tree
 
 ## Files likely affected
 
-- `src/controllers/ImageGeneratorController.*`
+- `src/projects/*`
 - `src/controllers/ProjectController.*`
-- new image post-processing helpers, likely under `src/ui/` or a new utility module
-- project persistence files
+- `src/controllers/ImageGeneratorController.*`
+- export helpers
 
 ## Acceptance criteria
 
-- The user can export a centered, padded, transparent asset without external tooling.
-- Post-processing is optional but easy to apply consistently across a pack.
+- The user can export a generated asset as a direct replacement candidate.
+- Export output matches the target slot contract without manual renaming or resizing.
+- Multiple asset types can share a project-level export convention.
 
 ---
 
-# Phase 6 — Pack coverage tracking
+# Phase 8 — Pack consistency and coverage tracking
 
 ## Goal
 
-Make the workspace track progress as a pack, not only as a gallery.
+Track the asset pack as a production set, not just a gallery of unrelated outputs.
+
+## Why this is still needed
+
+Even with slot-compatible generation, pack production still needs consistency and progress tracking across many assets.
 
 ## Work
 
-- Add asset-type status tracking:
-  - not started
-  - draft
-  - ready
-  - needs variants
-- Show counts:
-  - number of generated results
-  - number of approved exports
-  - number of variants
-- Add compact pack progress UI in the project workspace.
-- Support filtering by missing/incomplete asset types.
+Retain and extend pack-level controls:
+- material language
+- palette keywords
+- detail density
+- lighting direction
+- stylization level
+
+Add production tracking per asset type:
+- not started
+- in progress
+- candidate ready
+- approved
+- exported
+
+Show counts:
+- generated candidates
+- validated candidates
+- approved exports
+- missing asset types
 
 ## Files likely affected
 
@@ -256,106 +565,35 @@ Make the workspace track progress as a pack, not only as a gallery.
 
 ## Acceptance criteria
 
-- The user can see what is missing in the pack at a glance.
-- The project workspace feels like a production tracker, not just a prompt launcher.
+- The user can see what is missing from the pack at a glance.
+- Pack-wide style rules remain easy to inspect and edit.
+- The workspace behaves like a lightweight asset production tracker.
 
 ---
 
-# Phase 7 — Export pipeline
+# Immediate implementation order
 
-## Goal
+If the goal is to support structurally constrained assets as soon as possible, the shortest useful sequence is:
 
-Let the user produce a game-usable asset pack with consistent filenames and structure.
+1. Asset slot specification
+2. Reference shape input
+3. Masked / reference-driven img2img
+4. Transparent export workflow
+5. In-room preview with anchor visualization
 
-## Work
-
-- Add export actions:
-  - export selected asset
-  - export current asset type
-  - export full pack
-- Normalize file naming:
-  - `<asset_type>__v001.png`
-  - `<asset_type>__variant_mossy__v002.png`
-- Export metadata file for the pack:
-  - project name
-  - asset types
-  - source image path
-  - variant label
-  - canvas/export settings
-- Keep export folders separate from raw generation history where practical.
-
-## Files likely affected
-
-- `src/controllers/ProjectController.*`
-- `src/projects/*`
-- export utility modules
-
-## Acceptance criteria
-
-- The user can export a clean pack without manually renaming or reorganizing files.
-- Pack metadata is sufficient to reproduce or audit outputs later.
+That order gets the tool from "generate asset-like images" to "produce plausible replacement assets" with the least wasted work.
 
 ---
 
-# Suggested implementation order
+# Non-goals for the first pass
 
-Recommended order:
+The first pass should not try to solve every art-pipeline problem at once.
 
-1. Phase 1 — game-ready generation constraints
-2. Phase 2 — asset-type templates
-3. Phase 4 — variant generation workflow
-4. Phase 5 — post-processing for game readiness
-5. Phase 6 — pack coverage tracking
-6. Phase 3 — pack consistency controls
-7. Phase 7 — export pipeline
+Explicit non-goals:
+- full vector regeneration
+- automatic rigging / animation support
+- arbitrary consumer-engine integrations
+- procedural tileset authoring
+- complete asset library management
 
-Rationale:
-- Phase 1 and 2 reduce prompt burden immediately.
-- Phase 4 and 5 reduce the time from image generation to usable output.
-- Phase 6 improves project usability once the pack has enough content to manage.
-- Phase 3 is important, but some of it may be informed by what proves necessary in Phases 1, 2, and 4.
-- Phase 7 should happen once the asset workflow is stable enough to export consistently.
-
----
-
-# Recommended first milestone
-
-If only one short milestone is implemented next, it should be:
-
-## Milestone A
-
-- Phase 1 subset: ✓ DONE (all 6 pack constraints + 4 asset constraints implemented)
-- Phase 2 subset:
-  - wall
-  - floor tile
-  - prop
-  - door
-- small project UI additions to expose these defaults clearly ✓ DONE
-
-## Why
-
-This gives the user immediate value:
-- fewer bad generations
-- faster asset-type setup
-- less prompt repetition
-- better “drop into the game” readiness
-
----
-
-# Risks and design constraints
-
-- Do not keep adding freeform prompt fields. Prefer structured settings where behavior is repeated and predictable.
-- Do not overload `ImageGeneratorView` with project-specific UI. `ProjectView` should remain a first-class workspace.
-- Avoid mixing raw history, approved outputs, and exported assets into one folder view without clear status semantics.
-- Keep project defaults and runtime generation overrides distinct.
-- Prefer project-level conventions over one-off per-run tweaks where possible.
-
----
-
-# Open questions
-
-- Should approval/final selection be explicit per result before export?
-- Should templates live in code, JSON data, or project presets?
-- Should post-processing produce sidecar exports or replace the displayed result?
-- How much variant history needs to be persisted in `projects.json`?
-- Should pack coverage status be derived automatically from output folders or stored explicitly in project data?
+The first pass only needs to make replacement-grade static 2D isometric assets practical.
