@@ -14,9 +14,11 @@ void MenuView::render(sf::RenderWindow& win) {
     Helpers::drawTextC(win, font, "Image generator", Col::GoldLt, cx, cy - 120, 48, true);
 
     const float bw = 220.f, bh = 44.f, gap = 12.f;
-    btnImageGen = {cx - bw / 2.f, cy + (bh + gap) * 1.5f, bw, bh};
-    btnImageEdit = {cx - bw / 2.f, btnImageGen.top + bh + gap, bw, bh};
-    drawButton(win, btnImageGen, "Generate Images", Col::Panel2, Col::Muted, false, 14, font);
-    drawButton(win, btnImageEdit, "Edit Image", Col::Panel2, Col::Muted, false, 14, font);
+    btnImageGen  = {cx - bw / 2.f, cy + (bh + gap) * 1.5f,         bw, bh};
+    btnImageEdit = {cx - bw / 2.f, btnImageGen.top  + bh + gap,    bw, bh};
+    btnProjects  = {cx - bw / 2.f, btnImageEdit.top + bh + gap,    bw, bh};
+    drawButton(win, btnImageGen,  "Generate Images", Col::Panel2, Col::Muted, false, 14, font);
+    drawButton(win, btnImageEdit, "Edit Image",      Col::Panel2, Col::Muted, false, 14, font);
+    drawButton(win, btnProjects,  "Projects",        Col::Panel2, Col::Gold,  false, 14, font);
 
 }

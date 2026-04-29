@@ -18,11 +18,22 @@ public:
         std::shared_ptr<sf::Texture> thumbnail;
     };
 
+    struct GalleryTab {
+        std::string name;
+        std::string assetTypeId;
+        std::string outputSubpath;
+    };
+
     // ── Display ───────────────────────────────────────────────────────────────
     sf::Texture resultTexture;
     bool        resultLoaded = false;
     std::vector<GalleryItem> gallery;
     int                      selectedIndex = -1;
+
+    // ── Gallery tabs (populated by controller when a project context is active) ─
+    std::vector<GalleryTab> tabs;
+    int                     activeTabIndex = 0;
+    bool                    tabChanged     = false;
 
     // ── Generation state (shared with background thread via atomics) ──────────
     bool              generating          = false;
@@ -63,9 +74,12 @@ private:
     sf::FloatRect btnNextThumbs_;
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
+    std::vector<sf::FloatRect> tabRects_;
     int thumbnailScrollOffset_ = 0;
     int lastVisibleSelectedIndex_ = -1;
 
+    void renderTabBar(sf::RenderWindow& win, sf::Font& font,
+                      float barX, float barY, float barW);
     void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
                                float stripX, float stripY, float stripW);
     void ensureSelectedThumbnailVisible(int visibleCount);

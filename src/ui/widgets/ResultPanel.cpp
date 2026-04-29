@@ -35,12 +35,41 @@ void ResultPanel::ensureSelectedThumbnailVisible(int visibleCount) {
     lastVisibleSelectedIndex_ = selectedIndex;
 }
 
+static constexpr float TAB_H = 28.f;
+
+void ResultPanel::renderTabBar(sf::RenderWindow& win, sf::Font& font,
+                                float barX, float barY, float barW) {
+    tabRects_.clear();
+    if (tabs.empty()) return;
+
+    drawRect(win, {barX, barY, barW, TAB_H}, Col::Panel, Col::Border, 1.f);
+
+    constexpr float tabPadX = 12.f;
+    constexpr float tabGap  =  4.f;
+    float tx = barX + tabGap;
+    for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+        const float tw = tabPadX * 2.f
+            + static_cast<float>(tabs[static_cast<size_t>(i)].name.size()) * 7.2f;
+        const sf::FloatRect r{tx, barY + 3.f, tw, TAB_H - 6.f};
+        const bool active = (i == activeTabIndex);
+        drawRect(win, r, active ? Col::Blue : Col::Panel2,
+                 active ? Col::GoldLt : Col::Border, 1.f);
+        drawTextC(win, font, tabs[static_cast<size_t>(i)].name,
+                  active ? Col::GoldLt : Col::Muted,
+                  tx + tw / 2.f, barY + 7.f, 11, active);
+        tabRects_.push_back(r);
+        tx += tw + tabGap;
+    }
+}
+
 void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const float x  = rect_.left;
     const float y  = rect_.top;
     const float w  = rect_.width;
     const float h  = rect_.height;
     const float cx = x + w / 2.f;
+
+    const float tabBarH = tabs.empty() ? 0.f : TAB_H;
 
     // Panel background
     drawRect(win, rect_, Col::Bg);
@@ -93,7 +122,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     } else if (resultLoaded) {
         // ── Selected image preview ────────────────────────────────────────────
         const float galleryH = gallery.empty() ? 0.f : 124.f;
-        const float previewBottom = y + h - galleryH - 64.f;
+        const float previewBottom = y + h - galleryH - tabBarH - 64.f;
         const float maxImgW = w - 16.f;
         const float maxImgH = std::max(80.f, previewBottom - (y + 16.f));
         const auto  texSize = resultTexture.getSize();
@@ -146,11 +175,14 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         }
 
         if (!gallery.empty()) {
-            const float stripY = y + h - galleryH - 60.f;
             const float stripX = x + 12.f;
             const float stripW = w - 24.f;
+            const float stripY = y + h - galleryH - 60.f;
+            if (!tabs.empty())
+                renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
             renderThumbnailStrip(win, font, stripX, stripY, stripW);
         } else {
+            tabRects_.clear();
             thumbnailRects_.clear();
         }
 
@@ -175,8 +207,10 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         btnNextImage_ = {};
         drawTextC(win, font, "Select an image", Col::Border, cx, y + 32.f, 13);
         const float stripX = x + 12.f;
-        const float stripY = y + 56.f;
         const float stripW = w - 24.f;
+        const float stripY = y + 56.f + tabBarH;
+        if (!tabs.empty())
+            renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
         renderThumbnailStrip(win, font, stripX, stripY, stripW);
     } else {
         // Placeholder when no image yet
@@ -259,6 +293,13 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
         for (int i = 0; i < static_cast<int>(thumbnailRects_.size()); ++i) {
             if (thumbnailRects_[static_cast<size_t>(i)].contains(pos)) {
                 selectedIndex = thumbnailIndices_[static_cast<size_t>(i)];
+                return true;
+            }
+        }
+        for (int i = 0; i < static_cast<int>(tabRects_.size()); ++i) {
+            if (tabRects_[static_cast<size_t>(i)].contains(pos) && i != activeTabIndex) {
+                activeTabIndex = i;
+                tabChanged     = true;
                 return true;
             }
         }

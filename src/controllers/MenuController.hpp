@@ -6,7 +6,7 @@
 #include "../presenters/MenuPresenter.hpp"
 #include "../views/MenuView.hpp"
 
-enum class AppScreen : std::uint8_t { MENU, Playing, ImageGenerator, ImageEditor };
+enum class AppScreen : std::uint8_t { MENU, Playing, ImageGenerator, ImageEditor, Projects };
 
 class MenuController {
 public:

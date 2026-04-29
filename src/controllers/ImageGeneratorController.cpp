@@ -85,6 +85,19 @@ static ModelType inferModelType(const std::string& modelDir) {
     return (content.find("\"sdxl\"") != std::string::npos) ? ModelType::SDXL : ModelType::SD15;
 }
 
+static std::string sanitiseName(const std::string& s) {
+    std::string r;
+    r.reserve(s.size());
+    for (char c : s) {
+        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+            r += '_';
+        else
+            r += c;
+    }
+    return r;
+}
+
 static std::string trimCopy(const std::string& value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
@@ -277,7 +290,12 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     }
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    rp.lastImagePath = config.outputDir + "/img_" + std::to_string(now) + ".png";
+    std::string outDir = config.outputDir;
+    if (!projectContext_.outputSubpath.empty()) {
+        outDir = config.outputDir + "/" + projectContext_.outputSubpath;
+        std::filesystem::create_directories(outDir);
+    }
+    rp.lastImagePath = outDir + "/img_" + std::to_string(now) + ".png";
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -292,8 +310,17 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
     const std::string modelDir  = sp.getSelectedModelDir();
-    Prompt            dsl       = PromptParser::parse(sp.positiveArea.getText(),
+    Prompt            userDsl   = PromptParser::parse(sp.positiveArea.getText(),
                                                       sp.negativeArea.getText());
+    // Merge project style → asset type tokens → user input (each layer adds to the previous)
+    Prompt dsl = userDsl;
+    if (!projectContext_.empty()) {
+        Prompt base = projectContext_.stylePrompt;
+        if (!projectContext_.assetTypeTokens.positive.empty()
+            || projectContext_.assetTypeTokens.subject.has_value())
+            base = PromptMerge::merge(base, projectContext_.assetTypeTokens);
+        dsl = PromptMerge::merge(base, userDsl);
+    }
     const ModelType   modelType = inferModelType(modelDir);
 
     const std::string modelKey = std::filesystem::path(modelDir).filename().string();
@@ -410,9 +437,12 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
 
     std::vector<ImageEntry> entries;
     std::error_code ec;
-    const std::filesystem::path outputDir(config.outputDir);
-    if (std::filesystem::exists(outputDir, ec)) {
-        for (const auto& entry : std::filesystem::directory_iterator(outputDir, ec)) {
+    const std::filesystem::path galleryDir =
+        projectContext_.outputSubpath.empty()
+            ? std::filesystem::path(config.outputDir)
+            : std::filesystem::path(config.outputDir) / projectContext_.outputSubpath;
+    if (std::filesystem::exists(galleryDir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
             if (!entry.is_regular_file()) continue;
             if (!isGalleryImageFile(entry.path())) continue;
             entries.push_back({
@@ -609,8 +639,13 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             std::error_code ec2;
             const std::filesystem::path outputDir = std::filesystem::weakly_canonical(config.outputDir, ec2);
             const std::filesystem::path canonicalSelected = std::filesystem::weakly_canonical(selected, ec2);
-            if (!ec2 && !selected.empty() && !outputDir.empty()
-                && canonicalSelected.parent_path() == outputDir) {
+            // Allow deletion from any subdirectory under outputDir (e.g. project/assettype/)
+            const auto rel = std::filesystem::relative(canonicalSelected, outputDir, ec2);
+            bool hasParentRef = false;
+            for (const auto& part : rel)
+                if (part.string() == "..") { hasParentRef = true; break; }
+            const bool underOutput = !ec2 && !rel.empty() && !hasParentRef;
+            if (underOutput && !selected.empty()) {
                 std::filesystem::remove(canonicalSelected, ec2);
                 refreshGallery(view, nextSelection);
             }
@@ -745,6 +780,46 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         }
     }
 
+    // Sync gallery tabs from active project context
+    if (projectContext_.empty()) {
+        rp.tabs.clear();
+    } else {
+        if (rp.tabs.size() != projectContext_.allAssetTypes.size()) {
+            rp.tabs.clear();
+            for (const auto& at : projectContext_.allAssetTypes) {
+                rp.tabs.push_back({
+                    at.name, at.id,
+                    sanitiseName(projectContext_.projectName) + "/" + sanitiseName(at.name)
+                });
+            }
+            for (int i = 0; i < static_cast<int>(rp.tabs.size()); ++i) {
+                if (rp.tabs[static_cast<size_t>(i)].assetTypeId == projectContext_.assetTypeId) {
+                    rp.activeTabIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Handle user switching gallery tab
+    if (rp.tabChanged) {
+        rp.tabChanged = false;
+        const int idx = rp.activeTabIndex;
+        if (!rp.tabs.empty() && idx >= 0 && idx < static_cast<int>(rp.tabs.size())) {
+            const auto& tab = rp.tabs[static_cast<size_t>(idx)];
+            projectContext_.assetTypeId     = tab.assetTypeId;
+            projectContext_.assetTypeName   = tab.name;
+            projectContext_.outputSubpath   = tab.outputSubpath;
+            for (const auto& at : projectContext_.allAssetTypes) {
+                if (at.id == tab.assetTypeId) {
+                    projectContext_.assetTypeTokens = at.promptTokens;
+                    break;
+                }
+            }
+            refreshGallery(view);
+        }
+    }
+
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
 
@@ -788,4 +863,16 @@ std::string ImageGeneratorController::consumePendingEditNavigation() {
 
 void ImageGeneratorController::setBackScreen(AppScreen screen) {
     backScreen_ = screen;
+}
+
+void ImageGeneratorController::setProjectContext(const ResolvedProjectContext& ctx) {
+    projectContext_  = ctx;
+    viewInitialized  = false; // forces gallery refresh on next update()
+    Logger::info("ImageGeneratorController: project context set — '"
+                 + ctx.projectName + " / " + ctx.assetTypeName + "'");
+}
+
+void ImageGeneratorController::clearProjectContext() {
+    projectContext_ = {};
+    viewInitialized = false;
 }

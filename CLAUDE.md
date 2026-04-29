@@ -68,6 +68,18 @@ This file is a **retrieval router** only. All implementation details live in `do
 ## Preset system — `PresetManager` (DSL-backed)
 → docs/80_presets/preset_overview.md
 
+## Project system — `src/projects/` (`Project`, `AssetType`, `ProjectManager`)
+Key facts (no doc file yet — treat this section as the source of truth):
+- `Project` owns a `stylePrompt` (Prompt DSL) + `vector<AssetType>` + model/LoRA/resolution config
+- `AssetType` owns `promptTokens` (Prompt DSL) for category-specific tokens
+- `ProjectManager` persists to `projects.json`; mirrors `PresetManager` API
+- `ResolvedProjectContext` carries the resolved prompts + `outputSubpath` + `allAssetTypes` from `ProjectController` to `ImageGeneratorController`
+- Generation: `merge(project.stylePrompt, assetType.promptTokens)` → `merge(result, userDsl)` via existing `PromptMerge::merge()`
+- Output routing: `{outputDir}/{sanitiseName(project)}/{sanitiseName(assetType)}/img_<ts>.png`
+- Gallery scoped to the active asset type subfolder; `ResultPanel::tabs` provides per-type switching
+- `ProjectController` navigates back to `AppScreen::Projects`; generator back-screen is set to `AppScreen::Projects` on entry
+- Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
+
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
 → docs/85_prompt/prompt_dsl.md
 
