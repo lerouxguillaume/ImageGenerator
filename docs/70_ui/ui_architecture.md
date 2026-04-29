@@ -77,6 +77,10 @@ Tab cycles focus: positive → negative → positive
 `positiveArea` shows 4 visible lines (fieldH=86); `negativeArea` shows 3 visible lines (fieldH=68).  
 Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforces this after each handleEvent.
 
+**Img2img section** (conditional — only shown when `generationParams.initImagePath` is non-empty):
+- Info row: truncated filename + `[Clear]` button — clicking Clear sets `initImagePath = ""`
+- Strength slider: range 0.05–1.0 in 0.05 steps; stored in `generationParams.strength`
+
 ### Token chip row (Phase 8)
 
 Rendered between positive area and negative label. Read-only — visualises the parsed DSL:
@@ -95,9 +99,14 @@ Shows the full compiled positive including any quality boosters injected from `M
 ## `ResultPanel`
 
 State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
-Action flags: `generateRequested`, `cancelToken` (set by Cancel button, read+cleared by controller)  
+Action flags: `generateRequested`, `useAsInitRequested`, `cancelToken`  
 Generate button at bottom of panel; progress overlay covers the image during generation.  
 Generated image displayed at native pixel size; downscaled only when larger than the panel.
+
+When `resultLoaded`:
+- `[Use as init]` button appears to the left of `[Generate]`
+- Clicking it sets `useAsInitRequested = true`
+- Controller responds by copying `lastImagePath` → `settingsPanel.generationParams.initImagePath`
 
 ## `LlmBar`
 
@@ -160,6 +169,10 @@ if (view.resultPanel.handleEvent(e)) {
     if (view.resultPanel.generateRequested) {
         view.resultPanel.generateRequested = false;
         launchGeneration(view);   // controller launches the jthread
+    }
+    if (view.resultPanel.useAsInitRequested) {
+        view.resultPanel.useAsInitRequested = false;
+        view.settingsPanel.generationParams.initImagePath = view.resultPanel.lastImagePath;
     }
     if (view.resultPanel.cancelToken.exchange(false))
         generationThread_.request_stop();  // bridges Cancel button → jthread stop_token

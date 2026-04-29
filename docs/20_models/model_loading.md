@@ -35,6 +35,9 @@ The `type` field drives:
 
 Each model produces:
 - UNet session
-- VAE session
+- VAE decoder session
+- VAE encoder session (optional — loaded only when `vae_encoder.onnx` exists)
 - CLIP session(s)
 - optional SDXL encoder2 session
+
+`vaeEncoderAvailable` is set to `true` only when the encoder file is found and loaded successfully. Missing the file is not an error — it simply disables img2img for that model directory.

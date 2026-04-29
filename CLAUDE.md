@@ -25,7 +25,7 @@ This file is a **retrieval router** only. All implementation details live in `do
 ## Build system
 → docs/00_overview/build_system.md
 
-## SD Pipeline — `sd/SdPipeline.cpp → runPipeline()`
+## SD Pipeline — `sd/SdPipeline.cpp → runPipeline()` (txt2img + img2img)
 → docs/10_pipeline/pipeline_orchestration.md  
 → docs/10_pipeline/scheduler.md  
 → docs/10_pipeline/cfg_guidance.md  
@@ -79,8 +79,9 @@ This file is a **retrieval router** only. All implementation details live in `do
 
 # Critical invariants
 
-- Never hard-code fp16 dtype — use `ctx.unetExpectsFp32` / `ctx.vaeExpectsFp32`
+- Never hard-code fp16 dtype — use `ctx.unetExpectsFp32` / `ctx.vaeExpectsFp32` / `ctx.vaeEncoderExpectsFp32`
 - Never pass `ctx.run_opts` to VAE `Run()` — use `Ort::RunOptions{nullptr}`
+- Never call `encodeImage()` without checking `ctx.vaeEncoderAvailable` first — session is null when `vae_encoder.onnx` is absent
 - Never reset `ctx.run_opts` manually in `runPipeline()` — `ModelManager::get()` owns this
 - Never call `cpu_unet` with `ctx.session_opts` — must use `ctx.cpu_session_opts`
 - Never call `AddExternalInitializers` on shared opts — `Clone()` first
