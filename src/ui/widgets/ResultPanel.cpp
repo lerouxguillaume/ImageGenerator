@@ -192,15 +192,12 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     // ── Buttons at the bottom of the panel ───────────────────────────────────
     if (!generating) {
         if (resultLoaded) {
-            btnUseAsInit_ = {cx - 246.f, y + h - 49.f, 118.f, 30.f};
-            drawButton(win, btnUseAsInit_, "Use as init", Col::Panel2, Col::BlueLt, false, 12, font);
-            btnImprove_ = {cx - 120.f, y + h - 49.f, 88.f, 30.f};
-            drawButton(win, btnImprove_, "Improve", Col::Panel2, Col::GoldLt, false, 12, font);
-            btnDelete_ = {cx - 24.f, y + h - 49.f, 88.f, 30.f};
+            btnImprove_ = {cx - 138.f, y + h - 49.f, 88.f, 30.f};
+            drawButton(win, btnImprove_, "Edit", Col::Panel2, Col::GoldLt, false, 12, font);
+            btnDelete_ = {cx - 42.f, y + h - 49.f, 88.f, 30.f};
             drawButton(win, btnDelete_, "Delete", Col::Panel2, Col::RedLt, false, 12, font);
-            btnGenerate_  = {cx + 74.f, y + h - 52.f, 160.f, 38.f};
+            btnGenerate_  = {cx + 62.f, y + h - 52.f, 160.f, 38.f};
         } else {
-            btnUseAsInit_ = {};
             btnImprove_   = {};
             btnDelete_    = {};
             btnGenerate_  = {cx - 80.f, y + h - 52.f, 160.f, 38.f};
@@ -223,10 +220,6 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
             return true;
         }
 
-        if (btnUseAsInit_.contains(pos)) {
-            useAsInitRequested = true;
-            return true;
-        }
         if (btnImprove_.contains(pos)) {
             improveRequested = true;
             return true;

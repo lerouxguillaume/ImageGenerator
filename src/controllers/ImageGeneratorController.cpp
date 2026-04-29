@@ -85,6 +85,28 @@ static ModelType inferModelType(const std::string& modelDir) {
     return (content.find("\"sdxl\"") != std::string::npos) ? ModelType::SDXL : ModelType::SD15;
 }
 
+static std::string trimCopy(const std::string& value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+static std::string buildEditPrompt(const std::string& basePrompt, const ImageGeneratorView& view) {
+    const auto& params = view.settingsPanel.generationParams;
+    if (params.initImagePath.empty()) return basePrompt;
+
+    const std::string instruction = trimCopy(view.settingsPanel.editInstructionArea.getText());
+    if (instruction.empty()) return basePrompt;
+
+    static const std::string preserveClause =
+        "same character identity, same facial features, same pose, same framing, same lighting";
+
+    if (basePrompt.empty())
+        return instruction + ", " + preserveClause;
+    return basePrompt + ", " + instruction + ", " + preserveClause;
+}
+
 static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view) {
     const auto& sp = view.settingsPanel;
     GenerationSettings gs;
@@ -270,7 +292,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
         injectBoosters(dsl, it->second);
 
-    const std::string prompt    = PromptCompiler::compile(dsl, modelType);
+    const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rp.lastImagePath;
     GenerationParams params = sp.generationParams;
@@ -541,6 +563,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     if (view.settingsPanel.handleEvent(e)) {
         if (view.settingsPanel.positiveArea.isActive() ||
             view.settingsPanel.negativeArea.isActive() ||
+            view.settingsPanel.editInstructionArea.isActive() ||
             view.settingsPanel.seedInputActive) {
             view.llmBar.instructionArea.setActive(false);
         }
@@ -555,10 +578,14 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             view.resultPanel.generateRequested = false;
             launchGeneration(view);
         }
-        if (view.resultPanel.useAsInitRequested || view.resultPanel.improveRequested) {
-            view.resultPanel.useAsInitRequested = false;
+        if (view.resultPanel.improveRequested) {
             view.resultPanel.improveRequested = false;
             view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
+            view.settingsPanel.generationParams.strength = 0.5f;
+            view.settingsPanel.editInstructionArea.setActive(true);
+            view.settingsPanel.positiveArea.setActive(false);
+            view.settingsPanel.negativeArea.setActive(false);
+            view.settingsPanel.seedInputActive = false;
         }
         if (view.resultPanel.deleteRequested) {
             view.resultPanel.deleteRequested = false;
@@ -589,6 +616,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.llmBar.instructionArea.isActive()) {
             view.settingsPanel.positiveArea.setActive(false);
             view.settingsPanel.negativeArea.setActive(false);
+            view.settingsPanel.editInstructionArea.setActive(false);
             view.settingsPanel.seedInputActive = false;
         }
         if (view.llmBar.enhanceRequested && !view.llmBar.enhancing) {

@@ -5,7 +5,7 @@ Image generator is a C++20 / SFML application embedding a full Stable Diffusion 
 It supports:
 - Stable Diffusion 1.5
 - Stable Diffusion XL (SDXL)
-- Txt2img and img2img (VAE encode → noise → denoise)
+- Txt2img and gallery-driven img2img editing (VAE encode → noise → denoise)
 - LoRA injection via external initializer patching
 - Optional LLM prompt transformation via ORT GenAI
 - Structured Prompt DSL with model-specific compilation
@@ -18,14 +18,15 @@ It supports:
 2. `PromptParser::parse()` converts raw text → `Prompt` DSL
 3. Optional LLM transforms the DSL (merge, not replace)
 4. At generation time, `PromptCompiler::compile(dsl, modelType)` produces the final string
-5. SD pipeline executes:
+5. If img2img edit mode is active and an edit instruction is present, the controller appends the requested change plus a short preserve clause before inference
+6. SD pipeline executes:
     - CLIP encoding
     - (img2img) VAE encode input image → posterior mean latent → add noise at start sigma
     - UNet denoising loop (from `startStep` for img2img, from 0 for txt2img)
     - CFG guidance
     - Scheduler (DPM++ 2M Karras)
     - VAE decode
-6. Image saved via OpenCV
+7. Image saved via OpenCV
 
 Entry point:
 - `PortraitGeneratorAi::generateFromPrompt()`

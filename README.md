@@ -10,8 +10,9 @@ Built with C++17, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 
 - **Local SD inference** — SD 1.5 and SDXL pipelines implemented from scratch (DPM++ 2M Karras scheduler, CFG, CLIP tokenizer)
 - **GPU acceleration** — CUDA (Linux/Windows) or DirectML (Windows)
-- **SFML GUI** — prompt editor, model selector, step/CFG/count sliders, live progress overlay
+- **SFML GUI** — prompt editor, model selector, edit instruction field, strength controls, live progress overlay
 - **Multi-image generation** — generate N images in one run with cancellation support
+- **Image editing** — gallery-driven img2img workflow with `Edit`, init-image reuse, and strength presets
 - **Model hot-swap** — any model exported to ONNX under `models/` is automatically listed in the UI
 
 ---
@@ -165,6 +166,8 @@ A `model.json` sidecar is written automatically so the application detects SDXL 
 The binary expects `models/vocab.json` and `models/merges.txt` in the working directory (copied automatically by CMake post-build). Model subdirectories are auto-discovered from `models/`.
 
 Generated images are saved to `assets/generated/`.
+
+To edit an existing image, select it in the gallery, click `Edit`, enter an instruction such as `change hair color to copper red`, then adjust the strength preset or slider before generating.
 
 ---
 

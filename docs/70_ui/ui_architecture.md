@@ -70,15 +70,17 @@ Save modal and overlay dim use `win.getSize()` for centering.
 
 ## `SettingsPanel`
 
-State: `positiveArea`, `negativeArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
+State: `positiveArea`, `negativeArea`, `editInstructionArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
 DSL display state (set by controller each frame): `currentDsl`, `compiledPreview`  
 All params always visible (no Advanced toggle)  
-Tab cycles focus: positive → negative → positive  
+Tab cycles focus: positive → negative → edit instruction → positive when an init image is active; otherwise positive → negative → positive  
 `positiveArea` shows 4 visible lines (fieldH=86); `negativeArea` shows 3 visible lines (fieldH=68).  
 Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforces this after each handleEvent.
 
-**Img2img section** (conditional — only shown when `generationParams.initImagePath` is non-empty):
+**Img2img edit section** (conditional — only shown when `generationParams.initImagePath` is non-empty):
 - Info row: truncated filename + `[Clear]` button — clicking Clear sets `initImagePath = ""`
+- Edit instruction field: free text describing the targeted change to preserve around the selected image
+- Strength presets: `[Subtle]`, `[Medium]`, `[Strong]` map to coarse strength defaults before fine-tuning
 - Strength slider: range 0.05–1.0 in 0.05 steps; stored in `generationParams.strength`
 
 ### Token chip row (Phase 8)
@@ -99,7 +101,7 @@ Shows the full compiled positive including any quality boosters injected from `M
 ## `ResultPanel`
 
 State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
-Action flags: `generateRequested`, `useAsInitRequested`, `improveRequested`, `deleteRequested`, `cancelToken`  
+Action flags: `generateRequested`, `improveRequested`, `deleteRequested`, `cancelToken`  
 Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown).
 
 **Gallery** (`gallery: vector<GalleryItem>`, `selectedIndex: int`):  
@@ -110,9 +112,9 @@ Path fields: `lastImagePath` (base output path, set at generation start), `displ
 - Rendered as a 124 px strip at the bottom of the panel; clicking a thumbnail selects it and loads its full image into `resultTexture`
 
 **Button layout when `resultLoaded`** (left → right, bottom of panel):  
-`[Use as init]` · `[Improve]` · `[Delete]` · `[Generate]`
+`[Edit]` · `[Delete]` · `[Generate]`
 
-- `[Use as init]` / `[Improve]`: both set `useAsInitRequested` / `improveRequested`; controller copies `displayedImagePath` → `settingsPanel.generationParams.initImagePath`
+- `[Edit]`: sets `improveRequested`; controller copies `displayedImagePath` → `settingsPanel.generationParams.initImagePath`, defaults strength to `0.5`, and focuses the edit instruction field
 - `[Delete]`: sets `deleteRequested`; controller canonicalizes the path, verifies it is inside `config.outputDir`, removes the file, then calls `refreshGallery()`
 
 ## `LlmBar`
@@ -159,7 +161,7 @@ Panels are not required to inherit Widget — they follow the same interface pat
 3. settingsModal.handleEvent()   — when showSettings == true (blocks all else)
 4. menuBar.handleEvent()         → check action flags (back, settings, preset select, save)
 5. settingsPanel.handleEvent()
-6. resultPanel.handleEvent()     → check generateRequested
+6. resultPanel.handleEvent()     → check generateRequested / improveRequested / deleteRequested
 7. llmBar.handleEvent()          → check enhanceRequested
 ```
 
@@ -181,10 +183,11 @@ if (view.resultPanel.handleEvent(e)) {
         view.resultPanel.generateRequested = false;
         launchGeneration(view);   // controller launches the jthread
     }
-    if (view.resultPanel.useAsInitRequested || view.resultPanel.improveRequested) {
-        view.resultPanel.useAsInitRequested = false;
+    if (view.resultPanel.improveRequested) {
         view.resultPanel.improveRequested   = false;
         view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
+        view.settingsPanel.generationParams.strength = 0.5f;
+        view.settingsPanel.editInstructionArea.setActive(true);
     }
     if (view.resultPanel.deleteRequested) {
         view.resultPanel.deleteRequested = false;

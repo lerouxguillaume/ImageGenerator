@@ -15,6 +15,7 @@ public:
     // ── Prompt fields ─────────────────────────────────────────────────────────
     MultiLineTextArea positiveArea{2000};
     MultiLineTextArea negativeArea{2000, 3};
+    MultiLineTextArea editInstructionArea{400, 2};
 
     // ── Generation parameters ─────────────────────────────────────────────────
     GenerationParams generationParams;
@@ -67,6 +68,9 @@ private:
     sf::FloatRect imagesSliderTrack_;
     sf::FloatRect strengthSliderTrack_;
     sf::FloatRect btnClearInit_;
+    sf::FloatRect btnStrengthSubtle_;
+    sf::FloatRect btnStrengthMedium_;
+    sf::FloatRect btnStrengthStrong_;
     sf::FloatRect seedField_;
 
     // Slider drag state

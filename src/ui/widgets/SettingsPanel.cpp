@@ -228,7 +228,11 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                "Images", std::to_string(generationParams.numImages));
     y += 34.f;
 
-    // ── Img2img (only when init image is set) ────────────────────────────────
+    btnStrengthSubtle_ = {};
+    btnStrengthMedium_ = {};
+    btnStrengthStrong_ = {};
+
+    // ── Img2img edit controls (only when init image is set) ──────────────────
     if (!generationParams.initImagePath.empty()) {
         // Info row: filename + Clear button
         const std::string stem =
@@ -238,6 +242,26 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         btnClearInit_ = {x + pad + sliderW - 38.f, y + 2.f, 38.f, 18.f};
         drawButton(win, btnClearInit_, "Clear", Col::Panel2, Col::Muted, false, 10, font);
         y += 26.f;
+
+        drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
+        y += 18.f;
+        constexpr float editFieldH = 46.f;
+        editInstructionArea.setRect({x + pad, y, fw, editFieldH});
+        editInstructionArea.render(win, font);
+        y += editFieldH + 6.f;
+
+        drawText(win, font, "Strength presets:", Col::Muted, x + pad, y + 4.f, 11);
+        const sf::Color subtleCol = generationParams.strength <= 0.35f ? Col::GoldLt : Col::Text;
+        const sf::Color mediumCol = (generationParams.strength > 0.35f && generationParams.strength < 0.7f)
+            ? Col::GoldLt : Col::Text;
+        const sf::Color strongCol = generationParams.strength >= 0.7f ? Col::GoldLt : Col::Text;
+        btnStrengthSubtle_ = {x + pad + 110.f, y, 68.f, 22.f};
+        btnStrengthMedium_ = {x + pad + 184.f, y, 72.f, 22.f};
+        btnStrengthStrong_ = {x + pad + 262.f, y, 68.f, 22.f};
+        drawButton(win, btnStrengthSubtle_, "Subtle", Col::Panel2, subtleCol, false, 11, font);
+        drawButton(win, btnStrengthMedium_, "Medium", Col::Panel2, mediumCol, false, 11, font);
+        drawButton(win, btnStrengthStrong_, "Strong", Col::Panel2, strongCol, false, 11, font);
+        y += 28.f;
 
         // Strength slider (range 0.05–1.0 step 0.05)
         strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
@@ -395,6 +419,20 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     // Clear init image
     if (btnClearInit_.contains(pos)) {
         generationParams.initImagePath.clear();
+        editInstructionArea.setText({});
+        editInstructionArea.setActive(false);
+        return true;
+    }
+    if (btnStrengthSubtle_.contains(pos)) {
+        generationParams.strength = 0.25f;
+        return true;
+    }
+    if (btnStrengthMedium_.contains(pos)) {
+        generationParams.strength = 0.5f;
+        return true;
+    }
+    if (btnStrengthStrong_.contains(pos)) {
+        generationParams.strength = 0.8f;
         return true;
     }
 
@@ -402,12 +440,21 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     if (positiveArea.getRect().contains(pos)) {
         positiveArea.handleClick(pos);
         negativeArea.setActive(false);
+        editInstructionArea.setActive(false);
         seedInputActive = false;
         return true;
     }
     if (negativeArea.getRect().contains(pos)) {
         negativeArea.handleClick(pos);
         positiveArea.setActive(false);
+        editInstructionArea.setActive(false);
+        seedInputActive = false;
+        return true;
+    }
+    if (editInstructionArea.getRect().contains(pos)) {
+        editInstructionArea.handleClick(pos);
+        positiveArea.setActive(false);
+        negativeArea.setActive(false);
         seedInputActive = false;
         return true;
     }
@@ -415,6 +462,7 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
         seedInputActive = true;
         positiveArea.setActive(false);
         negativeArea.setActive(false);
+        editInstructionArea.setActive(false);
         return true;
     }
 
@@ -457,6 +505,7 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         const float delta = e.mouseWheelScroll.delta > 0 ? -1.f : 1.f;
         if (positiveArea.getRect().contains(pos)) { positiveArea.handleScroll(delta); return true; }
         if (negativeArea.getRect().contains(pos)) { negativeArea.handleScroll(delta); return true; }
+        if (editInstructionArea.getRect().contains(pos)) { editInstructionArea.handleScroll(delta); return true; }
     }
 
     // Mouse click
@@ -534,13 +583,20 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         return false;
     }
 
-    // Tab: cycle focus positive → negative → positive
+    // Tab: cycle focus positive → negative → edit → positive
     if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab) {
         if (positiveArea.isActive()) {
             positiveArea.setActive(false);
             negativeArea.setActive(true);
         } else if (negativeArea.isActive()) {
             negativeArea.setActive(false);
+            if (!generationParams.initImagePath.empty()) {
+                editInstructionArea.setActive(true);
+            } else {
+                positiveArea.setActive(true);
+            }
+        } else if (editInstructionArea.isActive()) {
+            editInstructionArea.setActive(false);
             positiveArea.setActive(true);
         }
         return true;
@@ -549,6 +605,7 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
     // Delegate text input to the active prompt field
     if (positiveArea.isActive() && positiveArea.handleEvent(e)) return true;
     if (negativeArea.isActive() && negativeArea.handleEvent(e)) return true;
+    if (editInstructionArea.isActive() && editInstructionArea.handleEvent(e)) return true;
 
     return false;
 }
