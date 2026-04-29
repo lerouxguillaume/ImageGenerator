@@ -20,7 +20,7 @@ It supports:
 4. At generation time, `PromptCompiler::compile(dsl, modelType)` produces the final string
 5. SD pipeline executes:
     - CLIP encoding
-    - (img2img) VAE encode input image → sample latent → add noise at start sigma
+    - (img2img) VAE encode input image → posterior mean latent → add noise at start sigma
     - UNet denoising loop (from `startStep` for img2img, from 0 for txt2img)
     - CFG guidance
     - Scheduler (DPM++ 2M Karras)

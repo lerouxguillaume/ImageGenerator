@@ -758,9 +758,12 @@ def simplify_with_onnxsim(path: str) -> None:
 
 
 def write_model_json(output_dir: str, model_type: str,
-                     specs: list[ExportComponentSpec] | None = None) -> None:
+                     specs: list[ExportComponentSpec] | None = None,
+                     vae_scaling_factor: float | None = None) -> None:
     """Write model.json consumed by the C++ runtime."""
     data: dict = {"type": model_type}
+    if vae_scaling_factor is not None:
+        data["vae_scaling_factor"] = float(vae_scaling_factor)
     if specs:
         components = {}
         for spec in specs:
@@ -773,7 +776,11 @@ def write_model_json(output_dir: str, model_type: str,
     path = os.path.join(output_dir, "model.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-    print(f"  Saved model.json  (type={model_type}, {len(data.get('components', {}))} component(s))")
+    print(
+        "  Saved model.json"
+        f"  (type={model_type}, vae_scaling_factor={data.get('vae_scaling_factor', 'default')},"
+        f" {len(data.get('components', {}))} component(s))"
+    )
 
 
 def consolidate_external_data(path: str) -> None:

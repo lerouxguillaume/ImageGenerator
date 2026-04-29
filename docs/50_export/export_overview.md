@@ -25,6 +25,7 @@ Each full export produces per component:
 The VAE encoder export (`export_vae_encoder.py`) adds:
 - `vae_encoder.onnx`
 - `vae_encoder.onnx.data`
+- updates `model.json` with the checkpoint VAE scaling factor used by img2img
 
 ---
 

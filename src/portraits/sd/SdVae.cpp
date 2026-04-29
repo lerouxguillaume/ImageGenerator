@@ -114,7 +114,6 @@ std::vector<float> encodeImage(const cv::Mat& img,
 
     auto& enc_tensor = enc_out.front();
     auto  type_info  = enc_tensor.GetTensorTypeAndShapeInfo();
-    auto  out_shape  = type_info.GetShape();
     const size_t total   = type_info.GetElementCount();
     const size_t latent_size = total / 2;   // first half = mean, second half = logvar
     const auto   elem_type  = type_info.GetElementType();
@@ -144,8 +143,8 @@ std::vector<float> encodeImage(const cv::Mat& img,
         }
     }
 
-    // Scale by the VAE encoder constant (matches diffusers DiagonalGaussianDistribution).
-    for (float& v : latent) v *= 0.18215f;
+    // Match diffusers' latent scaling with the factor stored for this model.
+    for (float& v : latent) v *= ctx.vaeScalingFactor;
 
     {
         float mn = 1e9f, mx = -1e9f, sum = 0.0f;

@@ -19,6 +19,7 @@ struct ModelConfig {
     int       T          = 1000;
     float     beta_start = 0.00085f;
     float     beta_end   = 0.012f;
+    float     vae_scaling_factor = 0.18215f;
 };
 
 // ── Runtime inference context ─────────────────────────────────────────────────
@@ -46,6 +47,7 @@ struct GenerationContext {
     bool vaeExpectsFp32       = false;  // queried at load time
     bool vaeEncoderAvailable  = false;  // true only if vae_encoder.onnx was loaded
     bool vaeEncoderExpectsFp32 = false;
+    float vaeScalingFactor    = 0.18215f;
 
     ModelType model_type = ModelType::SD15;
 

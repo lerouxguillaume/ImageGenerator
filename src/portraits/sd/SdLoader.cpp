@@ -169,10 +169,13 @@ namespace sd {
                 cfg.type    = ModelType::SDXL;
                 cfg.image_w = 1024;
                 cfg.image_h = 1024;
+                cfg.vae_scaling_factor = 0.13025f;
             }
+            cfg.vae_scaling_factor = j.value("vae_scaling_factor", cfg.vae_scaling_factor);
             Logger::info("model.json: type=" + type
                          + "  resolution=" + std::to_string(cfg.image_w)
-                         + "x" + std::to_string(cfg.image_h));
+                         + "x" + std::to_string(cfg.image_h)
+                         + "  vae_scaling_factor=" + std::to_string(cfg.vae_scaling_factor));
         } catch (const std::exception& e) {
             Logger::info(std::string("model.json parse error, defaulting to SD 1.5: ") + e.what());
         }
@@ -190,6 +193,7 @@ namespace sd {
         ModelInstance result;
         GenerationContext& ctx = result.ctx;
         ctx.model_type = cfg.type;
+        ctx.vaeScalingFactor = cfg.vae_scaling_factor;
         const int numThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
         Logger::info("=== loadModels ===");
         Logger::info("Model dir: " + modelDir);

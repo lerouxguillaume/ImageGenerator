@@ -76,6 +76,7 @@ def export_sd15(model_file: str, output_dir: str, *,
     t_total = time.time()
     print("Loading SD 1.5 pipeline ...")
     pipe = StableDiffusionPipeline.from_single_file(model_file, torch_dtype=torch.float16)
+    vae_scaling_factor = float(pipe.vae.config.scaling_factor)
 
     all_specs = []
 
@@ -150,7 +151,7 @@ def export_sd15(model_file: str, output_dir: str, *,
     all_specs.append(vae_spec)
     export_component_to_dir(output_dir, vae_spec)
 
-    write_model_json(output_dir, policy.model_type, all_specs)
+    write_model_json(output_dir, policy.model_type, all_specs, vae_scaling_factor)
     print(f"\n✅ All models exported to {output_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 

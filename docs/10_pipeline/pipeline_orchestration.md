@@ -11,7 +11,7 @@ Main entry:
 2. Text encoding (CLIP / SDXL dual encoder)
 3. Latent initialization
    - **txt2img**: pure Gaussian noise at `sigmas[0]`
-   - **img2img**: `encodeImage()` → sample latent → add noise at `sigmas[startStep]`
+   - **img2img**: `encodeImage()` → posterior mean latent → add noise at `sigmas[startStep]`
 4. Denoising loop (steps `startStep … numSteps-1`)
 5. CFG guidance
 6. Scheduler step updates
@@ -56,7 +56,7 @@ Controlled by two fields in `GenerationParams`:
 
 **Start step**: `startStep = int((1 - strength) * numSteps)`, clamped to `[0, numSteps-1]`.
 
-**Latent init**: input image is loaded with `cv::imread`, encoded via `sd::encodeImage()` (VAE encoder), then noise is added at `sigmas[startStep]` rather than `sigmas[0]`.
+**Latent init**: the input image is loaded and encoded **once before the per-image loop** via `sd::encodeImage()` with `sample=false` (posterior mean — deterministic). The same `initLatent` is reused for every image in the batch; per-image variety comes from the noise added at `sigmas[startStep]`, not from re-encoding. Noise is added at `sigmas[startStep]` rather than `sigmas[0]`.
 
 **Requires**: `vae_encoder.onnx` in the model directory. If absent, `runPipeline()` logs a warning and falls back to txt2img. Use `scripts/export_vae_encoder.py` to add it to an existing model.
 

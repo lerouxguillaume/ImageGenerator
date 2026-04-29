@@ -208,6 +208,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.cancelToken.store(false);
     rp.generationStep.store(0);
     rp.resultLoaded = false;
+    rp.displayedImagePath.clear();
     rp.generationFailed.store(false);
     rp.generationErrorMsg.clear();
 
@@ -400,7 +401,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         }
         if (view.resultPanel.useAsInitRequested) {
             view.resultPanel.useAsInitRequested = false;
-            view.settingsPanel.generationParams.initImagePath = view.resultPanel.lastImagePath;
+            view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
         }
         if (view.resultPanel.cancelToken.exchange(false))
             generationThread_.request_stop();
@@ -524,8 +525,10 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                         ? rp.lastImagePath + "_" + idx
                         : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
                 }
-                if (rp.resultTexture.loadFromFile(pathToLoad))
+                if (rp.resultTexture.loadFromFile(pathToLoad)) {
                     rp.resultLoaded = true;
+                    rp.displayedImagePath = pathToLoad;
+                }
             }
         }
     }

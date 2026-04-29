@@ -44,6 +44,19 @@ def _detect_model_type(model_dir: str) -> str:
     return "sd15"
 
 
+def _update_model_json(model_dir: str, *, model_type: str, vae_scaling_factor: float) -> None:
+    json_path = os.path.join(model_dir, "model.json")
+    data: dict = {"type": model_type}
+    if os.path.exists(json_path):
+        with open(json_path, encoding="utf-8") as f:
+            data = json.load(f)
+    data["type"] = model_type
+    data["vae_scaling_factor"] = float(vae_scaling_factor)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
 def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) -> None:
     check_dependencies(
         required=["torch", "diffusers", "transformers", "onnx"],
@@ -84,6 +97,8 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
         fix_fp32 = False
         fix_resize = False
 
+    vae_scaling_factor = float(pipe.vae.config.scaling_factor)
+
     img_h = latent_h * 8
     img_w = latent_w * 8
 
@@ -107,6 +122,7 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
         release_after=(vae_enc, pipe.vae, pipe),
     )
     export_component_to_dir(model_dir, spec)
+    _update_model_json(model_dir, model_type=model_type, vae_scaling_factor=vae_scaling_factor)
 
     print(f"\n✅ vae_encoder.onnx exported to {model_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")

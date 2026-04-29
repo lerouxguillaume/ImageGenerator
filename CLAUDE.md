@@ -80,6 +80,7 @@ This file is a **retrieval router** only. All implementation details live in `do
 # Critical invariants
 
 - Never hard-code fp16 dtype — use `ctx.unetExpectsFp32` / `ctx.vaeExpectsFp32` / `ctx.vaeEncoderExpectsFp32`
+- Never hard-code `0.18215f` as the VAE scaling factor — use `ctx.vaeScalingFactor` (SDXL default is `0.13025`)
 - Never pass `ctx.run_opts` to VAE `Run()` — use `Ort::RunOptions{nullptr}`
 - Never call `encodeImage()` without checking `ctx.vaeEncoderAvailable` first — session is null when `vae_encoder.onnx` is absent
 - Never reset `ctx.run_opts` manually in `runPipeline()` — `ModelManager::get()` owns this

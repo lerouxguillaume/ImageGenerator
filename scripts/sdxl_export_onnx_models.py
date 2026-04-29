@@ -108,6 +108,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     # Load as fp32 — UNet and VAE are cast to fp16 individually before export
     # to avoid a 10 GB fp32 ONNX intermediate.
     pipe = StableDiffusionXLPipeline.from_single_file(model_file, torch_dtype=torch.float32)
+    vae_scaling_factor = float(pipe.vae.config.scaling_factor)
     if optimize_memory:
         print("  Memory-optimized mode enabled: attention slicing ON")
         pipe.enable_attention_slicing()
@@ -219,7 +220,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     all_specs.append(vae_spec)
     export_component_to_dir(output_dir, vae_spec)
 
-    write_model_json(output_dir, policy.model_type, all_specs)
+    write_model_json(output_dir, policy.model_type, all_specs, vae_scaling_factor)
     print(f"\n✅ All models exported to {output_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 

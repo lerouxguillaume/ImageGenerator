@@ -22,6 +22,7 @@ public:
     std::atomic<int>  generationId{0};
     std::string       generationErrorMsg;
     std::string       lastImagePath;
+    std::string       displayedImagePath;
 
     // Action flag: set by handleEvent on Generate click; cleared by controller after launching
     bool generateRequested  = false;

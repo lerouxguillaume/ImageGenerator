@@ -100,13 +100,14 @@ Shows the full compiled positive including any quality boosters injected from `M
 
 State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
 Action flags: `generateRequested`, `useAsInitRequested`, `cancelToken`  
+Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown — differs from `lastImagePath` on multi-image runs where the last displayed image may be e.g. `img_1_3.png`).  
 Generate button at bottom of panel; progress overlay covers the image during generation.  
 Generated image displayed at native pixel size; downscaled only when larger than the panel.
 
 When `resultLoaded`:
 - `[Use as init]` button appears to the left of `[Generate]`
 - Clicking it sets `useAsInitRequested = true`
-- Controller responds by copying `lastImagePath` → `settingsPanel.generationParams.initImagePath`
+- Controller responds by copying `displayedImagePath` → `settingsPanel.generationParams.initImagePath`
 
 ## `LlmBar`
 
@@ -172,7 +173,7 @@ if (view.resultPanel.handleEvent(e)) {
     }
     if (view.resultPanel.useAsInitRequested) {
         view.resultPanel.useAsInitRequested = false;
-        view.settingsPanel.generationParams.initImagePath = view.resultPanel.lastImagePath;
+        view.settingsPanel.generationParams.initImagePath = view.resultPanel.displayedImagePath;
     }
     if (view.resultPanel.cancelToken.exchange(false))
         generationThread_.request_stop();  // bridges Cancel button → jthread stop_token

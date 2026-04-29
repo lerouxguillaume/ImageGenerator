@@ -167,7 +167,9 @@ void runPipeline(const std::string& prompt,
     auto alphas_cumprod = buildAlphasCumprod(cfg.T, cfg.beta_start, cfg.beta_end);
     auto sigmas         = buildKarrasSchedule(alphas_cumprod, num_steps);
 
-    // img2img: encode input image once, before the per-image loop.
+    // img2img: encode the input image once before the per-image loop.
+    // sample=false (posterior mean) is deterministic, so the latent is identical
+    // across all N images — no need to re-encode per iteration.
     std::vector<float> initLatent;
     int startStep = 0;
     if (!params.initImagePath.empty()) {
@@ -179,9 +181,9 @@ void runPipeline(const std::string& prompt,
                 Logger::error("img2img: could not read '" + params.initImagePath + "' — falling back to txt2img.");
             } else {
                 const float clampedStrength = std::max(0.0f, std::min(params.strength, 1.0f));
-                startStep   = static_cast<int>((1.0f - clampedStrength) * static_cast<float>(num_steps));
-                startStep   = std::max(0, std::min(startStep, num_steps - 1));
-                initLatent  = encodeImage(initImg, cfg.image_w, cfg.image_h, ctx, /*sample=*/true);
+                startStep  = static_cast<int>((1.0f - clampedStrength) * static_cast<float>(num_steps));
+                startStep  = std::max(0, std::min(startStep, num_steps - 1));
+                initLatent = encodeImage(initImg, cfg.image_w, cfg.image_h, ctx, /*sample=*/false);
                 Logger::info("img2img: strength=" + std::to_string(clampedStrength)
                              + "  startStep=" + std::to_string(startStep)
                              + "/" + std::to_string(num_steps));
