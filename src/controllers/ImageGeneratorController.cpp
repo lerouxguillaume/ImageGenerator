@@ -191,6 +191,13 @@ static std::filesystem::path rawPathForProcessed(const std::filesystem::path& pr
     return processedPath;
 }
 
+static std::filesystem::path phaseDir(const std::filesystem::path& base, int phase) {
+    return base / ("phase_" + std::to_string(phase));
+}
+static std::filesystem::path phaseTmpDir(const std::filesystem::path& base, int phase) {
+    return base / ("phase_" + std::to_string(phase) + "_tmp");
+}
+
 static std::filesystem::path referenceTempDir(const std::filesystem::path& baseDir) {
     return baseDir / ".reference_cache";
 }
@@ -264,8 +271,9 @@ static CandidateScore scoreWallCandidate(const std::string& processedPath,
     candidate.processedPath = processedPath;
     candidate.rawPath = rawPathForProcessed(processedPath).string();
 
+    // Score against the raw (512×768) image — spec coords are in canvas space
     sf::Image img;
-    if (!img.loadFromFile(processedPath))
+    if (!img.loadFromFile(candidate.rawPath) && !img.loadFromFile(processedPath))
         return candidate;
 
     const unsigned w = img.getSize().x;
@@ -276,24 +284,29 @@ static CandidateScore scoreWallCandidate(const std::string& processedPath,
     float score = 0.0f;
     if ((spec.canvasWidth > 0 && static_cast<int>(w) != spec.canvasWidth)
         || (spec.canvasHeight > 0 && static_cast<int>(h) != spec.canvasHeight)) {
-        score += 10000.0f;
+        score += 1000.0f;
     }
     if (spec.requiresTransparency && !hasAnyTransparency(img))
-        score += 10000.0f;
+        score += 500.0f;
 
     const auto bounds = computeOpaqueBoundsForScore(img);
     if (!bounds) {
-        score += 20000.0f;
+        score += 1000.0f;
         candidate.score = score;
         return candidate;
     }
 
     const float fillRatio = computeFillRatioForScore(img);
-    score += std::abs(fillRatio - spec.targetFillRatio) * 100.0f;
+    float fillPenalty = 0.f;
     if (fillRatio < spec.minFillRatio)
-        score += 5000.0f;
+        fillPenalty = (spec.minFillRatio - fillRatio) / std::max(spec.minFillRatio, 0.01f) * 300.f;
     else if (fillRatio > spec.maxFillRatio)
-        score += 2000.0f;
+        fillPenalty = (fillRatio - spec.maxFillRatio) / std::max(1.0f - spec.maxFillRatio, 0.01f) * 300.f;
+    else {
+        const float range = std::max(spec.maxFillRatio - spec.minFillRatio, 0.01f);
+        fillPenalty = std::abs(fillRatio - spec.targetFillRatio) / range * 100.f;
+    }
+    score += std::min(fillPenalty, 300.f);
 
     if (spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0) {
         const float boundsError =
@@ -301,7 +314,8 @@ static CandidateScore scoreWallCandidate(const std::string& processedPath,
             + std::abs(bounds->y - spec.expectedBounds.y)
             + std::abs(bounds->w - spec.expectedBounds.w)
             + std::abs(bounds->h - spec.expectedBounds.h));
-        score += boundsError * 3.0f;
+        const float maxErr = static_cast<float>(spec.expectedBounds.w + spec.expectedBounds.h);
+        score += std::min(boundsError / std::max(maxErr, 1.f) * 300.f, 300.f);
     }
 
     if (spec.anchor.x != 0 || spec.anchor.y != 0) {
@@ -309,7 +323,9 @@ static CandidateScore scoreWallCandidate(const std::string& processedPath,
         const int anchorY = bounds->y + bounds->h;
         const float dx = static_cast<float>(anchorX - spec.anchor.x);
         const float dy = static_cast<float>(anchorY - spec.anchor.y);
-        score += std::sqrt(dx * dx + dy * dy) * 2.0f;
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        const float maxDist = static_cast<float>(spec.canvasWidth + spec.canvasHeight) / 4.f;
+        score += std::min(dist / std::max(maxDist, 1.f) * 200.f, 200.f);
     }
 
     candidate.score = score;
@@ -511,29 +527,42 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         outDir /= projectContext_.outputSubpath;
     }
     const bool assetModeEnabled = !projectContext_.empty();
-    const std::filesystem::path rawDir = assetModeEnabled ? rawOutputDir(outDir) : outDir;
-    const std::filesystem::path processedDir = assetModeEnabled ? processedOutputDir(outDir) : outDir;
+    const bool isPhasedWorkflow = assetModeEnabled
+        && projectContext_.workflow == GenerationWorkflow::PhasedRefinement;
+
+    // Phase 1 is always triggered from the Generate button (targetPhase not yet set)
+    if (isPhasedWorkflow && phaseSession_.targetPhase == 0)
+        phaseSession_.targetPhase = 1;
+
+    std::filesystem::path rawDir, processedDir;
+    if (isPhasedWorkflow) {
+        const auto tmp = phaseTmpDir(outDir, phaseSession_.targetPhase);
+        rawDir       = tmp / "raw";
+        processedDir = tmp / "processed";
+    } else {
+        rawDir       = assetModeEnabled ? rawOutputDir(outDir) : outDir;
+        processedDir = assetModeEnabled ? processedOutputDir(outDir) : outDir;
+    }
     std::filesystem::create_directories(rawDir);
     if (assetModeEnabled)
         std::filesystem::create_directories(processedDir);
     const std::filesystem::path refCacheDir = referenceTempDir(outDir);
-    if (assetModeEnabled)
+    if (assetModeEnabled && !isPhasedWorkflow)
         std::filesystem::create_directories(refCacheDir);
 
     const std::string filename = "img_" + std::to_string(now) + ".png";
     const std::string rawOutPath = (rawDir / filename).string();
     rp.lastImagePath = (assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string();
-    lastBatchProcessedPaths_.clear();
+    phaseSession_.lastBatchRawPaths.clear();
     for (int i = 1; i <= sp.generationParams.numImages; ++i) {
-        if (i == 1) {
-            lastBatchProcessedPaths_.push_back((assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string());
-            continue;
-        }
-        const auto dot = filename.rfind('.');
-        const std::string nthName = (dot == std::string::npos)
-            ? filename + "_" + std::to_string(i)
-            : filename.substr(0, dot) + "_" + std::to_string(i) + filename.substr(dot);
-        lastBatchProcessedPaths_.push_back((assetModeEnabled ? (processedDir / nthName) : (rawDir / nthName)).string());
+        const std::string nthName = [&]() -> std::string {
+            if (i == 1) return filename;
+            const auto dot = filename.rfind('.');
+            return dot == std::string::npos
+                ? filename + "_" + std::to_string(i)
+                : filename.substr(0, dot) + "_" + std::to_string(i) + filename.substr(dot);
+        }();
+        phaseSession_.lastBatchRawPaths.push_back((rawDir / nthName).string());
     }
 
     rp.generating = true;
@@ -573,18 +602,17 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rawOutPath;
     GenerationParams params = sp.generationParams;
-    const bool refinementUsed = pendingWallRefinement_ && !pendingWallRefinementSourcePath_.empty();
-    const std::string refinementSourcePath = pendingWallRefinementSourcePath_;
-    const float refinementStrength = pendingWallRefinementStrength_;
-    const int refinementAutoRound = pendingWallRefinementAutoRound_;
+    // For PhasedRefinement: use sourcePath as img2img init (phase 2+)
+    const bool refinementUsed = isPhasedWorkflow && !phaseSession_.sourcePath.empty();
+    const std::string refinementSourcePath = phaseSession_.sourcePath;
+    const float refinementStrength = phaseSession_.refinementStrength;
     if (refinementUsed) {
         params.initImagePath = refinementSourcePath;
         params.strength = refinementStrength;
+        // Phase 2+ count = Phase 1 count / 2 (at least 1)
+        params.numImages = std::max(1, params.numImages / 2);
     }
-    pendingWallRefinement_ = false;
-    pendingWallRefinementSourcePath_.clear();
-    pendingWallRefinementStrength_ = 0.0f;
-    pendingWallRefinementAutoRound_ = 0;
+    phaseSession_.sourcePath.clear(); // consumed
     if (!sp.seedInput.empty()) {
         try { params.seed = std::stoll(sp.seedInput); }
         catch (const std::exception&) { params.seed = -1; }
@@ -604,7 +632,8 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::string*       errorMsg = &rp.generationErrorMsg;
     const bool requiresTransparency = projectContext_.spec.requiresTransparency;
     const AssetExportSpec exportSpec = projectContext_.exportSpec;
-    const bool referenceEnabled = projectContext_.referenceEnabled;
+    // Reference-based img2img is disabled for PhasedRefinement — we use sourcePath instead
+    const bool referenceEnabled = !isPhasedWorkflow && projectContext_.referenceEnabled;
     const std::string referenceImagePath = projectContext_.referenceImagePath;
     const float structureStrength = projectContext_.structureStrength;
     const int generationWidth = std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
@@ -615,9 +644,9 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     generationThread_ = std::jthread(
         [prompt, negPrompt, outPath, params, modelDir,
          done, step, idPtr, imgNum, myId, failed, errorMsg,
-         requiresTransparency, assetModeEnabled, processedDir, exportSpec,
+         requiresTransparency, assetModeEnabled, isPhasedWorkflow, processedDir, exportSpec,
          referenceEnabled, referenceImagePath, structureStrength,
-         refinementUsed, refinementSourcePath, refinementStrength, refinementAutoRound,
+         refinementUsed, refinementSourcePath, refinementStrength,
          generationWidth, generationHeight, refCacheDir]
         (std::stop_token st) {
             try {
@@ -675,7 +704,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
                     metaJson["refinementUsed"] = refinementUsed;
                     metaJson["refinementSource"] = refinementUsed ? refinementSourcePath : std::string{};
                     metaJson["refinementStrength"] = refinementUsed ? refinementStrength : 0.0f;
-                    metaJson["refinementAutoRound"] = refinementAutoRound;
+                    metaJson["refinementPhase"] = isPhasedWorkflow ? 1 : 0;
                     std::ofstream meta(metadataPathFor(processedPath.string()));
                     meta << metaJson.dump(4);
                 };
@@ -701,57 +730,61 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         });
 }
 
-void ImageGeneratorController::launchWallRefinement(ImageGeneratorView& view) {
+void ImageGeneratorController::launchPhaseRefinement(ImageGeneratorView& view, bool useSelected) {
     auto& rp = view.resultPanel;
     if (projectContext_.empty()
-        || projectContext_.spec.orientation != Orientation::LeftWall
-        || projectContext_.referenceImagePath.empty()) {
-        rp.generating = false;
+        || projectContext_.workflow != GenerationWorkflow::PhasedRefinement) {
         rp.generationFailed.store(true);
-        rp.generationErrorMsg = "Wall refinement is only available for left-wall asset generation.";
+        rp.generationErrorMsg = "Phase refinement is only available for PhasedRefinement assets.";
+        return;
+    }
+    if (phaseSession_.currentPhase <= 0) {
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "Run Phase 1 (Generate) before refining.";
+        return;
+    }
+    if (phaseSession_.currentPhase >= phaseSession_.maxPhases) {
+        Logger::info("Phase refinement: already at max phases (" + std::to_string(phaseSession_.maxPhases) + ")");
         return;
     }
 
-    const auto best = findBestWallCandidate(rp, projectContext_.spec);
-    if (!best || best->rawPath.empty() || !std::filesystem::exists(best->rawPath)) {
-        rp.generating = false;
+    // Pick source raw image
+    std::string sourcePath;
+    if (useSelected && rp.selectedIndex >= 0 && rp.selectedIndex < static_cast<int>(rp.gallery.size())) {
+        sourcePath = rawPathForProcessed(rp.gallery[static_cast<size_t>(rp.selectedIndex)].path).string();
+    } else {
+        const auto best = findBestWallCandidate(rp, projectContext_.spec);
+        if (!best || !best->valid || best->rawPath.empty()) {
+            rp.generationFailed.store(true);
+            rp.generationErrorMsg = "No scoreable candidate found to refine from.";
+            return;
+        }
+        sourcePath = best->rawPath;
+    }
+    if (!std::filesystem::exists(sourcePath)) {
         rp.generationFailed.store(true);
-        rp.generationErrorMsg = "No usable wall candidate found to refine.";
+        rp.generationErrorMsg = "Source raw image for refinement not found.";
         return;
     }
 
-    pendingWallRefinement_ = true;
-    pendingWallRefinementSourcePath_ = best->rawPath;
-    pendingWallRefinementStrength_ = std::min(projectContext_.structureStrength, 0.30f);
-    pendingWallRefinementAutoRound_ = autoWallRefinementActive_ ? autoWallRefinementRound_ : 0;
+    const int targetPhase = phaseSession_.currentPhase + 1;
+    std::filesystem::path outDir = config.outputDir;
+    if (!projectContext_.outputSubpath.empty())
+        outDir /= projectContext_.outputSubpath;
+
+    // If target phase directory already exists, ask for confirmation before overwriting
+    if (std::filesystem::exists(phaseDir(outDir, targetPhase))) {
+        phaseSession_.sourcePath    = sourcePath;
+        phaseSession_.targetPhase   = targetPhase;
+        phaseSession_.awaitingConfirm = true;
+        rp.showPhaseReplaceConfirm    = true;
+        rp.phaseReplaceConfirmPhase   = targetPhase - 1; // 0-based for display
+        return;
+    }
+
+    phaseSession_.sourcePath  = sourcePath;
+    phaseSession_.targetPhase = targetPhase;
     launchGeneration(view);
-}
-
-void ImageGeneratorController::startAutoWallRefinement(ImageGeneratorView& view) {
-    auto& rp = view.resultPanel;
-    if (projectContext_.empty()
-        || projectContext_.spec.orientation != Orientation::LeftWall
-        || projectContext_.referenceImagePath.empty()) {
-        rp.generating = false;
-        rp.generationFailed.store(true);
-        rp.generationErrorMsg = "Auto refinement is only available for left-wall asset generation.";
-        return;
-    }
-
-    const auto best = findBestWallCandidate(rp, projectContext_.spec);
-    if (!best || !best->valid) {
-        rp.generating = false;
-        rp.generationFailed.store(true);
-        rp.generationErrorMsg = "No usable wall candidate found to auto-refine.";
-        return;
-    }
-
-    autoWallRefinementActive_ = true;
-    autoWallRefinementRound_ = 1;
-    autoWallRefinementMaxRounds_ = 2;
-    autoWallRefinementBestScore_ = best->score;
-    autoWallRefinementStrength_ = std::min(projectContext_.structureStrength, 0.30f);
-    launchWallRefinement(view);
 }
 
 void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
@@ -859,8 +892,49 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
     std::filesystem::path galleryBaseDir = config.outputDir;
     if (!projectContext_.outputSubpath.empty())
         galleryBaseDir /= projectContext_.outputSubpath;
-    const std::filesystem::path galleryDir =
-        projectContext_.empty() ? galleryBaseDir : processedOutputDir(galleryBaseDir);
+    const bool isPhasedWorkflow = !projectContext_.empty()
+        && projectContext_.workflow == GenerationWorkflow::PhasedRefinement;
+
+    // Build phase tabs and pick gallery directory
+    if (isPhasedWorkflow) {
+        std::vector<ResultPanel::PhaseTab> newTabs;
+        for (int p = 1; p <= phaseSession_.maxPhases; ++p) {
+            if (std::filesystem::exists(phaseDir(galleryBaseDir, p), ec))
+                newTabs.push_back({p, "Phase " + std::to_string(p)});
+        }
+        rp.phaseTabs  = std::move(newTabs);
+        rp.showPhaseTabs = !rp.phaseTabs.empty();
+        // Clamp activePhaseTabIndex
+        if (rp.phaseTabs.empty()) {
+            rp.activePhaseTabIndex = 0;
+        } else {
+            rp.activePhaseTabIndex = std::clamp(rp.activePhaseTabIndex, 0,
+                                                 static_cast<int>(rp.phaseTabs.size()) - 1);
+        }
+        // Phase indicator
+        rp.phaseIndicatorCurrent = rp.phaseTabs.empty() ? 0
+            : rp.phaseTabs[static_cast<size_t>(rp.activePhaseTabIndex)].phase;
+        rp.phaseIndicatorMax = phaseSession_.maxPhases;
+        // Refine button visibility: show when not at max phase
+        rp.showRefineButton    = phaseSession_.currentPhase > 0
+            && phaseSession_.currentPhase < phaseSession_.maxPhases;
+        rp.showAutoRefineToggle = rp.showRefineButton;
+    } else {
+        rp.showPhaseTabs = false;
+        rp.phaseTabs.clear();
+    }
+
+    // Determine which directory to scan for gallery images
+    std::filesystem::path galleryDir;
+    if (isPhasedWorkflow && !rp.phaseTabs.empty()) {
+        const int activePhase = rp.phaseTabs[static_cast<size_t>(rp.activePhaseTabIndex)].phase;
+        galleryDir = phaseDir(galleryBaseDir, activePhase) / "processed";
+    } else if (!projectContext_.empty()) {
+        galleryDir = processedOutputDir(galleryBaseDir);
+    } else {
+        galleryDir = galleryBaseDir;
+    }
+
     if (std::filesystem::exists(galleryDir, ec)) {
         for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
             if (!entry.is_regular_file()) continue;
@@ -916,7 +990,7 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
 
     selectGalleryImage(view, selected);
 
-    if (projectContext_.spec.orientation == Orientation::LeftWall && !rp.gallery.empty()) {
+    if (isPhasedWorkflow && !rp.gallery.empty()) {
         const auto best = findBestWallCandidate(rp, projectContext_.spec);
         rp.bestWallCandidateScore = (best && best->valid) ? best->score : -1.f;
     } else {
@@ -1058,14 +1132,29 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
                 pendingEditNavigationPath_ = view.resultPanel.displayedImagePath;
             }
         }
-        if (view.resultPanel.refineBestRequested) {
-            view.resultPanel.refineBestRequested = false;
-            autoWallRefinementActive_ = false;
-            launchWallRefinement(view);
+        if (view.resultPanel.refineRequested) {
+            view.resultPanel.refineRequested = false;
+            launchPhaseRefinement(view, view.resultPanel.refineUsesSelected);
         }
-        if (view.resultPanel.autoRefineRequested) {
-            view.resultPanel.autoRefineRequested = false;
-            startAutoWallRefinement(view);
+        if (view.resultPanel.autoRefineToggled) {
+            view.resultPanel.autoRefineToggled = false;
+            phaseSession_.autoRefine = !phaseSession_.autoRefine;
+            view.resultPanel.autoRefineEnabled = phaseSession_.autoRefine;
+        }
+        if (view.resultPanel.phaseReplaceConfirmed) {
+            view.resultPanel.phaseReplaceConfirmed = false;
+            phaseSession_.awaitingConfirm = false;
+            launchGeneration(view);
+        }
+        if (view.resultPanel.phaseReplaceCancelled) {
+            view.resultPanel.phaseReplaceCancelled = false;
+            phaseSession_.awaitingConfirm = false;
+            phaseSession_.sourcePath.clear();
+            phaseSession_.targetPhase = 0;
+        }
+        if (view.resultPanel.phaseTabChanged) {
+            view.resultPanel.phaseTabChanged = false;
+            refreshGallery(view);
         }
         if (view.resultPanel.deleteRequested) {
             view.resultPanel.deleteRequested = false;
@@ -1205,42 +1294,65 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         generationThread_.join(); // instant: thread already set done before returning
         rp.generationDone.store(false);
 
+        const bool isPhasedWorkflow = !projectContext_.empty()
+            && projectContext_.workflow == GenerationWorkflow::PhasedRefinement;
+
         if (rp.generating) { // false when user cancelled
             rp.generating = false;
             if (!rp.generationFailed.load()) {
-                std::string preferred = rp.lastImagePath;
-                const int n = sp.generationParams.numImages;
-                if (n > 1) {
-                    const auto dot = rp.lastImagePath.rfind('.');
-                    const std::string idx = std::to_string(n);
-                    preferred = (dot == std::string::npos)
-                        ? rp.lastImagePath + "_" + idx
-                        : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
+                // For PhasedRefinement: rename phase_N_tmp → phase_N
+                if (isPhasedWorkflow && phaseSession_.targetPhase > 0) {
+                    std::filesystem::path outDir = config.outputDir;
+                    if (!projectContext_.outputSubpath.empty())
+                        outDir /= projectContext_.outputSubpath;
+                    const auto tmpDir    = phaseTmpDir(outDir, phaseSession_.targetPhase);
+                    const auto finalDir  = phaseDir(outDir, phaseSession_.targetPhase);
+                    std::error_code ec;
+                    // Remove existing phase dir if replacing
+                    if (std::filesystem::exists(finalDir, ec))
+                        std::filesystem::remove_all(finalDir, ec);
+                    std::filesystem::rename(tmpDir, finalDir, ec);
+                    if (ec) {
+                        Logger::error("Failed to promote phase dir: " + ec.message());
+                    } else {
+                        phaseSession_.currentPhase = phaseSession_.targetPhase;
+                        Logger::info("Phase " + std::to_string(phaseSession_.currentPhase) + " complete.");
+                    }
+                    phaseSession_.targetPhase = 0;
+                    // Switch gallery to the new phase tab
+                    rp.activePhaseTabIndex = phaseSession_.currentPhase - 1;
                 }
-                refreshGallery(view, preferred);
-                if (autoWallRefinementActive_) {
-                    const auto batchBest = findBestWallCandidateInPaths(lastBatchProcessedPaths_, projectContext_.spec);
-                    if (batchBest
-                        && batchBest->score + 0.5f < autoWallRefinementBestScore_
-                        && autoWallRefinementRound_ < autoWallRefinementMaxRounds_
+                refreshGallery(view, rp.lastImagePath);
+
+                // Auto-refine: if enabled and score above threshold and more phases remain
+                if (isPhasedWorkflow && phaseSession_.autoRefine
+                    && phaseSession_.currentPhase > 0
+                    && phaseSession_.currentPhase < phaseSession_.maxPhases) {
+                    const auto batchBest = findBestWallCandidateInPaths(
+                        phaseSession_.lastBatchRawPaths, projectContext_.spec);
+                    if (batchBest && batchBest->valid
+                        && batchBest->score > phaseSession_.scoreThreshold
                         && std::filesystem::exists(batchBest->rawPath)) {
-                        autoWallRefinementBestScore_ = batchBest->score;
-                        autoWallRefinementRound_ += 1;
-                        autoWallRefinementStrength_ = std::max(0.22f, autoWallRefinementStrength_ - 0.04f);
-                        pendingWallRefinement_ = true;
-                        pendingWallRefinementSourcePath_ = batchBest->rawPath;
-                        pendingWallRefinementStrength_ = autoWallRefinementStrength_;
-                        pendingWallRefinementAutoRound_ = autoWallRefinementRound_;
+                        Logger::info("Auto-refine: score " + std::to_string(batchBest->score)
+                            + " > threshold " + std::to_string(phaseSession_.scoreThreshold)
+                            + " → launching phase " + std::to_string(phaseSession_.currentPhase + 1));
+                        phaseSession_.sourcePath  = batchBest->rawPath;
+                        phaseSession_.targetPhase = phaseSession_.currentPhase + 1;
                         launchGeneration(view);
                     } else {
-                        autoWallRefinementActive_ = false;
+                        Logger::info("Auto-refine: stopping (score met threshold or no raw found).");
                     }
                 }
-            } else {
-                autoWallRefinementActive_ = false;
             }
-        } else {
-            autoWallRefinementActive_ = false;
+        } else if (isPhasedWorkflow && phaseSession_.targetPhase > 0) {
+            // User cancelled — clean up the tmp dir
+            std::filesystem::path outDir = config.outputDir;
+            if (!projectContext_.outputSubpath.empty())
+                outDir /= projectContext_.outputSubpath;
+            std::error_code ec;
+            std::filesystem::remove_all(phaseTmpDir(outDir, phaseSession_.targetPhase), ec);
+            phaseSession_.targetPhase = 0;
+            phaseSession_.sourcePath.clear();
         }
     }
 
@@ -1285,6 +1397,16 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                 }
                 refreshGallery(view);
             }
+    }
+
+    // Sync PhasedRefinement UI state every frame
+    if (!projectContext_.empty() && projectContext_.workflow == GenerationWorkflow::PhasedRefinement) {
+        rp.refineUsesSelected = (rp.selectedIndex >= 0);
+        rp.refineEnabled = !rp.generating && phaseSession_.currentPhase > 0
+            && phaseSession_.currentPhase < phaseSession_.maxPhases;
+        rp.phaseIndicatorCurrent = phaseSession_.currentPhase;
+        rp.phaseIndicatorMax     = phaseSession_.maxPhases;
+        rp.autoRefineEnabled     = phaseSession_.autoRefine;
     }
 
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
@@ -1337,6 +1459,19 @@ void ImageGeneratorController::activateProjectSession(ImageGeneratorView& view, 
     view.settingsPanel.positiveArea.setText(PromptCompiler::compile(ctx.assetTypeTokens, ModelType::SDXL));
     view.settingsPanel.negativeArea.setText(PromptCompiler::compileNegative(ctx.assetTypeTokens));
     dslDirty_ = true;
+    // Reset phase session when switching asset types; detect existing phases from disk
+    phaseSession_ = {};
+    if (ctx.workflow == GenerationWorkflow::PhasedRefinement) {
+        std::filesystem::path outDir = config.outputDir;
+        if (!ctx.outputSubpath.empty())
+            outDir /= ctx.outputSubpath;
+        for (int p = phaseSession_.maxPhases; p >= 1; --p) {
+            if (std::filesystem::exists(phaseDir(outDir, p))) {
+                phaseSession_.currentPhase = p;
+                break;
+            }
+        }
+    }
 }
 
 ResolvedProjectContext ImageGeneratorController::getProjectContext() const {

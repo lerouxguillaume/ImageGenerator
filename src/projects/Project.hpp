@@ -32,6 +32,9 @@ enum class ShapePolicy { Freeform, Bounded, SilhouetteLocked };
 // How the generated image is fit to the target canvas.
 enum class AssetFitMode { ObjectFit, TileExact, NoResize };
 
+// Generation strategy for an asset type.
+enum class GenerationWorkflow { Standard, PhasedRefinement };
+
 struct Anchor        { int x = 0; int y = 0; };
 struct OccupiedBounds { int x = 0; int y = 0; int w = 0; int h = 0; };
 
@@ -75,15 +78,16 @@ struct AssetSpec {
 };
 
 struct AssetType {
-    std::string      id;
-    std::string      name;
-    Prompt           promptTokens;
-    AssetConstraints constraints;
-    AssetSpec        spec;
-    AssetExportSpec  exportSpec;
-    bool             referenceEnabled = false;
-    std::string      referenceImagePath;
-    float            structureStrength = 0.45f;
+    std::string        id;
+    std::string        name;
+    Prompt             promptTokens;
+    AssetConstraints   constraints;
+    AssetSpec          spec;
+    AssetExportSpec    exportSpec;
+    bool               referenceEnabled = false;
+    std::string        referenceImagePath;
+    float              structureStrength  = 0.45f;
+    GenerationWorkflow workflow           = GenerationWorkflow::Standard;
 };
 
 struct Project {
@@ -111,9 +115,10 @@ struct ResolvedProjectContext {
     Prompt      assetTypeTokens;
     AssetSpec   spec;             // production contract for the active asset type
     AssetExportSpec exportSpec;   // deterministic post-process export contract
-    bool        referenceEnabled = false;
-    std::string referenceImagePath;
-    float       structureStrength = 0.45f;
+    bool               referenceEnabled   = false;
+    std::string        referenceImagePath;
+    float              structureStrength  = 0.45f;
+    GenerationWorkflow workflow           = GenerationWorkflow::Standard;
     std::string            outputSubpath; // sanitised relative path, e.g. "Medieval Dungeon/Wall Tile"
     std::vector<AssetType> allAssetTypes; // all types in the project, used to populate gallery tabs
 

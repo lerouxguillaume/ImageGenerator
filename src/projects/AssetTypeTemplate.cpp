@@ -78,9 +78,10 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{false, false, true, false},
         makeWallLeftSpec(),
         makeObjectFitExport(128, 192, 112, 176, 8),
-        true,
-        "assets/references/wall_left.pgm",
+        false,
+        {},
         0.34f,
+        GenerationWorkflow::PhasedRefinement,
         {"modular", "tileable", "vertical", "left_wall"}
     },
     {
@@ -95,6 +96,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.45f,
+        GenerationWorkflow::Standard,
         {"floor", "tileable", "ground"}
     },
     {
@@ -109,6 +111,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.45f,
+        GenerationWorkflow::Standard,
         {"corner", "wall", "modular"}
     },
     {
@@ -123,6 +126,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.45f,
+        GenerationWorkflow::Standard,
         {"entry", "prop"}
     },
     {
@@ -137,6 +141,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.45f,
+        GenerationWorkflow::Standard,
         {"elevation", "transition"}
     },
     {
@@ -151,6 +156,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.45f,
+        GenerationWorkflow::Standard,
         {"object", "generic"}
     }
 };

@@ -421,8 +421,7 @@ void ProjectView::render(sf::RenderWindow& win) {
         }
         if (!selectedAsset) return;
         wallRefinementEligible =
-            selectedAsset->spec.orientation == Orientation::LeftWall
-            && !selectedAsset->referenceImagePath.empty();
+            selectedAsset->workflow == GenerationWorkflow::PhasedRefinement;
 
         Helpers::drawText(win, font, selectedAsset->name, colors.goldLt, detailX + metrics.spaceMd, assetWorkspaceY + 14.f, type.subsectionTitle, true);
         Helpers::drawText(win, font, "Asset prompt", colors.muted, detailX + metrics.spaceMd, assetWorkspaceY + 36.f, type.compact, false);
@@ -561,40 +560,46 @@ void ProjectView::render(sf::RenderWindow& win) {
                                    fieldRect.left + fieldRect.width / 2.f, fieldRect.top + 8.f, type.body, false);
             }
 
-            const float wallToolsLabelY = fieldY0 + 2.f * (metrics.toolbarFieldHeight + metrics.spaceXs + 12.f) + 8.f;
-            Helpers::drawText(win, font, "Wall reference", colors.muted,
-                              chipX0, wallToolsLabelY, type.compact, false);
+            if (selectedAsset->workflow != GenerationWorkflow::PhasedRefinement) {
+                const float wallToolsLabelY = fieldY0 + 2.f * (metrics.toolbarFieldHeight + metrics.spaceXs + 12.f) + 8.f;
+                Helpers::drawText(win, font, "Wall reference", colors.muted,
+                                  chipX0, wallToolsLabelY, type.compact, false);
 
-            assetReferenceToggle = {chipX0, wallToolsLabelY + 16.f, chip2W, chipH};
-            drawButton(win, assetReferenceToggle,
-                       selectedAsset->referenceEnabled ? "Ref Shape On" : "Ref Shape Off",
-                       selectedAsset->referenceEnabled ? colors.blue : colors.panel,
-                       selectedAsset->referenceEnabled ? colors.goldLt : colors.muted,
-                       false, type.compact, font);
+                assetReferenceToggle = {chipX0, wallToolsLabelY + 16.f, chip2W, chipH};
+                drawButton(win, assetReferenceToggle,
+                           selectedAsset->referenceEnabled ? "Ref Shape On" : "Ref Shape Off",
+                           selectedAsset->referenceEnabled ? colors.blue : colors.panel,
+                           selectedAsset->referenceEnabled ? colors.goldLt : colors.muted,
+                           false, type.compact, font);
 
-            const float sliderX = chipX0 + chip2W + metrics.spaceSm;
-            const float sliderW = chip2W;
-            const float sliderY = wallToolsLabelY + 18.f;
-            assetStructureSliderTrack = {sliderX, sliderY + 11.f, sliderW, 6.f};
-            const float clampedStrength = std::clamp(selectedAsset->structureStrength, 0.30f, 0.60f);
-            const float sliderT = (clampedStrength - 0.30f) / 0.30f;
-            const float knobX = sliderX + sliderT * sliderW;
-            assetStructureSliderKnob = {knobX - 7.f, sliderY + 5.f, 14.f, 18.f};
-            Helpers::drawRect(win, assetStructureSliderTrack, colors.surfaceInset, colors.border, metrics.borderWidth);
-            Helpers::drawRect(win, {sliderX, sliderY + 11.f, sliderW * sliderT, 6.f}, colors.blue, sf::Color::Transparent, 0.f);
-            Helpers::drawRect(win, assetStructureSliderKnob, colors.panel2, colors.goldLt, metrics.borderWidth);
-            char strengthBuf[16];
-            std::snprintf(strengthBuf, sizeof(strengthBuf), "Strength %.2f", selectedAsset->structureStrength);
-            Helpers::drawTextC(win, font, strengthBuf, colors.goldLt,
-                               sliderX + sliderW / 2.f, sliderY - 10.f, type.compact, false);
+                const float sliderX = chipX0 + chip2W + metrics.spaceSm;
+                const float sliderW = chip2W;
+                const float sliderY = wallToolsLabelY + 18.f;
+                assetStructureSliderTrack = {sliderX, sliderY + 11.f, sliderW, 6.f};
+                const float clampedStrength = std::clamp(selectedAsset->structureStrength, 0.30f, 0.60f);
+                const float sliderT = (clampedStrength - 0.30f) / 0.30f;
+                const float knobX = sliderX + sliderT * sliderW;
+                assetStructureSliderKnob = {knobX - 7.f, sliderY + 5.f, 14.f, 18.f};
+                Helpers::drawRect(win, assetStructureSliderTrack, colors.surfaceInset, colors.border, metrics.borderWidth);
+                Helpers::drawRect(win, {sliderX, sliderY + 11.f, sliderW * sliderT, 6.f}, colors.blue, sf::Color::Transparent, 0.f);
+                Helpers::drawRect(win, assetStructureSliderKnob, colors.panel2, colors.goldLt, metrics.borderWidth);
+                char strengthBuf[16];
+                std::snprintf(strengthBuf, sizeof(strengthBuf), "Strength %.2f", selectedAsset->structureStrength);
+                Helpers::drawTextC(win, font, strengthBuf, colors.goldLt,
+                                   sliderX + sliderW / 2.f, sliderY - 10.f, type.compact, false);
+            } else {
+                assetReferenceToggle      = {};
+                assetStructureSliderTrack = {};
+                assetStructureSliderKnob  = {};
+            }
         }
     }
 
     generatorView.resultPanel.showImproveButton = false;
     generatorView.resultPanel.showTabs = false;
     generatorView.resultPanel.showOutputModeToggle = true;
-    generatorView.resultPanel.showRefineBestButton = wallRefinementEligible;
-    generatorView.resultPanel.showAutoRefineButton = wallRefinementEligible;
+    generatorView.resultPanel.showRefineButton      = wallRefinementEligible;
+    generatorView.resultPanel.showAutoRefineToggle  = wallRefinementEligible;
 
     Helpers::drawRect(win, {resultX, railY, resultW, railH}, colors.panel2, colors.border, metrics.borderWidth);
     Helpers::drawText(win, font, "Results", colors.gold, resultX + metrics.spaceMd, railY + metrics.spaceMd, type.sectionTitle, true);

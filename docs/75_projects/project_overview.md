@@ -22,7 +22,8 @@ Project
     ├── AssetConstraints — per-asset overrides and additions (see below)
     ├── AssetSpec     — formal production contract (see below)
     ├── AssetExportSpec — deterministic post-process/export contract (see below)
-    └── reference state — optional reference-driven img2img settings
+    ├── workflow      — GenerationWorkflow (Standard or PhasedRefinement)
+    └── reference state — optional reference-driven img2img settings (Standard only)
 ```
 
 Key files:
@@ -141,9 +142,28 @@ Defined on `AssetType`. Describes how raw generated output is normalized after g
 
 ---
 
+## Generation Workflow
+
+Each asset type has a `workflow` field that controls how generation is orchestrated:
+
+```cpp
+enum class GenerationWorkflow { Standard, PhasedRefinement };
+```
+
+| Value | Behaviour |
+|---|---|
+| `Standard` | Single-phase txt2img or reference-driven img2img. Output goes to `raw/` + `processed/`. |
+| `PhasedRefinement` | Multi-phase: Phase 1 is txt2img, Phase 2+ are img2img from the best prior phase raw. Each phase has its own `phase_N/raw/` and `phase_N/processed/` directory. Reference-driven img2img is disabled. |
+
+`workflow` is persisted in `projects.json` and carried in `ResolvedProjectContext`. Only `wall_left` uses `PhasedRefinement` by default.
+
+See `docs/75_projects/wall_refinement_plan.md` for the full PhasedRefinement specification.
+
+---
+
 ## Reference-driven generation state
 
-Defined on `AssetType`.
+Defined on `AssetType`. Only used when `workflow == Standard`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -151,21 +171,16 @@ Defined on `AssetType`.
 | `referenceImagePath` | `std::string` | empty | Reference image path, relative to the working directory unless absolute |
 | `structureStrength` | `float` | `0.45` | Img2img denoise strength used for structure preservation |
 
-Current built-in behavior:
+Generation only uses this path when `workflow == Standard`, in project asset mode, and only when the reference file exists.
 
-- `wall_left` ships with a default reference image:
-  - `assets/references/wall_left.pgm`
-- `wall_left` enables reference-driven img2img by default with `structureStrength = 0.34`
+For `PhasedRefinement` assets, the `Ref Shape On/Off` toggle and `Structure strength` slider are hidden in the project UI.
 
-Generation only uses this path in project asset mode and only when the reference file exists.
-
-Current wall-focused UI controls:
+Standard workflow UI controls (hidden for PhasedRefinement):
 
 - `Ref Shape On/Off` toggle in the asset detail panel
 - `Structure strength` slider, clamped to `0.30 - 0.60`
-- result-panel `Processed` / `Raw` preview toggle
 
-The result panel also shows whether the selected candidate used a reference-driven path and, when applicable, the structure strength used for that generation.
+Both workflows provide the result-panel `Processed` / `Raw` preview toggle.
 
 ---
 
@@ -174,7 +189,7 @@ The result panel also shows whether the selected candidate used a reference-driv
 Built-in templates are defined in code in `src/projects/AssetTypeTemplate.cpp`.
 
 Current templates:
-- `Wall Left` (`wall_left`) — `LeftWall`, `Bounded`, tileable, fixed generation canvas `512×768`, default reference enabled
+- `Wall Left` (`wall_left`) — `LeftWall`, `Bounded`, tileable, fixed generation canvas `512×768`, `PhasedRefinement` workflow, reference disabled
 - `Floor Tile` — `FloorTile`, `Bounded`, tileable, fill 0.6–0.95
 - `Corner Wall` — `Unset`, `Bounded`, fill 0.4–0.85
 - `Door` — `LeftWall`, `Bounded`, fill 0.45–0.8
@@ -212,7 +227,8 @@ Carries everything `ImageGeneratorController` needs for one generation session:
 | `constraintTokens` | compiled from `PackConstraints` + `AssetConstraints` |
 | `assetTypeTokens` | `AssetType::promptTokens` |
 | `exportSpec` | `AssetType::exportSpec` — deterministic post-process/export contract |
-| `referenceEnabled`, `referenceImagePath`, `structureStrength` | reference-driven img2img state copied from the active asset type |
+| `referenceEnabled`, `referenceImagePath`, `structureStrength` | reference-driven img2img state copied from the active asset type (Standard workflow only) |
+| `workflow` | `GenerationWorkflow` — `Standard` or `PhasedRefinement` |
 | `outputSubpath` | `sanitiseName(project) / sanitiseName(assetType)` |
 | `allAssetTypes` | all asset types in the project (used to populate gallery tabs) |
 | `spec` | `AssetType::spec` — production contract forwarded from the active asset type |
@@ -257,10 +273,10 @@ If the user switches the result panel to `Raw`, validation chips are hidden and 
 
 ## Post-processing output layout
 
-For project assets, generation now writes:
+### Standard workflow
 
 ```text
-assets/generated/<project>/<asset>/
+output/<project>/<asset>/
     raw/
         img_<id>.png
     processed/
@@ -268,9 +284,31 @@ assets/generated/<project>/<asset>/
         img_<id>.json
 ```
 
-The `processed/` variant is the normalized export candidate produced by `AssetPostProcessor`.
+The gallery scans `processed/`.
 
-The project gallery scans `processed/` so review, overlays, and validation are aligned with the deterministic export candidate.
+### PhasedRefinement workflow
+
+```text
+output/<project>/<asset>/
+    phase_1/
+        raw/
+            img_<id>.png
+        processed/
+            img_<id>.png
+            img_<id>.json
+    phase_2/
+        raw/
+        processed/
+    phase_3/
+        raw/
+        processed/
+```
+
+The gallery scans `phase_N/processed/` for the currently active phase tab.
+
+Generation writes to `phase_N_tmp/` during the generation thread and renames it to `phase_N/` once the thread completes successfully. If the user cancels, the `_tmp` directory is deleted.
+
+The `processed/` variant is the normalized export candidate produced by `AssetPostProcessor`. Review, overlays, and validation are always aligned with the processed output.
 
 ---
 

@@ -912,7 +912,8 @@ void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const Ass
         assetTemplate.exportSpec,
         assetTemplate.referenceEnabled,
         assetTemplate.referenceImagePath,
-        assetTemplate.structureStrength);
+        assetTemplate.structureStrength,
+        assetTemplate.workflow);
     if (assetType.id.empty())
         return;
     view.newAssetTypeInputActive = false;
@@ -986,7 +987,8 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
     const bool sameReference =
         current.referenceEnabled == ctx.referenceEnabled
         && current.referenceImagePath == ctx.referenceImagePath
-        && std::abs(current.structureStrength - ctx.structureStrength) < 0.0001f;
+        && std::abs(current.structureStrength - ctx.structureStrength) < 0.0001f
+        && current.workflow == ctx.workflow;
     if (current.projectId == ctx.projectId
         && current.assetTypeId == ctx.assetTypeId
         && sameTheme
@@ -1053,6 +1055,7 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.referenceEnabled = at.referenceEnabled;
         ctx.referenceImagePath = at.referenceImagePath;
         ctx.structureStrength = at.structureStrength;
+        ctx.workflow         = at.workflow;
         ctx.outputSubpath    = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
         ctx.allAssetTypes    = proj->assetTypes;
         return ctx;

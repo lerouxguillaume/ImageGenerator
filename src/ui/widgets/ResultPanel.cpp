@@ -105,6 +105,37 @@ void ResultPanel::renderTabBar(sf::RenderWindow& win, sf::Font& font,
     }
 }
 
+void ResultPanel::renderPhaseTabBar(sf::RenderWindow& win, sf::Font& font,
+                                     float barX, float barY, float barW) {
+    phaseTabRects_.clear();
+    if (phaseTabs.empty()) return;
+
+    drawRect(win, {barX, barY, barW, TAB_H}, Col::Panel2, Col::Border, 1.f);
+
+    constexpr float tabPadX = 10.f;
+    constexpr float tabGap  =  4.f;
+    float tx = barX + tabGap;
+    for (int i = 0; i < static_cast<int>(phaseTabs.size()); ++i) {
+        const float tw = tabPadX * 2.f
+            + static_cast<float>(phaseTabs[static_cast<size_t>(i)].label.size()) * 7.2f;
+        const sf::FloatRect r{tx, barY + 3.f, tw, TAB_H - 6.f};
+        const bool active = (i == activePhaseTabIndex);
+        drawRect(win, r, active ? Col::Blue : Col::Panel,
+                 active ? Col::BlueLt : Col::Border, 1.f);
+        drawTextC(win, font, phaseTabs[static_cast<size_t>(i)].label,
+                  active ? Col::GoldLt : Col::Muted,
+                  tx + tw / 2.f, barY + 7.f, 11, active);
+        phaseTabRects_.push_back(r);
+        tx += tw + tabGap;
+    }
+
+    // Phase indicator: "Phase N / max" on the right side
+    if (phaseIndicatorCurrent > 0 && phaseIndicatorMax > 0) {
+        const std::string label = std::to_string(phaseIndicatorCurrent) + " / " + std::to_string(phaseIndicatorMax);
+        drawTextR(win, font, label, Col::Muted, barX + barW - 8.f, barY + 8.f, 10);
+    }
+}
+
 void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const auto& theme = Theme::instance();
     const auto& colors = theme.colors();
@@ -125,6 +156,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const float actionGap = 10.f;
 
     const float tabBarH = (showTabs && !tabs.empty()) ? TAB_H : 0.f;
+    const float phaseTabBarH = (showPhaseTabs && !phaseTabs.empty()) ? TAB_H : 0.f;
 
     // Panel background
     drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
@@ -137,8 +169,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         btnNextImage_ = {};
         btnPrevThumbs_ = {};
         btnNextThumbs_ = {};
-        btnRefineBest_ = {};
-        btnAutoRefine_ = {};
+        btnRefine_ = {};
+        btnAutoRefineToggle_ = {};
         thumbnailRects_.clear();
         thumbnailIndices_.clear();
         // ── Generating overlay ────────────────────────────────────────────────
@@ -188,7 +220,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
                           : ((hasOutputMode ? 28.f : 0.f)
                              + (hasReferenceInfo ? 22.f : 0.f)
                              + (!validationChips.empty() ? 30.f : 0.f));
-        const float previewBottom = y + h - galleryH - tabBarH - 72.f - infoH;
+        const float previewBottom = y + h - galleryH - tabBarH - phaseTabBarH - 72.f - infoH;
         const float frameX = x + 16.f;
         const float frameY = y + 16.f;
         const float frameW = w - 32.f;
@@ -320,7 +352,9 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             const float stripW = w - 24.f;
             const float stripY = y + h - galleryH - 60.f;
             if (showTabs && !tabs.empty())
-                renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
+                renderTabBar(win, font, stripX, stripY - tabBarH - phaseTabBarH, stripW);
+            if (showPhaseTabs && !phaseTabs.empty())
+                renderPhaseTabBar(win, font, stripX, stripY - phaseTabBarH, stripW);
             renderThumbnailStrip(win, font, stripX, stripY, stripW);
         } else {
             tabRects_.clear();
@@ -332,8 +366,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         btnNextImage_ = {};
         btnPrevThumbs_ = {};
         btnNextThumbs_ = {};
-        btnRefineBest_ = {};
-        btnAutoRefine_ = {};
+        btnRefine_ = {};
+        btnAutoRefineToggle_ = {};
         thumbnailRects_.clear();
         thumbnailIndices_.clear();
         // Error banner with no image
@@ -348,14 +382,16 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     } else if (!gallery.empty()) {
         btnPrevImage_ = {};
         btnNextImage_ = {};
-        btnRefineBest_ = {};
-        btnAutoRefine_ = {};
+        btnRefine_ = {};
+        btnAutoRefineToggle_ = {};
         drawTextC(win, font, "Select an image", colors.borderHi, cx, y + 32.f, type.sectionTitle);
         const float stripX = x + 12.f;
         const float stripW = w - 24.f;
-        const float stripY = y + 56.f + tabBarH;
+        const float stripY = y + 56.f + tabBarH + phaseTabBarH;
         if (showTabs && !tabs.empty())
-            renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
+            renderTabBar(win, font, stripX, stripY - tabBarH - phaseTabBarH, stripW);
+        if (showPhaseTabs && !phaseTabs.empty())
+            renderPhaseTabBar(win, font, stripX, stripY - phaseTabBarH, stripW);
         renderThumbnailStrip(win, font, stripX, stripY, stripW);
     } else {
         // Placeholder when no image yet
@@ -363,95 +399,107 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         btnNextImage_ = {};
         btnPrevThumbs_ = {};
         btnNextThumbs_ = {};
-        btnRefineBest_ = {};
-        btnAutoRefine_ = {};
+        btnRefine_ = {};
+        btnAutoRefineToggle_ = {};
         thumbnailRects_.clear();
         thumbnailIndices_.clear();
         drawTextC(win, font, "No image generated yet", colors.borderHi, cx, y + h / 2.f - 20.f, type.sectionTitle);
     }
 
     // ── Buttons at the bottom of the panel ───────────────────────────────────
-        if (!generating) {
-            drawRect(win, {actionBarX, actionBarY, actionBarW, actionBarH}, colors.panel, colors.border, metrics.borderWidth);
-            if (showRefineBestButton && bestWallCandidateScore >= 0.f) {
+    if (!generating) {
+        if (showPhaseReplaceConfirm) {
+            // Phase replace confirmation dialog overlays the action bar
+            const sf::FloatRect dialogRect{actionBarX, actionBarY - 12.f, actionBarW, actionBarH + 24.f};
+            drawRect(win, dialogRect, colors.panel, colors.redLt, 2.f);
+            const std::string confirmMsg = "Replace Phase " + std::to_string(phaseReplaceConfirmPhase + 1) + "?";
+            drawTextC(win, font, confirmMsg, colors.goldLt, cx, actionBarY - 6.f, type.body, true);
+            drawTextC(win, font, "This will overwrite all images in that phase.",
+                      colors.muted, cx, actionBarY + 10.f, type.helper);
+            constexpr float dlgBtnW = 84.f;
+            constexpr float dlgBtnH = 22.f;
+            constexpr float dlgGap  = 14.f;
+            btnPhaseReplaceYes_ = {cx - dlgBtnW - dlgGap / 2.f, actionBarY + 26.f, dlgBtnW, dlgBtnH};
+            btnPhaseReplaceNo_  = {cx + dlgGap / 2.f,            actionBarY + 26.f, dlgBtnW, dlgBtnH};
+            drawButton(win, btnPhaseReplaceYes_, "Replace", colors.panel2, colors.redLt, false, type.body, font);
+            drawButton(win, btnPhaseReplaceNo_,  "Cancel",  colors.panel2, colors.muted, false, type.body, font);
+        } else {
+            btnPhaseReplaceYes_ = {};
+            btnPhaseReplaceNo_  = {};
+            drawRect(win, {actionBarX, actionBarY, actionBarW, actionBarH},
+                     colors.panel, colors.border, metrics.borderWidth);
+
+            if (showRefineButton && bestWallCandidateScore >= 0.f) {
                 char scoreBuf[32];
                 std::snprintf(scoreBuf, sizeof(scoreBuf), "best: %.0f", bestWallCandidateScore);
-                const sf::Color scoreCol = (bestWallCandidateScore < 500.f)   ? sf::Color(60, 180, 80)
-                                         : (bestWallCandidateScore < 5000.f)  ? colors.goldLt
-                                                                               : colors.redLt;
-                drawTextC(win, font, scoreBuf, scoreCol,
-                          cx, actionBarY + 4.f, type.helper, false);
+                const sf::Color scoreCol = (bestWallCandidateScore < 150.f) ? sf::Color(60, 180, 80)
+                                         : (bestWallCandidateScore < 500.f) ? colors.goldLt
+                                                                             : colors.redLt;
+                drawTextC(win, font, scoreBuf, scoreCol, cx, actionBarY + 4.f, type.helper, false);
             }
+
             if (resultLoaded) {
-            if (mode == WorkflowMode::Generate && showImproveButton) {
-                const float refineW = showRefineBestButton ? 124.f : 0.f;
-                const float autoW = showAutoRefineButton ? 128.f : 0.f;
-                const float totalW = actionAuxW + actionGap + actionAuxW + actionGap
-                                   + (showRefineBestButton ? (refineW + actionGap) : 0.f)
-                                   + (showAutoRefineButton ? (autoW + actionGap) : 0.f)
-                                   + actionGenerateW;
-                const float startX = cx - totalW / 2.f;
-                btnImprove_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
-                drawButton(win, btnImprove_, "Edit", colors.panel2, colors.goldLt, false, type.body, font);
-                btnDelete_ = {btnImprove_.left + actionAuxW + actionGap, y + h - 49.f, actionAuxW, actionButtonH};
-                if (showRefineBestButton) {
-                    btnRefineBest_ = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f, refineW, actionButtonH};
-                    drawButton(win, btnRefineBest_, "Refine Wall", colors.panel2, colors.blueLt, false, type.body, font);
-                    if (showAutoRefineButton) {
-                        btnAutoRefine_ = {btnRefineBest_.left + refineW + actionGap, y + h - 49.f, autoW, actionButtonH};
-                        drawButton(win, btnAutoRefine_, "Auto Refine", colors.panel2, colors.goldLt, false, type.body, font);
-                        btnGenerate_  = {btnAutoRefine_.left + autoW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                constexpr float refineW = 136.f;
+                constexpr float toggleW = 100.f;
+                auto placeButtons = [&](bool withImprove) {
+                    const float totalW = (withImprove ? actionAuxW + actionGap : 0.f)
+                                       + actionAuxW + actionGap
+                                       + (showRefineButton ? refineW + actionGap : 0.f)
+                                       + (showAutoRefineToggle ? toggleW + actionGap : 0.f)
+                                       + actionGenerateW;
+                    float curX = cx - totalW / 2.f;
+                    if (withImprove) {
+                        btnImprove_ = {curX, y + h - 49.f, actionAuxW, actionButtonH};
+                        drawButton(win, btnImprove_, "Edit", colors.panel2, colors.goldLt, false, type.body, font);
+                        curX += actionAuxW + actionGap;
                     } else {
-                        btnAutoRefine_ = {};
-                        btnGenerate_  = {btnRefineBest_.left + refineW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                        btnImprove_ = {};
                     }
-                } else {
-                    btnRefineBest_ = {};
-                    btnAutoRefine_ = {};
-                    btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
-                }
-            } else if (mode == WorkflowMode::Generate) {
-                btnImprove_ = {};
-                const float refineW = showRefineBestButton ? 124.f : 0.f;
-                const float autoW = showAutoRefineButton ? 128.f : 0.f;
-                const float totalW = actionAuxW + actionGap
-                                   + (showRefineBestButton ? (refineW + actionGap) : 0.f)
-                                   + (showAutoRefineButton ? (autoW + actionGap) : 0.f)
-                                   + actionGenerateW;
-                const float startX = cx - totalW / 2.f;
-                btnDelete_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
-                if (showRefineBestButton) {
-                    btnRefineBest_ = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f, refineW, actionButtonH};
-                    drawButton(win, btnRefineBest_, "Refine Wall", colors.panel2, colors.blueLt, false, type.body, font);
-                    if (showAutoRefineButton) {
-                        btnAutoRefine_ = {btnRefineBest_.left + refineW + actionGap, y + h - 49.f, autoW, actionButtonH};
-                        drawButton(win, btnAutoRefine_, "Auto Refine", colors.panel2, colors.goldLt, false, type.body, font);
-                        btnGenerate_  = {btnAutoRefine_.left + autoW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                    btnDelete_ = {curX, y + h - 49.f, actionAuxW, actionButtonH};
+                    curX += actionAuxW + actionGap;
+                    if (showRefineButton) {
+                        const std::string refineLabel = refineUsesSelected ? "Refine Selected" : "Refine Best";
+                        btnRefine_ = {curX, y + h - 49.f, refineW, actionButtonH};
+                        drawButton(win, btnRefine_, refineLabel, colors.panel2,
+                                   refineEnabled ? colors.blueLt : colors.muted, !refineEnabled, type.body, font);
+                        curX += refineW + actionGap;
                     } else {
-                        btnAutoRefine_ = {};
-                        btnGenerate_  = {btnRefineBest_.left + refineW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                        btnRefine_ = {};
                     }
-                } else {
-                    btnRefineBest_ = {};
-                    btnAutoRefine_ = {};
-                    btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                    if (showAutoRefineToggle) {
+                        btnAutoRefineToggle_ = {curX, y + h - 49.f, toggleW, actionButtonH};
+                        const std::string autoLabel = autoRefineEnabled ? "Auto: ON" : "Auto: OFF";
+                        drawButton(win, btnAutoRefineToggle_, autoLabel, colors.panel2,
+                                   autoRefineEnabled ? colors.goldLt : colors.muted, false, type.body, font);
+                        curX += toggleW + actionGap;
+                    } else {
+                        btnAutoRefineToggle_ = {};
+                    }
+                    btnGenerate_ = {curX, y + h - 52.f, actionGenerateW, 38.f};
+                };
+
+                if (mode == WorkflowMode::Generate && showImproveButton)
+                    placeButtons(true);
+                else if (mode == WorkflowMode::Generate)
+                    placeButtons(false);
+                else {
+                    btnImprove_          = {};
+                    btnRefine_           = {};
+                    btnAutoRefineToggle_ = {};
+                    const float totalW   = actionAuxW + actionGap + actionGenerateW;
+                    btnDelete_   = {cx - totalW / 2.f, y + h - 49.f, actionAuxW, actionButtonH};
+                    btnGenerate_ = {btnDelete_.left + actionAuxW + actionGap, y + h - 52.f, actionGenerateW, 38.f};
                 }
+                drawButton(win, btnDelete_, "Delete", colors.panel2, colors.redLt, false, type.body, font);
             } else {
-                btnImprove_ = {};
-                btnRefineBest_ = {};
-                btnAutoRefine_ = {};
-                const float totalW = actionAuxW + actionGap + actionGenerateW;
-                const float startX = cx - totalW / 2.f;
-                btnDelete_ = {startX, y + h - 49.f, actionAuxW, actionButtonH};
-                btnGenerate_  = {btnDelete_.left + actionAuxW + actionGap, y + h - 49.f - 3.f, actionGenerateW, 38.f};
+                btnImprove_          = {};
+                btnDelete_           = {};
+                btnRefine_           = {};
+                btnAutoRefineToggle_ = {};
+                btnGenerate_ = {cx - actionGenerateW / 2.f, y + h - 52.f, actionGenerateW, 38.f};
             }
-            drawButton(win, btnDelete_, "Delete", colors.panel2, colors.redLt, false, type.body, font);
-        } else {
-            btnImprove_   = {};
-            btnDelete_    = {};
-            btnGenerate_  = {cx - actionGenerateW / 2.f, y + h - 52.f, actionGenerateW, 38.f};
+            drawButton(win, btnGenerate_, "Generate", colors.blue, colors.goldLt, false, 13, font);
         }
-        drawButton(win, btnGenerate_, "Generate", colors.blue, colors.goldLt, false, 13, font);
     }
 }
 
@@ -469,6 +517,18 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
             return true;
         }
 
+        // Phase replace confirm dialog consumes all clicks except its own buttons
+        if (showPhaseReplaceConfirm) {
+            if (btnPhaseReplaceYes_.contains(pos)) {
+                phaseReplaceConfirmed   = true;
+                showPhaseReplaceConfirm = false;
+            } else if (btnPhaseReplaceNo_.contains(pos)) {
+                phaseReplaceCancelled   = true;
+                showPhaseReplaceConfirm = false;
+            }
+            return true;
+        }
+
         if (btnImprove_.contains(pos)) {
             improveRequested = true;
             return true;
@@ -477,12 +537,12 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
             deleteRequested = true;
             return true;
         }
-        if (btnRefineBest_.contains(pos)) {
-            refineBestRequested = true;
+        if (btnRefine_.contains(pos) && refineEnabled) {
+            refineRequested = true;
             return true;
         }
-        if (btnAutoRefine_.contains(pos)) {
-            autoRefineRequested = true;
+        if (btnAutoRefineToggle_.contains(pos)) {
+            autoRefineToggled = true;
             return true;
         }
         if (processedToggleRect_.contains(pos) && !showProcessedOutput) {
@@ -528,6 +588,15 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
                 if (tabRects_[static_cast<size_t>(i)].contains(pos) && i != activeTabIndex) {
                     activeTabIndex = i;
                     tabChanged     = true;
+                    return true;
+                }
+            }
+        }
+        if (showPhaseTabs) {
+            for (int i = 0; i < static_cast<int>(phaseTabRects_.size()); ++i) {
+                if (phaseTabRects_[static_cast<size_t>(i)].contains(pos) && i != activePhaseTabIndex) {
+                    activePhaseTabIndex = i;
+                    phaseTabChanged     = true;
                     return true;
                 }
             }

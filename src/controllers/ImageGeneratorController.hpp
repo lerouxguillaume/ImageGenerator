@@ -53,8 +53,7 @@ private:
 
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
-    void launchWallRefinement(ImageGeneratorView& view);
-    void startAutoWallRefinement(ImageGeneratorView& view);
+    void launchPhaseRefinement(ImageGeneratorView& view, bool useSelected);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});
     void selectGalleryImage(ImageGeneratorView& view, int index);
@@ -99,14 +98,19 @@ private:
     std::vector<PendingThumb> pendingThumbs_;
     void flushPendingThumbs(ImageGeneratorView& view);
     std::string pendingEditNavigationPath_;
-    bool        pendingWallRefinement_ = false;
-    std::string pendingWallRefinementSourcePath_;
-    float       pendingWallRefinementStrength_ = 0.0f;
-    int         pendingWallRefinementAutoRound_ = 0;
-    std::vector<std::string> lastBatchProcessedPaths_;
-    bool        autoWallRefinementActive_ = false;
-    int         autoWallRefinementRound_ = 0;
-    int         autoWallRefinementMaxRounds_ = 0;
-    float       autoWallRefinementBestScore_ = 0.0f;
-    float       autoWallRefinementStrength_ = 0.0f;
+
+    struct WallPhaseSession {
+        int         currentPhase       = 0;   // last completed phase (0 = none yet)
+        int         maxPhases          = 3;
+        bool        autoRefine         = false;
+        float       scoreThreshold     = 150.0f;
+        float       refinementStrength = 0.27f;
+        // Pending next-phase info (set before confirm dialog or directly before generation)
+        std::string sourcePath;               // raw 512×768 image to use as init
+        int         targetPhase        = 0;   // phase we are about to write
+        bool        awaitingConfirm    = false;
+        // Batch tracking for auto-refine scoring
+        std::vector<std::string> lastBatchRawPaths;
+    };
+    WallPhaseSession phaseSession_;
 };

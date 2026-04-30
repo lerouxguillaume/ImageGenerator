@@ -71,6 +71,12 @@ static AssetFitMode strToFitMode(const std::string& s) {
     if (s == "no_resize")  return AssetFitMode::NoResize;
     return AssetFitMode::ObjectFit;
 }
+static const char* workflowToStr(GenerationWorkflow w) {
+    return w == GenerationWorkflow::PhasedRefinement ? "phased_refinement" : "standard";
+}
+static GenerationWorkflow strToWorkflow(const std::string& s) {
+    return s == "phased_refinement" ? GenerationWorkflow::PhasedRefinement : GenerationWorkflow::Standard;
+}
 
 static nlohmann::json exportSpecToJson(const AssetExportSpec& s) {
     return {
@@ -171,6 +177,7 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
     j["referenceEnabled"] = a.referenceEnabled;
     j["referenceImagePath"] = a.referenceImagePath;
     j["structureStrength"] = a.structureStrength;
+    j["workflow"] = workflowToStr(a.workflow);
     return j;
 }
 
@@ -194,6 +201,7 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
     a.referenceEnabled = j.value("referenceEnabled", false);
     a.referenceImagePath = j.value("referenceImagePath", std::string{});
     a.structureStrength = j.value("structureStrength", 0.45f);
+    a.workflow = strToWorkflow(j.value("workflow", std::string{"standard"}));
     return a;
 }
 
@@ -352,7 +360,8 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        const AssetExportSpec& exportSpec,
                                        bool referenceEnabled,
                                        const std::string& referenceImagePath,
-                                       float structureStrength) {
+                                       float structureStrength,
+                                       GenerationWorkflow workflow) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -368,6 +377,7 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.referenceEnabled = referenceEnabled;
     a.referenceImagePath = referenceImagePath;
     a.structureStrength = structureStrength;
+    a.workflow = workflow;
     p->assetTypes.push_back(a);
     save();
     return a;

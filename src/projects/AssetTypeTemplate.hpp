@@ -8,13 +8,14 @@ struct AssetTypeTemplate {
     std::string id;
     std::string label;
     std::string defaultName;
-    Prompt           promptTokens;
-    AssetConstraints constraints;
-    AssetSpec        spec;
-    AssetExportSpec  exportSpec;
-    bool             referenceEnabled = false;
-    std::string      referenceImagePath;
-    float            structureStrength = 0.45f;
+    Prompt             promptTokens;
+    AssetConstraints   constraints;
+    AssetSpec          spec;
+    AssetExportSpec    exportSpec;
+    bool               referenceEnabled  = false;
+    std::string        referenceImagePath;
+    float              structureStrength  = 0.45f;
+    GenerationWorkflow workflow           = GenerationWorkflow::Standard;
     std::vector<std::string> tags;
 };
 
