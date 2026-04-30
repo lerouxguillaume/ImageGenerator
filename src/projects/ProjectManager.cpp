@@ -168,6 +168,9 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
     };
     j["spec"] = specToJson(a.spec);
     j["exportSpec"] = exportSpecToJson(a.exportSpec);
+    j["referenceEnabled"] = a.referenceEnabled;
+    j["referenceImagePath"] = a.referenceImagePath;
+    j["structureStrength"] = a.structureStrength;
     return j;
 }
 
@@ -188,6 +191,9 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
         a.spec = specFromJson(j["spec"]);
     if (j.contains("exportSpec") && j["exportSpec"].is_object())
         a.exportSpec = exportSpecFromJson(j["exportSpec"]);
+    a.referenceEnabled = j.value("referenceEnabled", false);
+    a.referenceImagePath = j.value("referenceImagePath", std::string{});
+    a.structureStrength = j.value("structureStrength", 0.45f);
     return a;
 }
 
@@ -343,7 +349,10 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        const Prompt&      promptTokens,
                                        const AssetConstraints& constraints,
                                        const AssetSpec& spec,
-                                       const AssetExportSpec& exportSpec) {
+                                       const AssetExportSpec& exportSpec,
+                                       bool referenceEnabled,
+                                       const std::string& referenceImagePath,
+                                       float structureStrength) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -356,6 +365,9 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.constraints  = constraints;
     a.spec         = spec;
     a.exportSpec   = exportSpec;
+    a.referenceEnabled = referenceEnabled;
+    a.referenceImagePath = referenceImagePath;
+    a.structureStrength = structureStrength;
     p->assetTypes.push_back(a);
     save();
     return a;

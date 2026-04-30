@@ -25,7 +25,10 @@ public:
                            const Prompt&      promptTokens = {},
                            const AssetConstraints& constraints = {},
                            const AssetSpec& spec = {},
-                           const AssetExportSpec& exportSpec = {});
+                           const AssetExportSpec& exportSpec = {},
+                           bool referenceEnabled = false,
+                           const std::string& referenceImagePath = {},
+                           float structureStrength = 0.45f);
 
     // Replace an existing asset type (matched by id) within a project and persist.
     // No-op with a log warning if either id is not found.

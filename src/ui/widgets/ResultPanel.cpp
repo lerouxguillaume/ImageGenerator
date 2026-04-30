@@ -5,6 +5,7 @@
 #include "../../ui/Theme.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 using namespace Helpers;
 
@@ -128,6 +129,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     // Panel background
     drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
     drawRect(win, {x + 1.f, y + 1.f, w - 2.f, h - 2.f}, colors.surfaceInset, sf::Color::Transparent, 0.f);
+    processedToggleRect_ = {};
+    rawToggleRect_ = {};
 
     if (generating) {
         btnPrevImage_ = {};
@@ -177,7 +180,12 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     } else if (resultLoaded) {
         // ── Selected image preview ────────────────────────────────────────────
         const float galleryH = gallery.empty() ? 0.f : 132.f;
-        const float infoH = generationFailed.load() ? 62.f : (!validationChips.empty() ? 30.f : 0.f);
+        const bool hasOutputMode = showOutputModeToggle;
+        const bool hasReferenceInfo = showOutputModeToggle || selectedReferenceUsed || !selectedReferenceImage.empty();
+        const float infoH = generationFailed.load() ? 62.f
+                          : ((hasOutputMode ? 28.f : 0.f)
+                             + (hasReferenceInfo ? 22.f : 0.f)
+                             + (!validationChips.empty() ? 30.f : 0.f));
         const float previewBottom = y + h - galleryH - tabBarH - 72.f - infoH;
         const float frameX = x + 16.f;
         const float frameY = y + 16.f;
@@ -220,11 +228,42 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         win.draw(sprite);
         drawContractOverlay(win, *this, {imgX, imgY, imgW, imgH}, theme);
 
+        float infoY = frameY + frameH + 5.f;
+        if (showOutputModeToggle) {
+            constexpr float toggleW = 88.f;
+            constexpr float toggleH = 22.f;
+            constexpr float toggleGap = 8.f;
+            processedToggleRect_ = {frameX, infoY, toggleW, toggleH};
+            rawToggleRect_ = {frameX + toggleW + toggleGap, infoY, toggleW, toggleH};
+            drawButton(win, processedToggleRect_, "Processed",
+                       showProcessedOutput ? colors.blue : colors.panel2,
+                       showProcessedOutput ? colors.goldLt : colors.muted,
+                       false, type.compact, font);
+            drawButton(win, rawToggleRect_, "Raw",
+                       showProcessedOutput ? colors.panel2 : colors.blue,
+                       showProcessedOutput ? colors.muted : colors.goldLt,
+                       false, type.compact, font);
+            infoY += 28.f;
+        }
+
+        if (selectedReferenceUsed || !selectedReferenceImage.empty()) {
+            std::string refLabel = selectedReferenceUsed ? "Reference shape" : "Prompt only";
+            if (selectedReferenceUsed && selectedStructureStrength > 0.f) {
+                char strengthBuf[16];
+                std::snprintf(strengthBuf, sizeof(strengthBuf), "%.2f", selectedStructureStrength);
+                refLabel += "  strength " + std::string(strengthBuf);
+            }
+            drawText(win, font, refLabel,
+                     selectedReferenceUsed ? colors.blueLt : colors.muted,
+                     frameX, infoY, type.compact, false);
+            infoY += 22.f;
+        }
+
         // ── Validation chips (below image frame, above gallery/action bar) ────
         if (!validationChips.empty()) {
             constexpr float chipH   = 20.f;
             constexpr float chipGap = 6.f;
-            const float chipsY = frameY + frameH + 5.f;
+            const float chipsY = infoY;
             const int   n      = static_cast<int>(validationChips.size());
             const float totalGaps = static_cast<float>(n - 1) * chipGap;
             const float chipW = (frameW - totalGaps) / static_cast<float>(n);
@@ -377,6 +416,16 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
         }
         if (btnDelete_.contains(pos)) {
             deleteRequested = true;
+            return true;
+        }
+        if (processedToggleRect_.contains(pos) && !showProcessedOutput) {
+            showProcessedOutput = true;
+            outputModeChanged = true;
+            return true;
+        }
+        if (rawToggleRect_.contains(pos) && showProcessedOutput) {
+            showProcessedOutput = false;
+            outputModeChanged = true;
             return true;
         }
         if (btnPrevImage_.contains(pos) && selectedIndex > 0) {

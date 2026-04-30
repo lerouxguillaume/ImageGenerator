@@ -12,6 +12,9 @@ struct AssetTypeTemplate {
     AssetConstraints constraints;
     AssetSpec        spec;
     AssetExportSpec  exportSpec;
+    bool             referenceEnabled = false;
+    std::string      referenceImagePath;
+    float            structureStrength = 0.45f;
     std::vector<std::string> tags;
 };
 

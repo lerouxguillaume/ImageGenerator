@@ -845,22 +845,41 @@ That order gets the tool from "generate asset-like images" to "produce plausible
 
 The next milestone should be:
 
-**Reference-driven constrained img2img V1**
+**Wall generation hardening**
 
-This is the smallest step that directly attacks the current weakness:
+The repo already has the first reference-driven step for `wall_left`:
 
-`the model invents the wrong shape before post-processing`
+- persisted reference state on `AssetType`
+- built-in `wall_left` reference asset
+- deterministic `ReferenceNormalizer`
+- automatic routing into the existing img2img path
+- metadata fields for reference usage
 
-Implementation order:
+So the next highest-value work is to make wall generation usable and debuggable from the UI rather than widening scope immediately to every constrained asset class.
 
-1. add reference fields to `AssetType`
-2. add default reference paths and enabled defaults in `AssetTypeTemplate.cpp`
-3. add `ReferenceNormalizer`
-4. route constrained project assets to the existing img2img path when reference mode is enabled
-5. preserve current normalization/export path unchanged
-6. add minimal UI toggle + structure-strength control
-7. add raw/processed preview toggle
-8. extend metadata with reference usage
+Current focus:
+
+- `wall_left`
+
+User-facing gain:
+
+- compare prompt-only vs reference-driven walls
+- tune structure rigidity without touching code
+- tell whether a bad result came from generation or post-processing
+
+Implemented in the current pass:
+
+1. `Ref Shape On/Off` control for the active asset
+2. `Structure strength` slider
+3. `Processed / Raw` preview toggle
+4. reference-use status in the result panel
+
+Next step for the wall-only focus:
+
+1. run `wall_left` A/B comparisons with reference on vs off
+2. tune the `wall_left` reference image and default `structureStrength`
+3. tighten the wall prompt/defaults only where the A/B results show drift
+4. only after that, extend the same workflow to `door`, `corner_wall`, and `stairs`
 
 ---
 

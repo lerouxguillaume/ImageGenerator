@@ -81,6 +81,9 @@ struct AssetType {
     AssetConstraints constraints;
     AssetSpec        spec;
     AssetExportSpec  exportSpec;
+    bool             referenceEnabled = false;
+    std::string      referenceImagePath;
+    float            structureStrength = 0.45f;
 };
 
 struct Project {
@@ -108,6 +111,9 @@ struct ResolvedProjectContext {
     Prompt      assetTypeTokens;
     AssetSpec   spec;             // production contract for the active asset type
     AssetExportSpec exportSpec;   // deterministic post-process export contract
+    bool        referenceEnabled = false;
+    std::string referenceImagePath;
+    float       structureStrength = 0.45f;
     std::string            outputSubpath; // sanitised relative path, e.g. "Medieval Dungeon/Wall Tile"
     std::vector<AssetType> allAssetTypes; // all types in the project, used to populate gallery tabs
 

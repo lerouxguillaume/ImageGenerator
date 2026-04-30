@@ -1,6 +1,7 @@
 #include "ImageGeneratorController.hpp"
 #include "../assets/AssetMetadata.hpp"
 #include "../assets/AssetPostProcessor.hpp"
+#include "../assets/ReferenceNormalizer.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../postprocess/AlphaCutout.hpp"
 #include "../postprocess/AssetValidator.hpp"
@@ -176,6 +177,47 @@ static std::filesystem::path processedOutputDir(const std::filesystem::path& bas
     return baseDir / "processed";
 }
 
+static std::filesystem::path processedPathForRaw(const std::filesystem::path& rawPath) {
+    const auto rawDir = rawPath.parent_path().filename().string();
+    if (rawDir == "raw")
+        return rawPath.parent_path().parent_path() / "processed" / rawPath.filename();
+    return rawPath;
+}
+
+static std::filesystem::path rawPathForProcessed(const std::filesystem::path& processedPath) {
+    const auto processedDir = processedPath.parent_path().filename().string();
+    if (processedDir == "processed")
+        return processedPath.parent_path().parent_path() / "raw" / processedPath.filename();
+    return processedPath;
+}
+
+static std::filesystem::path referenceTempDir(const std::filesystem::path& baseDir) {
+    return baseDir / ".reference_cache";
+}
+
+struct SelectedImageMetadata {
+    bool        referenceUsed = false;
+    std::string referenceImage;
+    float       structureStrength = 0.0f;
+};
+
+static SelectedImageMetadata loadSelectedImageMetadata(const std::filesystem::path& imagePath) {
+    SelectedImageMetadata metadata;
+    std::ifstream metaFile(metadataPathFor(imagePath.string()));
+    if (!metaFile.is_open())
+        return metadata;
+    nlohmann::json metaJson;
+    try {
+        metaFile >> metaJson;
+        metadata.referenceUsed = metaJson.value("referenceUsed", false);
+        metadata.referenceImage = metaJson.value("referenceImage", std::string{});
+        metadata.structureStrength = metaJson.value("structureStrength", 0.0f);
+    } catch (...) {
+        return {};
+    }
+    return metadata;
+}
+
 static sf::Image resizeImage(const sf::Image& src, unsigned dstW, unsigned dstH) {
     sf::Image dst;
     dst.create(dstW, dstH);
@@ -334,6 +376,9 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::filesystem::create_directories(rawDir);
     if (assetModeEnabled)
         std::filesystem::create_directories(processedDir);
+    const std::filesystem::path refCacheDir = referenceTempDir(outDir);
+    if (assetModeEnabled)
+        std::filesystem::create_directories(refCacheDir);
 
     const std::string filename = "img_" + std::to_string(now) + ".png";
     const std::string rawOutPath = (rawDir / filename).string();
@@ -395,17 +440,45 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::string*       errorMsg = &rp.generationErrorMsg;
     const bool requiresTransparency = projectContext_.spec.requiresTransparency;
     const AssetExportSpec exportSpec = projectContext_.exportSpec;
+    const bool referenceEnabled = projectContext_.referenceEnabled;
+    const std::string referenceImagePath = projectContext_.referenceImagePath;
+    const float structureStrength = projectContext_.structureStrength;
+    const int generationWidth = std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
+    const int generationHeight = std::max(1, params.height > 0 ? params.height : projectContext_.spec.canvasHeight);
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
         [prompt, negPrompt, outPath, params, modelDir,
          done, step, idPtr, imgNum, myId, failed, errorMsg,
-         requiresTransparency, assetModeEnabled, processedDir, exportSpec]
+         requiresTransparency, assetModeEnabled, processedDir, exportSpec,
+         referenceEnabled, referenceImagePath, structureStrength,
+         generationWidth, generationHeight, refCacheDir]
         (std::stop_token st) {
             try {
+                GenerationParams effectiveParams = params;
+                bool usedReference = false;
+                if (assetModeEnabled
+                    && referenceEnabled
+                    && effectiveParams.initImagePath.empty()
+                    && !referenceImagePath.empty()
+                    && std::filesystem::exists(referenceImagePath)) {
+                    const cv::Mat normalizedRef =
+                        ReferenceNormalizer::normalizeToCanvas(referenceImagePath, generationWidth, generationHeight);
+                    const std::filesystem::path refPath = refCacheDir / "normalized_reference.png";
+                    cv::Mat bgraRef;
+                    cv::cvtColor(normalizedRef, bgraRef, cv::COLOR_RGBA2BGRA);
+                    cv::imwrite(refPath.string(), bgraRef);
+                    effectiveParams.initImagePath = refPath.string();
+                    effectiveParams.strength = structureStrength;
+                    usedReference = true;
+                    Logger::info("project asset reference img2img enabled: " + referenceImagePath);
+                } else if (assetModeEnabled && referenceEnabled && !referenceImagePath.empty()) {
+                    Logger::info("project asset reference requested but unavailable, falling back to txt2img: " + referenceImagePath);
+                }
+
                 PortraitGeneratorAi::generateFromPrompt(
-                    prompt, negPrompt, outPath, params, modelDir, step, imgNum, std::move(st));
+                    prompt, negPrompt, outPath, effectiveParams, modelDir, step, imgNum, std::move(st));
 
                 auto processOutput = [&](const std::string& rawPath) {
                     sf::Image sfRaw;
@@ -430,12 +503,16 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
                     const std::filesystem::path processedPath = processedDir / std::filesystem::path(rawPath).filename();
                     cv::imwrite(processedPath.string(), result.image);
 
+                    nlohmann::json metaJson = toJson(result, exportSpec);
+                    metaJson["referenceUsed"] = usedReference;
+                    metaJson["referenceImage"] = usedReference ? referenceImagePath : std::string{};
+                    metaJson["structureStrength"] = usedReference ? structureStrength : 0.0f;
                     std::ofstream meta(metadataPathFor(processedPath.string()));
-                    meta << toJson(result, exportSpec).dump(4);
+                    meta << metaJson.dump(4);
                 };
 
                 processOutput(outPath);
-                for (int i = 2; i <= params.numImages; ++i) {
+                for (int i = 2; i <= effectiveParams.numImages; ++i) {
                     const auto dot = outPath.rfind('.');
                     const std::string nthPath = (dot == std::string::npos)
                         ? outPath + "_" + std::to_string(i)
@@ -498,16 +575,20 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
         rp.resultLoaded = false;
         rp.displayedImagePath.clear();
         rp.validationChips.clear();
+        rp.selectedReferenceUsed = false;
+        rp.selectedReferenceImage.clear();
+        rp.selectedStructureStrength = 0.0f;
         return;
     }
 
     rp.selectedIndex = index;
     const auto& item = rp.gallery[static_cast<size_t>(index)];
-
-    // Prefer the transparent derivative if transparency is active and the file exists.
-    std::string displayPath = item.path;
-    if (projectContext_.spec.requiresTransparency) {
-        const std::string tp = transparentPath(item.path);
+    const std::filesystem::path basePath = rp.showProcessedOutput
+        ? std::filesystem::path(item.path)
+        : rawPathForProcessed(item.path);
+    std::string displayPath = basePath.string();
+    if (rp.showProcessedOutput && projectContext_.spec.requiresTransparency) {
+        const std::string tp = transparentPath(basePath.string());
         if (std::filesystem::exists(tp))
             displayPath = tp;
     }
@@ -515,13 +596,17 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
     // Load as sf::Image so we can run validation before creating the texture.
     sf::Image img;
     const bool loaded = img.loadFromFile(displayPath)
-                     || img.loadFromFile(item.path);
+                     || img.loadFromFile(basePath.string());
     if (loaded) {
         rp.resultTexture.loadFromImage(img);
         rp.resultLoaded = true;
         rp.displayedImagePath = displayPath;
+        const SelectedImageMetadata metadata = loadSelectedImageMetadata(processedPathForRaw(basePath));
+        rp.selectedReferenceUsed = metadata.referenceUsed;
+        rp.selectedReferenceImage = metadata.referenceImage;
+        rp.selectedStructureStrength = metadata.structureStrength;
 
-        if (!projectContext_.empty()) {
+        if (!projectContext_.empty() && rp.showProcessedOutput) {
             auto vr = AssetValidator::validate(img, projectContext_.spec);
             rp.validationChips.clear();
             for (const auto& c : vr.checks)
@@ -533,6 +618,9 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
         rp.resultLoaded = false;
         rp.displayedImagePath.clear();
         rp.validationChips.clear();
+        rp.selectedReferenceUsed = false;
+        rp.selectedReferenceImage.clear();
+        rp.selectedStructureStrength = 0.0f;
     }
 }
 
@@ -592,7 +680,8 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
     }
     rp.gallery = std::move(gallery);
 
-    std::string target = preferredSelection.empty() ? rp.displayedImagePath : preferredSelection;
+    std::string target = preferredSelection.empty() ? processedPathForRaw(rp.displayedImagePath).string()
+                                                    : processedPathForRaw(preferredSelection).string();
     int selected = -1;
     for (int i = 0; i < static_cast<int>(rp.gallery.size()); ++i) {
         if (rp.gallery[static_cast<size_t>(i)].path == target) {
@@ -720,6 +809,10 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     }
 
     if (view.resultPanel.handleEvent(e)) {
+        if (view.resultPanel.outputModeChanged) {
+            view.resultPanel.outputModeChanged = false;
+            selectGalleryImage(view, view.resultPanel.selectedIndex);
+        }
         const std::string selectedPath = view.resultPanel.getSelectedImagePath();
         if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath) {
             selectGalleryImage(view, view.resultPanel.selectedIndex);

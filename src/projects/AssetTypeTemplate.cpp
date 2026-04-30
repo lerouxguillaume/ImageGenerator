@@ -77,6 +77,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{false, false, true, false},
         makeWallLeftSpec(),
         makeObjectFitExport(128, 192, 112, 176, 8),
+        true,
+        "assets/references/wall_left.pgm",
+        0.40f,
         {"modular", "tileable", "vertical", "left_wall"}
     },
     {
@@ -88,6 +91,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{true, false, true, true},
         makeSpec(Orientation::FloorTile, /*tileable=*/true, ShapePolicy::Bounded, 0.85f, 0.6f, 0.95f),
         makeTileExport(128, 128),
+        false,
+        {},
+        0.45f,
         {"floor", "tileable", "ground"}
     },
     {
@@ -99,6 +105,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{false, false, false, true},
         makeSpec(Orientation::Unset, /*tileable=*/false, ShapePolicy::Bounded, 0.65f, 0.4f, 0.85f),
         makeObjectFitExport(160, 192, 144, 176, 8),
+        false,
+        {},
+        0.45f,
         {"corner", "wall", "modular"}
     },
     {
@@ -110,6 +119,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{false, false, false, true},
         makeSpec(Orientation::LeftWall, /*tileable=*/false, ShapePolicy::Bounded, 0.62f, 0.45f, 0.8f),
         makeObjectFitExport(128, 192, 112, 176, 8),
+        false,
+        {},
+        0.45f,
         {"entry", "prop"}
     },
     {
@@ -121,6 +133,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{true, false, false, true},
         makeSpec(Orientation::Unset, /*tileable=*/false, ShapePolicy::Bounded, 0.65f, 0.45f, 0.85f),
         makeObjectFitExport(160, 192, 144, 176, 8),
+        false,
+        {},
+        0.45f,
         {"elevation", "transition"}
     },
     {
@@ -132,6 +147,9 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         AssetConstraints{false, false, false, false},
         makeSpec(Orientation::Prop, /*tileable=*/false, ShapePolicy::Bounded, 0.58f, 0.38f, 0.78f),
         makeObjectFitExport(128, 128, 112, 112, 8),
+        false,
+        {},
+        0.45f,
         {"object", "generic"}
     }
 };

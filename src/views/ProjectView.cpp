@@ -317,7 +317,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     }
 
     const float assetWorkspaceY = themeBox.top + themeBox.height + metrics.spaceLg;
-    const float assetWorkspaceH = 492.f;
+    const float assetWorkspaceH = 564.f;
     const float listW = 134.f;
     const float detailX = sectionX + listW + metrics.spaceXl;
     const float detailW = railW - listW - metrics.spaceXl;
@@ -407,6 +407,9 @@ void ProjectView::render(sf::RenderWindow& win) {
         assetSpecMiscToggles = {};
         assetSpecShapePolicyToggles = {};
         assetSpecNumericFields = {};
+        assetReferenceToggle = {};
+        assetStructureSliderTrack = {};
+        assetStructureSliderKnob = {};
     } else {
         const AssetType* selectedAsset = nullptr;
         for (const auto& at : proj->assetTypes) {
@@ -553,11 +556,39 @@ void ProjectView::render(sf::RenderWindow& win) {
                                    colors.goldLt,
                                    fieldRect.left + fieldRect.width / 2.f, fieldRect.top + 8.f, type.body, false);
             }
+
+            const float wallToolsLabelY = fieldY0 + 2.f * (metrics.toolbarFieldHeight + metrics.spaceXs + 12.f) + 8.f;
+            Helpers::drawText(win, font, "Wall reference", colors.muted,
+                              chipX0, wallToolsLabelY, type.compact, false);
+
+            assetReferenceToggle = {chipX0, wallToolsLabelY + 16.f, chip2W, chipH};
+            drawButton(win, assetReferenceToggle,
+                       selectedAsset->referenceEnabled ? "Ref Shape On" : "Ref Shape Off",
+                       selectedAsset->referenceEnabled ? colors.blue : colors.panel,
+                       selectedAsset->referenceEnabled ? colors.goldLt : colors.muted,
+                       false, type.compact, font);
+
+            const float sliderX = chipX0 + chip2W + metrics.spaceSm;
+            const float sliderW = chip2W;
+            const float sliderY = wallToolsLabelY + 18.f;
+            assetStructureSliderTrack = {sliderX, sliderY + 11.f, sliderW, 6.f};
+            const float clampedStrength = std::clamp(selectedAsset->structureStrength, 0.30f, 0.60f);
+            const float sliderT = (clampedStrength - 0.30f) / 0.30f;
+            const float knobX = sliderX + sliderT * sliderW;
+            assetStructureSliderKnob = {knobX - 7.f, sliderY + 5.f, 14.f, 18.f};
+            Helpers::drawRect(win, assetStructureSliderTrack, colors.surfaceInset, colors.border, metrics.borderWidth);
+            Helpers::drawRect(win, {sliderX, sliderY + 11.f, sliderW * sliderT, 6.f}, colors.blue, sf::Color::Transparent, 0.f);
+            Helpers::drawRect(win, assetStructureSliderKnob, colors.panel2, colors.goldLt, metrics.borderWidth);
+            char strengthBuf[16];
+            std::snprintf(strengthBuf, sizeof(strengthBuf), "Strength %.2f", selectedAsset->structureStrength);
+            Helpers::drawTextC(win, font, strengthBuf, colors.goldLt,
+                               sliderX + sliderW / 2.f, sliderY - 10.f, type.compact, false);
         }
     }
 
     generatorView.resultPanel.showImproveButton = false;
     generatorView.resultPanel.showTabs = false;
+    generatorView.resultPanel.showOutputModeToggle = true;
 
     Helpers::drawRect(win, {resultX, railY, resultW, railH}, colors.panel2, colors.border, metrics.borderWidth);
     Helpers::drawText(win, font, "Results", colors.gold, resultX + metrics.spaceMd, railY + metrics.spaceMd, type.sectionTitle, true);

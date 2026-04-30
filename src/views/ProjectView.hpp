@@ -87,6 +87,9 @@ public:
     // Asset spec: shape policy [0]=Freeform [1]=Bounded [2]=SilhouetteLocked
     std::array<sf::FloatRect, 3> assetSpecShapePolicyToggles = {};
     std::array<sf::FloatRect, 6> assetSpecNumericFields = {};
+    sf::FloatRect                assetReferenceToggle = {};
+    sf::FloatRect                assetStructureSliderTrack = {};
+    sf::FloatRect                assetStructureSliderKnob = {};
 
     bool        themeDirty = false;
     bool        assetDirty = false;

@@ -3,6 +3,7 @@
 #include "../prompt/PromptCompiler.hpp"
 #include "../prompt/PromptMerge.hpp"
 #include "../prompt/PromptParser.hpp"
+#include <cmath>
 
 static Prompt buildConstraintTokens(const PackConstraints& pack,
                                     const AssetConstraints& asset,
@@ -191,6 +192,12 @@ static std::string specSignature(const AssetSpec& spec) {
         + std::to_string(spec.validation.enforceTransparency ? 1 : 0) + "|"
         + std::to_string(spec.validation.enforceAnchor ? 1 : 0) + "|"
         + std::to_string(spec.validation.maxSilhouetteDeviation);
+}
+
+static float structureStrengthFromTrack(const sf::Vector2f& pos, const sf::FloatRect& track) {
+    if (track.width <= 0.f) return 0.45f;
+    const float t = std::clamp((pos.x - track.left) / track.width, 0.f, 1.f);
+    return 0.30f + t * 0.30f;
 }
 
 ProjectController::ProjectController(AppConfig& cfg)
@@ -733,6 +740,32 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         }
     }
 
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()
+        && view.assetReferenceToggle.contains(pos)) {
+        auto proj = projectManager_.getProject(view.selectedProjectId);
+        if (!proj) return;
+        for (auto& at : proj->assetTypes) {
+            if (at.id != view.selectedAssetTypeId) continue;
+            at.referenceEnabled = !at.referenceEnabled;
+            projectManager_.updateAssetType(proj->id, at);
+            return;
+        }
+        return;
+    }
+
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()
+        && (view.assetStructureSliderTrack.contains(pos) || view.assetStructureSliderKnob.contains(pos))) {
+        auto proj = projectManager_.getProject(view.selectedProjectId);
+        if (!proj) return;
+        for (auto& at : proj->assetTypes) {
+            if (at.id != view.selectedAssetTypeId) continue;
+            at.structureStrength = structureStrengthFromTrack(pos, view.assetStructureSliderTrack);
+            projectManager_.updateAssetType(proj->id, at);
+            return;
+        }
+        return;
+    }
+
     // Asset spec — shape policy toggles (radio: click active to deselect → Freeform)
     if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
         static const ShapePolicy kPolicies[] = {
@@ -876,7 +909,10 @@ void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const Ass
         assetTemplate.promptTokens,
         assetTemplate.constraints,
         resolvedSpec,
-        assetTemplate.exportSpec);
+        assetTemplate.exportSpec,
+        assetTemplate.referenceEnabled,
+        assetTemplate.referenceImagePath,
+        assetTemplate.structureStrength);
     if (assetType.id.empty())
         return;
     view.newAssetTypeInputActive = false;
@@ -947,12 +983,17 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
         && PromptCompiler::compileNegative(current.assetTypeTokens)
             == PromptCompiler::compileNegative(ctx.assetTypeTokens);
     const bool sameSpec = specSignature(current.spec) == specSignature(ctx.spec);
+    const bool sameReference =
+        current.referenceEnabled == ctx.referenceEnabled
+        && current.referenceImagePath == ctx.referenceImagePath
+        && std::abs(current.structureStrength - ctx.structureStrength) < 0.0001f;
     if (current.projectId == ctx.projectId
         && current.assetTypeId == ctx.assetTypeId
         && sameTheme
         && sameConstraints
         && sameAsset
-        && sameSpec) {
+        && sameSpec
+        && sameReference) {
         return;
     }
     generatorController_.activateProjectSession(view.generatorView, ctx);
@@ -1009,6 +1050,9 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.assetTypeTokens  = at.promptTokens;
         ctx.spec             = resolveScratchSpecForProject(*proj, at.spec);
         ctx.exportSpec       = at.exportSpec;
+        ctx.referenceEnabled = at.referenceEnabled;
+        ctx.referenceImagePath = at.referenceImagePath;
+        ctx.structureStrength = at.structureStrength;
         ctx.outputSubpath    = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
         ctx.allAssetTypes    = proj->assetTypes;
         return ctx;

@@ -61,6 +61,12 @@ public:
     std::vector<ValidationChip> validationChips;
     AssetSpec                   activeSpec;
     bool                        showContractOverlay = false;
+    bool                        showOutputModeToggle = false;
+    bool                        showProcessedOutput = true;
+    bool                        outputModeChanged = false;
+    bool                        selectedReferenceUsed = false;
+    std::string                 selectedReferenceImage;
+    float                       selectedStructureStrength = 0.0f;
 
     // Action flag: set by handleEvent on Generate click; cleared by controller after launching
     bool generateRequested = false;
@@ -90,6 +96,8 @@ private:
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
     std::vector<sf::FloatRect> tabRects_;
+    sf::FloatRect processedToggleRect_;
+    sf::FloatRect rawToggleRect_;
     int thumbnailScrollOffset_ = 0;
     int lastVisibleSelectedIndex_ = -1;
 
