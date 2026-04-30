@@ -125,6 +125,35 @@ ProjectController::ProjectController(AppConfig& cfg)
     , generatorController_(cfg, WorkflowMode::Generate)
 {}
 
+void ProjectController::commitToolbarField(ProjectView& view) {
+    auto& sp = view.generatorView.settingsPanel;
+    try {
+        switch (view.activeToolbarField) {
+            case ProjectView::ToolbarField::Steps:
+                if (!view.toolbarInput.empty())
+                    sp.generationParams.numSteps = std::clamp(std::stoi(view.toolbarInput), 5, 50);
+                break;
+            case ProjectView::ToolbarField::Cfg:
+                if (!view.toolbarInput.empty())
+                    sp.generationParams.guidanceScale = std::clamp(std::stof(view.toolbarInput), 1.0f, 20.0f);
+                break;
+            case ProjectView::ToolbarField::Images:
+                if (!view.toolbarInput.empty())
+                    sp.generationParams.numImages = std::clamp(std::stoi(view.toolbarInput), 1, 10);
+                break;
+            case ProjectView::ToolbarField::Seed:
+                sp.seedInput = view.toolbarInput;
+                break;
+            case ProjectView::ToolbarField::None:
+                break;
+        }
+    } catch (...) {
+    }
+    view.activeToolbarField = ProjectView::ToolbarField::None;
+    view.toolbarInput.clear();
+    sp.seedInputActive = false;
+}
+
 void ProjectController::update(ProjectView& view) {
     view.projects = projectManager_.getAllProjects();
     const auto& templates = AssetTypeTemplates::all();
@@ -177,31 +206,6 @@ void ProjectController::update(ProjectView& view) {
 
 void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
                                     ProjectView& view, AppScreen& appScreen) {
-    auto commitToolbarField = [&view]() {
-        auto& sp = view.generatorView.settingsPanel;
-        switch (view.activeToolbarField) {
-            case ProjectView::ToolbarField::Steps:
-                if (!view.toolbarInput.empty())
-                    sp.generationParams.numSteps = std::clamp(std::stoi(view.toolbarInput), 5, 50);
-                break;
-            case ProjectView::ToolbarField::Cfg:
-                if (!view.toolbarInput.empty())
-                    sp.generationParams.guidanceScale = std::clamp(std::stof(view.toolbarInput), 1.0f, 20.0f);
-                break;
-            case ProjectView::ToolbarField::Images:
-                if (!view.toolbarInput.empty())
-                    sp.generationParams.numImages = std::clamp(std::stoi(view.toolbarInput), 1, 10);
-                break;
-            case ProjectView::ToolbarField::Seed:
-                sp.seedInput = view.toolbarInput;
-                break;
-            case ProjectView::ToolbarField::None:
-                break;
-        }
-        view.activeToolbarField = ProjectView::ToolbarField::None;
-        view.toolbarInput.clear();
-        sp.seedInputActive = false;
-    };
     if (e.type == sf::Event::Closed) {
         win.close();
         return;
@@ -232,7 +236,7 @@ void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
                 return;
             }
             if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Return) {
-                commitToolbarField();
+                commitToolbarField(view);
                 return;
             }
         }
@@ -402,34 +406,32 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         view.activeToolbarField = field;
         view.toolbarInput = value;
     };
-    if (view.stepsField.contains(pos)) {
-        activateField(ProjectView::ToolbarField::Steps, std::to_string(sp.generationParams.numSteps));
-        return;
+    auto fieldAtPos = [&view, pos]() {
+        if (view.stepsField.contains(pos)) return ProjectView::ToolbarField::Steps;
+        if (view.cfgField.contains(pos)) return ProjectView::ToolbarField::Cfg;
+        if (view.imagesField.contains(pos)) return ProjectView::ToolbarField::Images;
+        if (view.seedField.contains(pos)) return ProjectView::ToolbarField::Seed;
+        return ProjectView::ToolbarField::None;
+    };
+    if (view.showModelDropdown) {
+        for (size_t i = 0; i < view.modelDropdownItems.size(); ++i) {
+            if (view.modelDropdownItems[i].contains(pos)) {
+                sp.selectedModelIdx = static_cast<int>(i);
+                view.showModelDropdown = false;
+                return;
+            }
+        }
+        if (!view.btnModelCycle.contains(pos) && !view.modelDropdownRect.contains(pos))
+            view.showModelDropdown = false;
     }
-    if (view.cfgField.contains(pos)) {
-        char cfgBuf[16];
-        std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", sp.generationParams.guidanceScale);
-        activateField(ProjectView::ToolbarField::Cfg, cfgBuf);
-        return;
+    const auto clickedField = fieldAtPos();
+    if (view.activeToolbarField != ProjectView::ToolbarField::None
+        && clickedField != view.activeToolbarField) {
+        commitToolbarField(view);
     }
-    if (view.imagesField.contains(pos)) {
-        activateField(ProjectView::ToolbarField::Images, std::to_string(sp.generationParams.numImages));
-        return;
-    }
-    if (view.seedField.contains(pos)) {
-        activateField(ProjectView::ToolbarField::Seed, sp.seedInput);
-        sp.seedInputActive = true;
-        return;
-    }
-    view.activeToolbarField = ProjectView::ToolbarField::None;
-    view.toolbarInput.clear();
-    sp.seedInputActive = false;
-    if (view.btnGenerateAsset.contains(pos)) {
-        generatorController_.triggerGeneration(view.generatorView);
-        return;
-    }
-    if (view.btnModelCycle.contains(pos) && !sp.availableModels.empty()) {
-        sp.selectedModelIdx = (sp.selectedModelIdx + 1) % static_cast<int>(sp.availableModels.size());
+    if (view.btnModelCycle.contains(pos)) {
+        if (!sp.availableModels.empty())
+            view.showModelDropdown = !view.showModelDropdown;
         return;
     }
     if (view.btnStepsDown.contains(pos)) {
@@ -454,6 +456,32 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
     }
     if (view.btnImagesUp.contains(pos)) {
         sp.generationParams.numImages = std::min(10, sp.generationParams.numImages + 1);
+        return;
+    }
+    if (view.stepsField.contains(pos)) {
+        activateField(ProjectView::ToolbarField::Steps, std::to_string(sp.generationParams.numSteps));
+        return;
+    }
+    if (view.cfgField.contains(pos)) {
+        char cfgBuf[16];
+        std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", sp.generationParams.guidanceScale);
+        activateField(ProjectView::ToolbarField::Cfg, cfgBuf);
+        return;
+    }
+    if (view.imagesField.contains(pos)) {
+        activateField(ProjectView::ToolbarField::Images, std::to_string(sp.generationParams.numImages));
+        return;
+    }
+    if (view.seedField.contains(pos)) {
+        activateField(ProjectView::ToolbarField::Seed, sp.seedInput);
+        sp.seedInputActive = true;
+        return;
+    }
+    view.activeToolbarField = ProjectView::ToolbarField::None;
+    view.toolbarInput.clear();
+    sp.seedInputActive = false;
+    if (view.btnGenerateAsset.contains(pos)) {
+        generatorController_.triggerGeneration(view.generatorView);
         return;
     }
 

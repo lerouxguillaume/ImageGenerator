@@ -201,7 +201,7 @@ static std::string buildTransformPrompt(const std::string& prompt,
                 "- If extra detail is needed, limit it to material, color, surface finish, and lighting consistency.\n"
                 "- Prefer a plain background and straightforward framing unless explicitly requested otherwise.\n\n")
             : std::string())
-        "STRICT COMPLETION RULE:\n"
+        + "STRICT COMPLETION RULE:\n"
         "- Output exactly one JSON object.\n"
         "- Stop immediately after the closing brace.\n"
         "- No markdown, no code fences, no explanations, no text before or after.\n\n"

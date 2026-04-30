@@ -137,7 +137,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     } else if (resultLoaded) {
         // ── Selected image preview ────────────────────────────────────────────
         const float galleryH = gallery.empty() ? 0.f : 132.f;
-        const float previewBottom = y + h - galleryH - tabBarH - 72.f;
+        const float infoH = generationFailed.load() ? 62.f : (!validationChips.empty() ? 30.f : 0.f);
+        const float previewBottom = y + h - galleryH - tabBarH - 72.f - infoH;
         const float frameX = x + 16.f;
         const float frameY = y + 16.f;
         const float frameW = w - 32.f;

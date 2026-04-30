@@ -12,6 +12,13 @@ static constexpr float    FIELD_PAD_Y  = 6.f;
 static constexpr float    FIELD_LINE_H = 17.f;  // font size 13 + 4px leading
 static constexpr unsigned FIELD_FONT   = 13;
 
+namespace {
+int visibleLineCapacity(const sf::FloatRect& rect, int configuredVisibleLines) {
+    const int fromHeight = static_cast<int>((rect.height - FIELD_PAD_Y * 2.f) / FIELD_LINE_H);
+    return std::max(1, std::min(configuredVisibleLines, fromHeight));
+}
+}
+
 // ── Constructor ───────────────────────────────────────────────────────────────
 
 MultiLineTextArea::MultiLineTextArea(int charLimit, int visibleLines)
@@ -41,39 +48,42 @@ MultiLineTextArea::computeLines(sf::Font& font) const {
     t.setFont(font);
     t.setCharacterSize(FIELD_FONT);
 
-    struct Word { int start, end; std::string text; };
-    std::vector<Word> words;
-    int i = 0;
     const int n = static_cast<int>(text_.size());
-    while (i < n) {
-        while (i < n && text_[i] == ' ') ++i;
-        if (i >= n) break;
-        const int ws = i;
-        while (i < n && text_[i] != ' ') ++i;
-        words.push_back({ws, i, text_.substr(static_cast<size_t>(ws),
-                                              static_cast<size_t>(i - ws))});
-    }
-
-    if (words.empty()) { lines.push_back({0, 0}); return lines; }
-
-    int lineStart      = words[0].start;
-    int lineEnd        = words[0].end;
-    std::string lineText = words[0].text;
-
-    for (int wi = 1; wi < static_cast<int>(words.size()); ++wi) {
-        const std::string test = lineText + " " + words[wi].text;
-        t.setString(test);
-        if (t.getLocalBounds().width > maxW) {
-            lines.push_back({lineStart, lineEnd});
-            lineStart = words[wi].start;
-            lineEnd   = words[wi].end;
-            lineText  = words[wi].text;
-        } else {
-            lineEnd  = words[wi].end;
-            lineText = test;
+    int lineStart = 0;
+    int lastBreak = -1;
+    int idx = 0;
+    while (idx < n) {
+        if (text_[idx] == '\n') {
+            lines.push_back({lineStart, idx});
+            lineStart = idx + 1;
+            lastBreak = -1;
+            idx = lineStart;
+            continue;
         }
+
+        if (text_[idx] == ' ' || text_[idx] == '\t')
+            lastBreak = idx;
+
+        const std::string candidate = text_.substr(static_cast<size_t>(lineStart),
+                                                   static_cast<size_t>(idx - lineStart + 1));
+        t.setString(candidate);
+        if (t.getLocalBounds().width > maxW) {
+            if (lastBreak >= lineStart) {
+                lines.push_back({lineStart, lastBreak});
+                lineStart = lastBreak + 1;
+                while (lineStart < n && text_[lineStart] == ' ')
+                    ++lineStart;
+                idx = std::max(lineStart, idx);
+            } else {
+                lines.push_back({lineStart, idx});
+                lineStart = idx;
+            }
+            lastBreak = -1;
+            continue;
+        }
+        ++idx;
     }
-    lines.push_back({lineStart, lineEnd});
+    lines.push_back({lineStart, n});
     return lines;
 }
 
@@ -101,17 +111,18 @@ void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
 
     // Auto-scroll so cursor stays visible — only when cursor actually moved,
     // so manual scroll isn't overridden every frame.
+    const int visibleLines = visibleLineCapacity(rect_, visibleLines_);
     if (active_ && cursor_ != prevCursor_) {
         if (cursorLine < scrollLine_) scrollLine_ = cursorLine;
-        if (cursorLine >= scrollLine_ + visibleLines_)
-            scrollLine_ = cursorLine - visibleLines_ + 1;
+        if (cursorLine >= scrollLine_ + visibleLines)
+            scrollLine_ = cursorLine - visibleLines + 1;
     }
     prevCursor_ = cursor_;
     scrollLine_ = std::clamp(scrollLine_, 0,
-                             std::max(0, static_cast<int>(lines_.size()) - visibleLines_));
+                             std::max(0, static_cast<int>(lines_.size()) - visibleLines));
 
     // Draw visible lines
-    const int last = std::min(static_cast<int>(lines_.size()), scrollLine_ + visibleLines_);
+    const int last = std::min(static_cast<int>(lines_.size()), scrollLine_ + visibleLines);
     for (int l = scrollLine_; l < last; ++l) {
         const auto [lStart, lEnd] = lines_[static_cast<size_t>(l)];
         std::string lineText = text_.substr(static_cast<size_t>(lStart),
@@ -126,9 +137,9 @@ void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
     }
 
     // Scrollbar (only when content overflows)
-    if (static_cast<int>(lines_.size()) > visibleLines_) {
+    if (static_cast<int>(lines_.size()) > visibleLines) {
         const float trackH = rect_.height - FIELD_PAD_Y * 2.f;
-        const float ratio  = static_cast<float>(visibleLines_)
+        const float ratio  = static_cast<float>(visibleLines)
                            / static_cast<float>(lines_.size());
         const float thumbH = std::max(8.f, trackH * ratio);
         const float thumbY = rect_.top + FIELD_PAD_Y
@@ -275,7 +286,8 @@ void MultiLineTextArea::handleClick(sf::Vector2f pos) {
 
     // Which visual (scrolled) line was clicked?
     const float relY    = pos.y - rect_.top - FIELD_PAD_Y;
-    const int   visLine = std::clamp(static_cast<int>(relY / FIELD_LINE_H), 0, visibleLines_ - 1);
+    const int visibleLines = visibleLineCapacity(rect_, visibleLines_);
+    const int   visLine = std::clamp(static_cast<int>(relY / FIELD_LINE_H), 0, visibleLines - 1);
     const int   lineIdx = std::clamp(scrollLine_ + visLine, 0, static_cast<int>(lines_.size()) - 1);
 
     const auto& vl       = lines_[static_cast<size_t>(lineIdx)];

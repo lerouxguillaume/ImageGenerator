@@ -24,6 +24,7 @@ public:
     sf::FloatRect btnSaveAsset;
     sf::FloatRect btnGenerateAsset;
     sf::FloatRect btnModelCycle;
+    sf::FloatRect modelDropdownRect;
     sf::FloatRect btnStepsDown;
     sf::FloatRect btnStepsUp;
     sf::FloatRect btnCfgDown;
@@ -34,6 +35,7 @@ public:
     sf::FloatRect cfgField;
     sf::FloatRect imagesField;
     sf::FloatRect seedField;
+    std::vector<sf::FloatRect> modelDropdownItems;
 
     struct ProjectRow {
         std::string   id;
@@ -91,6 +93,7 @@ public:
     sf::FloatRect assetListViewport;
     ToolbarField activeToolbarField = ToolbarField::None;
     std::string  toolbarInput;
+    bool         showModelDropdown = false;
     std::string loadedProjectId;
     std::string loadedAssetTypeId;
     ImageGeneratorView generatorView{WorkflowMode::Generate};

@@ -21,6 +21,7 @@ public:
     ResolvedProjectContext consumePendingGeneration();
 
 private:
+    void commitToolbarField(ProjectView& view);
     void handleClick(sf::Vector2f pos, sf::RenderWindow& win, ProjectView& view, AppScreen& appScreen);
     void commitNewProject(ProjectView& view);
     void commitNewAssetType(ProjectView& view);

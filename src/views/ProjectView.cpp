@@ -144,7 +144,8 @@ void ProjectView::render(sf::RenderWindow& win) {
     const std::string modelName = sp.availableModels.empty()
         ? "(no models)"
         : std::filesystem::path(sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
-    drawToolbarValue(win, font, "Model", modelName, rowX, rowY, modelW, theme);
+    drawToolbarValue(win, font, "Model", modelName + (showModelDropdown ? "  ^" : "  v"),
+                     rowX, rowY, modelW, theme, showModelDropdown);
 
     seedField = {rowX + modelW + gap, rowY + metrics.toolbarLabelGap, seedW, metrics.toolbarFieldHeight};
     Helpers::drawText(win, font, "Seed", colors.muted, seedField.left, rowY, type.compact, false);
@@ -195,6 +196,29 @@ void ProjectView::render(sf::RenderWindow& win) {
 
     btnGenerateAsset = {imagesX + statW + gap, rowY + metrics.toolbarLabelGap, genW, metrics.toolbarFieldHeight};
     drawButton(win, btnGenerateAsset, "Generate", colors.blue, colors.goldLt, false, type.body, font);
+
+    modelDropdownRect = {};
+    modelDropdownItems.clear();
+    const auto drawModelDropdown = [&]() {
+        if (!showModelDropdown || sp.availableModels.empty()) return;
+        const float itemH = metrics.toolbarFieldHeight;
+        const float listY = btnModelCycle.top + btnModelCycle.height + 2.f;
+        const float listH = itemH * static_cast<float>(sp.availableModels.size());
+        modelDropdownRect = {btnModelCycle.left, listY, btnModelCycle.width, listH};
+        Helpers::drawRect(win, modelDropdownRect, colors.panel2, colors.borderHi, metrics.borderWidth);
+        modelDropdownItems.resize(sp.availableModels.size());
+        for (size_t i = 0; i < sp.availableModels.size(); ++i) {
+            const float itemY = listY + itemH * static_cast<float>(i);
+            modelDropdownItems[i] = {btnModelCycle.left, itemY, btnModelCycle.width, itemH};
+            const bool selected = static_cast<int>(i) == sp.selectedModelIdx;
+            if (selected)
+                Helpers::drawRect(win, modelDropdownItems[i], colors.panel, sf::Color::Transparent, 0.f);
+            Helpers::drawText(win, font,
+                              std::filesystem::path(sp.availableModels[i]).filename().string(),
+                              selected ? colors.goldLt : colors.text,
+                              btnModelCycle.left + metrics.spaceSm, itemY + 7.f, type.body, false);
+        }
+    };
 
     const sf::FloatRect themeBox{sectionX, railY, railW, 212.f};
     Helpers::drawRect(win, themeBox, colors.panel2, colors.border, metrics.borderWidth);
@@ -467,6 +491,8 @@ void ProjectView::render(sf::RenderWindow& win) {
     generatorView.resultPanel.setRect({resultX + metrics.panelInset, railY + 28.f,
                                        resultW - metrics.panelInset * 2.f, railH - 29.f});
     generatorView.resultPanel.render(win, font, generatorView.settingsPanel.generationParams.numSteps);
+
+    drawModelDropdown();
 
     if (generatorView.showSettings)
         generatorView.settingsModal.render(win, font);
