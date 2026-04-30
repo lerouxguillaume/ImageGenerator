@@ -23,11 +23,53 @@ struct AssetConstraints {
     bool topSurfaceVisible = false;
 };
 
+// Isometric plane / orientation class for an asset slot.
+enum class Orientation { Unset, LeftWall, RightWall, FloorTile, Prop, Character };
+
+// How strictly the generated asset shape must conform to a reference.
+enum class ShapePolicy { Freeform, Bounded, SilhouetteLocked };
+
+// How the generated image is fit to the target canvas.
+enum class AssetFitMode { ObjectFit, TileExact, NoResize };
+
+struct Anchor        { int x = 0; int y = 0; };
+struct OccupiedBounds { int x = 0; int y = 0; int w = 0; int h = 0; };
+
+struct ValidationPolicy {
+    bool  enforceCanvasSize      = true;
+    bool  enforceTransparency    = true;
+    bool  enforceSilhouette      = false;
+    bool  enforceAnchor          = false;
+    float maxSilhouetteDeviation = 0.0f;
+};
+
+// Formal production contract each asset type must satisfy.
+struct AssetSpec {
+    int canvasWidth   = 0;   // 0 = inherit from project
+    int canvasHeight  = 0;
+
+    Anchor         anchor;
+    Orientation    orientation    = Orientation::Unset;
+    OccupiedBounds expectedBounds;
+
+    float targetFillRatio = 0.6f;
+    float minFillRatio    = 0.3f;
+    float maxFillRatio    = 0.9f;
+
+    bool         requiresTransparency = true;
+    ShapePolicy  shapePolicy          = ShapePolicy::Freeform;
+    AssetFitMode fitMode              = AssetFitMode::ObjectFit;
+    bool         isTileable           = false;
+
+    ValidationPolicy validation;
+};
+
 struct AssetType {
-    std::string     id;
-    std::string     name;
-    Prompt          promptTokens;
+    std::string      id;
+    std::string      name;
+    Prompt           promptTokens;
     AssetConstraints constraints;
+    AssetSpec        spec;
 };
 
 struct Project {
@@ -53,6 +95,7 @@ struct ResolvedProjectContext {
     Prompt      stylePrompt;
     Prompt      constraintTokens; // compiled from PackConstraints + AssetConstraints
     Prompt      assetTypeTokens;
+    AssetSpec   spec;             // production contract for the active asset type
     std::string            outputSubpath; // sanitised relative path, e.g. "Medieval Dungeon/Wall Tile"
     std::vector<AssetType> allAssetTypes; // all types in the project, used to populate gallery tabs
 

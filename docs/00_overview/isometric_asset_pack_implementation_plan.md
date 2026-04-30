@@ -259,7 +259,7 @@ These should surface as actionable errors or warnings rather than silent bad out
 
 ---
 
-# Phase 1 — Asset slot specification
+# Phase 1 — Asset slot specification ✓ DONE
 
 ## Goal
 
@@ -322,40 +322,21 @@ In the project workspace, each asset type should expose a compact "Asset Spec" s
 
 ## Acceptance criteria
 
-- The user can define a replacement-target contract for each asset type.
-- An asset type can express a slot equivalent to `door-left`, not just a prompt.
-- The specification persists in `projects.json`.
+- ✓ The user can define a replacement-target contract for each asset type.
+- ✓ An asset type can express a slot equivalent to `door-left`, not just a prompt.
+- ✓ The specification persists in `projects.json`.
 
-Suggested data shape:
+## What was built
 
-```cpp
-struct ValidationPolicy {
-    bool  enforceCanvasSize = true;
-    bool  enforceTransparency = true;
-    bool  enforceSilhouette = false;
-    bool  enforceAnchor = false;
-    float maxSilhouetteDeviation = 0.0f;
-    float minFillRatio = 0.0f;
-    float maxFillRatio = 1.0f;
-};
+- `AssetSpec`, `ValidationPolicy`, `Orientation`, `ShapePolicy`, `AssetFitMode`, `Anchor`, `OccupiedBounds` added to `src/projects/Project.hpp`.
+- `AssetType` carries an `AssetSpec spec` field.
+- Full JSON round-trip in `ProjectManager.cpp` with human-readable enum strings; old files load cleanly.
+- All 6 built-in templates ship with tuned spec defaults (orientation, shape policy, fill range, tileable).
+- `ProjectView` shows an "Asset spec" section per asset type: orientation radio (6 chips), Transparent/Tileable toggles, shape policy radio. Changes persist immediately.
 
-struct AssetSpec {
-    int canvasWidth = 0;
-    int canvasHeight = 0;
+## Not yet wired
 
-    Anchor anchor;
-    Orientation orientation;
-    Bounds expectedBounds;
-
-    float targetFillRatio = 0.0f;
-    ValidationPolicy validation;
-
-    bool requiresTransparency = true;
-    ShapePolicy shapePolicy = ShapePolicy::Freeform;
-    AssetFitMode fitMode = AssetFitMode::ObjectFit;
-    bool isTileable = false;
-};
-```
+- `AssetSpec` is not forwarded into `ResolvedProjectContext` — generation does not read it yet. That is Phase 3 work (locked prompt constraints) and Phase 5 (validation).
 
 ---
 
@@ -414,7 +395,7 @@ Add a "Reference Shape" block in the asset detail panel:
 
 ---
 
-# Phase 3 — Asset-type locked prompt constraints
+# Phase 3 — Asset-type locked prompt constraints ✓ DONE
 
 ## Goal
 
@@ -456,13 +437,33 @@ Prompt assembly should distinguish:
 
 ## Acceptance criteria
 
-- Users no longer need to repeatedly type orientation and isolation constraints.
-- Asset templates are materially better at producing slot-compatible assets than a blank prompt.
-- The generator is less likely to invent background scenes for modular pieces.
+- ✓ Users no longer need to repeatedly type orientation and isolation constraints.
+- ✓ Asset templates are materially better at producing slot-compatible assets than a blank prompt.
+- ✓ The generator is less likely to invent background scenes for modular pieces.
+
+## What was built
+
+`buildConstraintTokens()` in `ProjectController.cpp` now accepts `AssetSpec` as a third argument and injects locked tokens automatically:
+
+| Spec field | Positive | Negative |
+|---|---|---|
+| `requiresTransparency` | `transparent background` | — |
+| `isTileable` | `seamless edges, tileable` | — |
+| `LeftWall` | `isometric left wall`, `left-facing wall plane` | `floor plane`, `ground plane`, `shadow` (unless `allowFloorPlane`) |
+| `RightWall` | `isometric right wall`, `right-facing wall plane` | same |
+| `FloorTile` | `isometric floor plane`, `top-down surface` | — |
+| `Prop` | `single isolated prop` | `background scene`, `room`, `environment` (unless `allowSceneContext`) |
+| `Character` | `isometric character`, `facing camera` | — |
+| `Bounded` | `single isolated subject`, `full object visible` | `cropped`, `partially visible` + environment negatives |
+| `SilhouetteLocked` | same + `exact silhouette preserved` | same |
+
+`requiresTransparency` and `isTileable` fire unconditionally — the spec is self-contained and merge deduplicates any overlap with pack/asset constraint tokens. The existing `allowFloorPlane` / `allowSceneContext` overrides still suppress the corresponding negatives.
+
+Because `constraintTokens` is compiled to a string for session sync comparison, any spec change (orientation, shape policy, toggles) automatically triggers a session refresh in `syncGeneratorSession` — no extra logic needed.
 
 ---
 
-# Phase 4 — Transparent asset workflow
+# Phase 4 — Transparent asset workflow ✓ DONE
 
 ## Goal
 
@@ -497,13 +498,30 @@ This phase should explicitly support isolated asset extraction, even when the ba
 
 ## Acceptance criteria
 
-- The user can produce a transparent asset export from a project workflow.
-- Edge halos are reduced enough for in-game use.
-- Transparency is visible and reviewable before export.
+- ✓ The user can produce a transparent asset export from a project workflow.
+- ✓ Edge halos are reduced enough for in-game use.
+- ✓ Transparency is visible and reviewable before export.
+
+## What was built
+
+**`src/postprocess/AlphaCutout`** — new module implementing corner flood-fill background removal:
+1. Estimates background colour from 3×3 regions at all four corners
+2. BFS flood-fill from all four corners with configurable Euclidean colour distance tolerance (default 30)
+3. Optional 1px foreground erosion (defringe) to eliminate halo fringe pixels
+4. Multi-pass feathering: alpha blur at the fg/bg boundary, only allowing alpha to decrease
+
+**File naming convention** — transparent derivatives are saved as `<stem>_t.png` alongside the raw image. Gallery scanning excludes `_t.png` files; they are treated as hidden derivatives.
+
+**Integration:**
+- `ResolvedProjectContext` now carries `AssetSpec spec` so controllers can read `requiresTransparency` without re-querying `ProjectManager`
+- `launchGeneration` captures `requiresTransparency` and runs `AlphaCutout::removeBackground` in the generation thread after `generateFromPrompt` returns, for all images in the batch
+- `selectGalleryImage` prefers the `_t.png` sibling when `projectContext_.spec.requiresTransparency` is true
+- `ResultPanel` renders a two-tone checkerboard (200/155 grey) behind the image preview when `showCheckerboard=true`
+- `ProjectController::syncGeneratorSession` sets `showCheckerboard` from `ctx.spec.requiresTransparency` every frame
 
 ---
 
-# Phase 5 — Validation and compatibility checks
+# Phase 5 — Validation and compatibility checks ✓ DONE
 
 ## Goal
 
@@ -560,8 +578,26 @@ Show a small validation summary on selected results:
 
 ## Acceptance criteria
 
-- The tool can flag an asset that looks good but does not fit its slot.
-- The user can tell whether a result is game-ready without manually exporting and testing it first.
+- ✓ The tool can flag an asset that looks good but does not fit its slot.
+- ✓ The user can tell whether a result is game-ready without manually exporting and testing it first.
+
+## What was built
+
+**`src/postprocess/AssetValidator`** — new module with a single entry point `validate(sf::Image&, AssetSpec&) → Result`:
+
+| Check | Pass | Warning | Fail |
+|---|---|---|---|
+| **Canvas** | dims match `spec.canvasWidth/Height` | mismatch + `!enforceCanvasSize` | mismatch + `enforceCanvasSize` |
+| **Alpha** | any pixel `alpha < 255` (when `requiresTransparency`) | no transparent pixels + `!enforceTransparency` | no transparent pixels + `enforceTransparency` |
+| **Fill** | opaque pixel ratio within `[minFillRatio, maxFillRatio]` | above `maxFillRatio` | below `minFillRatio` |
+
+Canvas check is skipped when both `canvasWidth` and `canvasHeight` are 0 (no canvas contract defined). Alpha check is skipped when `requiresTransparency` is false.
+
+`Result::exportReady()` returns `true` only when no check has `status == 2` (fail).
+
+**`ResultPanel`** — `validationChips` vector added (`name`, `status`, `detail`). Chips render as a horizontal strip just below the image frame, spanning the full frame width. Color coding: green border = pass, gold = warning, red = fail. The strip only appears when at least one chip is present.
+
+**`ImageGeneratorController::selectGalleryImage`** — now loads the displayed image as `sf::Image` first (to allow pixel-level inspection), creates the `sf::Texture` from it via `loadFromImage`, then runs `AssetValidator::validate` and populates `rp.validationChips`. Chips are cleared on deselect and when no project context is active.
 
 ---
 
@@ -709,7 +745,7 @@ The most useful rollout is foundation-first. Pipeline structure should land befo
 
 ## Phase A — Foundation
 
-1. Asset specification model
+1. ✓ Asset specification model
 2. Reference normalization
 3. Metadata emission
 4. Post-processing pipeline stage
@@ -718,15 +754,15 @@ The most useful rollout is foundation-first. Pipeline structure should land befo
 
 1. Simple img2img reference workflow
 2. Mask ingestion and normalization
-3. Asset-type locked prompt constraints
+3. ✓ Asset-type locked prompt constraints
 
 ## Phase C — Usability
 
-1. Transparent asset workflow
-2. Basic validation:
-   - canvas
-   - alpha
-   - fill ratio
+1. ✓ Transparent asset workflow
+2. ✓ Basic validation:
+   - ✓ canvas
+   - ✓ alpha
+   - ✓ fill ratio
 3. Candidate export preview
 
 ## Phase D — Iteration

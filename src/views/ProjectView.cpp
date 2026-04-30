@@ -246,7 +246,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     }
 
     const float assetWorkspaceY = themeBox.top + themeBox.height + metrics.spaceLg;
-    const float assetWorkspaceH = 278.f;
+    const float assetWorkspaceH = 440.f;
     const float listW = 134.f;
     const float detailX = sectionX + listW + metrics.spaceXl;
     const float detailW = railW - listW - metrics.spaceXl;
@@ -332,6 +332,9 @@ void ProjectView::render(sf::RenderWindow& win) {
         assetPositiveArea.setRect({});
         assetNegativeArea.setRect({});
         assetConstraintToggles = {};
+        assetSpecOrientationToggles = {};
+        assetSpecMiscToggles = {};
+        assetSpecShapePolicyToggles = {};
     } else {
         const AssetType* selectedAsset = nullptr;
         for (const auto& at : proj->assetTypes) {
@@ -386,6 +389,70 @@ void ProjectView::render(sf::RenderWindow& win) {
                            active[i] ? colors.goldLt : colors.muted,
                            false, type.compact, font);
                 assetConstraintToggles[static_cast<size_t>(i)] = chip;
+            }
+        }
+
+        // Asset spec section
+        {
+            const float specLabelY = assetWorkspaceY + 302.f;
+            const float chipH      = 22.f;
+            const float chipAreaW  = detailW - metrics.spaceMd * 2.f;
+            const float chipX0     = detailX + metrics.spaceMd;
+            const float chip3W     = (chipAreaW - metrics.spaceSm * 2.f) / 3.f;
+            const float chip2W     = (chipAreaW - metrics.spaceSm) / 2.f;
+            const auto& spec       = selectedAsset->spec;
+
+            Helpers::drawText(win, font, "Asset spec", colors.muted,
+                              chipX0, specLabelY, type.compact, false);
+
+            // Orientation — 2 rows of 3
+            const float orientY0 = specLabelY + 16.f;
+            const char* orientLabels[6] = { "None", "L. Wall", "R. Wall", "Floor", "Prop", "Char." };
+            const Orientation orientValues[6] = {
+                Orientation::Unset, Orientation::LeftWall, Orientation::RightWall,
+                Orientation::FloorTile, Orientation::Prop, Orientation::Character
+            };
+            for (int i = 0; i < 6; ++i) {
+                const float cx     = chipX0 + static_cast<float>(i % 3) * (chip3W + metrics.spaceSm);
+                const float cy     = orientY0 + static_cast<float>(i / 3) * (chipH + metrics.spaceXs);
+                const bool  active = spec.orientation == orientValues[i];
+                const sf::FloatRect chip{cx, cy, chip3W, chipH};
+                drawButton(win, chip, orientLabels[i],
+                           active ? colors.blue : colors.panel,
+                           active ? colors.goldLt : colors.muted,
+                           false, type.compact, font);
+                assetSpecOrientationToggles[static_cast<size_t>(i)] = chip;
+            }
+
+            // requiresTransparency + isTileable
+            const float miscY = orientY0 + 2.f * (chipH + metrics.spaceXs) + metrics.spaceXs;
+            const char*  miscLabels[2]  = { "Transparent", "Tileable" };
+            const bool   miscActive[2]  = { spec.requiresTransparency, spec.isTileable };
+            for (int i = 0; i < 2; ++i) {
+                const float cx = chipX0 + static_cast<float>(i) * (chip2W + metrics.spaceSm);
+                const sf::FloatRect chip{cx, miscY, chip2W, chipH};
+                drawButton(win, chip, miscLabels[i],
+                           miscActive[i] ? colors.blue : colors.panel,
+                           miscActive[i] ? colors.goldLt : colors.muted,
+                           false, type.compact, font);
+                assetSpecMiscToggles[static_cast<size_t>(i)] = chip;
+            }
+
+            // Shape policy — 1 row of 3
+            const float shapeY = miscY + chipH + metrics.spaceXs;
+            const char* shapeLabels[3]  = { "Freeform", "Bounded", "Silhouette" };
+            const ShapePolicy shapePols[3] = {
+                ShapePolicy::Freeform, ShapePolicy::Bounded, ShapePolicy::SilhouetteLocked
+            };
+            for (int i = 0; i < 3; ++i) {
+                const float cx     = chipX0 + static_cast<float>(i) * (chip3W + metrics.spaceSm);
+                const bool  active = spec.shapePolicy == shapePols[i];
+                const sf::FloatRect chip{cx, shapeY, chip3W, chipH};
+                drawButton(win, chip, shapeLabels[i],
+                           active ? colors.blue : colors.panel,
+                           active ? colors.goldLt : colors.muted,
+                           false, type.compact, font);
+                assetSpecShapePolicyToggles[static_cast<size_t>(i)] = chip;
             }
         }
     }

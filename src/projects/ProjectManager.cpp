@@ -29,6 +29,108 @@ static uint64_t nowSeconds() {
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
 
+static const char* orientationToStr(Orientation o) {
+    switch (o) {
+        case Orientation::LeftWall:    return "left_wall";
+        case Orientation::RightWall:   return "right_wall";
+        case Orientation::FloorTile:   return "floor_tile";
+        case Orientation::Prop:        return "prop";
+        case Orientation::Character:   return "character";
+        default:                       return "unset";
+    }
+}
+static Orientation strToOrientation(const std::string& s) {
+    if (s == "left_wall")  return Orientation::LeftWall;
+    if (s == "right_wall") return Orientation::RightWall;
+    if (s == "floor_tile") return Orientation::FloorTile;
+    if (s == "prop")       return Orientation::Prop;
+    if (s == "character")  return Orientation::Character;
+    return Orientation::Unset;
+}
+static const char* shapePolicyToStr(ShapePolicy p) {
+    switch (p) {
+        case ShapePolicy::Bounded:          return "bounded";
+        case ShapePolicy::SilhouetteLocked: return "silhouette_locked";
+        default:                            return "freeform";
+    }
+}
+static ShapePolicy strToShapePolicy(const std::string& s) {
+    if (s == "bounded")           return ShapePolicy::Bounded;
+    if (s == "silhouette_locked") return ShapePolicy::SilhouetteLocked;
+    return ShapePolicy::Freeform;
+}
+static const char* fitModeToStr(AssetFitMode m) {
+    switch (m) {
+        case AssetFitMode::TileExact: return "tile_exact";
+        case AssetFitMode::NoResize:  return "no_resize";
+        default:                      return "object_fit";
+    }
+}
+static AssetFitMode strToFitMode(const std::string& s) {
+    if (s == "tile_exact") return AssetFitMode::TileExact;
+    if (s == "no_resize")  return AssetFitMode::NoResize;
+    return AssetFitMode::ObjectFit;
+}
+
+static nlohmann::json specToJson(const AssetSpec& s) {
+    return {
+        {"canvasWidth",          s.canvasWidth},
+        {"canvasHeight",         s.canvasHeight},
+        {"anchor",               {{"x", s.anchor.x}, {"y", s.anchor.y}}},
+        {"orientation",          orientationToStr(s.orientation)},
+        {"expectedBounds",       {{"x", s.expectedBounds.x}, {"y", s.expectedBounds.y},
+                                  {"w", s.expectedBounds.w}, {"h", s.expectedBounds.h}}},
+        {"targetFillRatio",      s.targetFillRatio},
+        {"minFillRatio",         s.minFillRatio},
+        {"maxFillRatio",         s.maxFillRatio},
+        {"requiresTransparency", s.requiresTransparency},
+        {"shapePolicy",          shapePolicyToStr(s.shapePolicy)},
+        {"fitMode",              fitModeToStr(s.fitMode)},
+        {"isTileable",           s.isTileable},
+        {"validation", {
+            {"enforceCanvasSize",      s.validation.enforceCanvasSize},
+            {"enforceTransparency",    s.validation.enforceTransparency},
+            {"enforceSilhouette",      s.validation.enforceSilhouette},
+            {"enforceAnchor",          s.validation.enforceAnchor},
+            {"maxSilhouetteDeviation", s.validation.maxSilhouetteDeviation}
+        }}
+    };
+}
+
+static AssetSpec specFromJson(const nlohmann::json& j) {
+    AssetSpec s;
+    s.canvasWidth  = j.value("canvasWidth",  0);
+    s.canvasHeight = j.value("canvasHeight", 0);
+    if (j.contains("anchor") && j["anchor"].is_object()) {
+        s.anchor.x = j["anchor"].value("x", 0);
+        s.anchor.y = j["anchor"].value("y", 0);
+    }
+    s.orientation = strToOrientation(j.value("orientation", std::string{"unset"}));
+    if (j.contains("expectedBounds") && j["expectedBounds"].is_object()) {
+        const auto& b      = j["expectedBounds"];
+        s.expectedBounds.x = b.value("x", 0);
+        s.expectedBounds.y = b.value("y", 0);
+        s.expectedBounds.w = b.value("w", 0);
+        s.expectedBounds.h = b.value("h", 0);
+    }
+    s.targetFillRatio      = j.value("targetFillRatio",      0.6f);
+    s.minFillRatio         = j.value("minFillRatio",         0.3f);
+    s.maxFillRatio         = j.value("maxFillRatio",         0.9f);
+    s.requiresTransparency = j.value("requiresTransparency", true);
+    s.shapePolicy          = strToShapePolicy(j.value("shapePolicy", std::string{"freeform"}));
+    s.fitMode              = strToFitMode(j.value("fitMode", std::string{"object_fit"}));
+    s.isTileable           = j.value("isTileable", false);
+    if (j.contains("validation") && j["validation"].is_object()) {
+        const auto& v = j["validation"];
+        s.validation.enforceCanvasSize      = v.value("enforceCanvasSize",      true);
+        s.validation.enforceTransparency    = v.value("enforceTransparency",    true);
+        s.validation.enforceSilhouette      = v.value("enforceSilhouette",      false);
+        s.validation.enforceAnchor          = v.value("enforceAnchor",          false);
+        s.validation.maxSilhouetteDeviation = v.value("maxSilhouetteDeviation", 0.0f);
+    }
+    return s;
+}
+
 static nlohmann::json assetTypeToJson(const AssetType& a) {
     nlohmann::json j;
     j["id"]           = a.id;
@@ -40,6 +142,7 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
         {"tileableEdge",       a.constraints.tileableEdge},
         {"topSurfaceVisible",  a.constraints.topSurfaceVisible}
     };
+    j["spec"] = specToJson(a.spec);
     return j;
 }
 
@@ -50,12 +153,14 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
     if (j.contains("promptTokens") && j["promptTokens"].is_object())
         a.promptTokens = j["promptTokens"].get<Prompt>();
     if (j.contains("constraints") && j["constraints"].is_object()) {
-        const auto& c          = j["constraints"];
+        const auto& c           = j["constraints"];
         a.constraints.allowFloorPlane   = c.value("allowFloorPlane",   false);
         a.constraints.allowSceneContext = c.value("allowSceneContext",  false);
         a.constraints.tileableEdge      = c.value("tileableEdge",       false);
         a.constraints.topSurfaceVisible = c.value("topSurfaceVisible",  false);
     }
+    if (j.contains("spec") && j["spec"].is_object())
+        a.spec = specFromJson(j["spec"]);
     return a;
 }
 
@@ -209,7 +314,8 @@ void ProjectManager::deleteProject(const std::string& id) {
 AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        const std::string& name,
                                        const Prompt&      promptTokens,
-                                       const AssetConstraints& constraints) {
+                                       const AssetConstraints& constraints,
+                                       const AssetSpec& spec) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -220,6 +326,7 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.name         = name;
     a.promptTokens = promptTokens;
     a.constraints  = constraints;
+    a.spec         = spec;
     p->assetTypes.push_back(a);
     save();
     return a;

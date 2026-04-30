@@ -8,8 +8,9 @@ struct AssetTypeTemplate {
     std::string id;
     std::string label;
     std::string defaultName;
-    Prompt      promptTokens;
+    Prompt           promptTokens;
     AssetConstraints constraints;
+    AssetSpec        spec;
     std::vector<std::string> tags;
 };
 

@@ -19,7 +19,8 @@ Project
 └── assetTypes[]
     ├── id, name
     ├── promptTokens  — asset-specific Prompt DSL layered on top of stylePrompt
-    └── AssetConstraints — per-asset overrides and additions (see below)
+    ├── AssetConstraints — per-asset overrides and additions (see below)
+    └── AssetSpec     — formal production contract (see below)
 ```
 
 Key files:
@@ -77,24 +78,65 @@ The compiled constraint tokens are stored in `ResolvedProjectContext::constraint
 
 ---
 
+## AssetSpec
+
+Defined on `AssetType`. Describes the formal production contract the generated asset must satisfy.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `canvasWidth` / `canvasHeight` | `int` | `0` | Override canvas; `0` inherits from project |
+| `anchor` | `Anchor{x,y}` | `{0,0}` | Pixel anchor point within the canvas |
+| `orientation` | `Orientation` | `Unset` | Isometric plane the asset lives on |
+| `expectedBounds` | `OccupiedBounds{x,y,w,h}` | `{0,0,0,0}` | Expected occupied region in canvas pixels |
+| `targetFillRatio` | `float` | `0.6` | Ideal subject-to-canvas fill |
+| `minFillRatio` / `maxFillRatio` | `float` | `0.3` / `0.9` | Acceptable fill range |
+| `requiresTransparency` | `bool` | `true` | Asset must have a transparent background |
+| `shapePolicy` | `ShapePolicy` | `Freeform` | How strictly shape must match a reference |
+| `fitMode` | `AssetFitMode` | `ObjectFit` | How the image is fit to the target canvas |
+| `isTileable` | `bool` | `false` | Asset must tile seamlessly |
+| `validation` | `ValidationPolicy` | see below | Which checks to enforce |
+
+### Orientation values
+`Unset`, `LeftWall`, `RightWall`, `FloorTile`, `Prop`, `Character`
+
+### ShapePolicy values
+`Freeform` — no shape enforcement  
+`Bounded` — subject must stay within expected bounds  
+`SilhouetteLocked` — output silhouette must match a reference
+
+### AssetFitMode values
+`ObjectFit`, `TileExact`, `NoResize`
+
+### ValidationPolicy
+| Field | Default |
+|---|---|
+| `enforceCanvasSize` | `true` |
+| `enforceTransparency` | `true` |
+| `enforceSilhouette` | `false` |
+| `enforceAnchor` | `false` |
+| `maxSilhouetteDeviation` | `0.0` |
+
+`AssetSpec` is fully persisted in `projects.json` under each asset type. Old project files load cleanly — all fields default gracefully.
+
+---
+
 ## Asset templates
 
 Built-in templates are defined in code in `src/projects/AssetTypeTemplate.cpp`.
 
-Current first-pass templates:
-- `Wall`
-- `Floor Tile`
-- `Corner Wall`
-- `Door`
-- `Stairs`
-- `Prop`
+Current templates:
+- `Wall` — `LeftWall`, `Bounded`, tileable, fill 0.5–0.9
+- `Floor Tile` — `FloorTile`, `Bounded`, tileable, fill 0.6–0.95
+- `Corner Wall` — `Unset`, `Bounded`, fill 0.4–0.85
+- `Door` — `LeftWall`, `Freeform`, fill 0.4–0.8
+- `Stairs` — `Unset`, `Bounded`, fill 0.45–0.85
+- `Prop` — `Prop`, `Freeform`, fill 0.3–0.8
 
 Each template provides:
-- `id`
-- `label`
-- `defaultName`
+- `id`, `label`, `defaultName`
 - starter `Prompt` tokens
 - starter `AssetConstraints`
+- starter `AssetSpec` (orientation, shape policy, fill range, tileable flag)
 - tags for future UI use
 
 Templates are **not** persisted directly. Only the created `AssetType` result is written to `projects.json`.
@@ -120,6 +162,7 @@ Carries everything `ImageGeneratorController` needs for one generation session:
 | `assetTypeTokens` | `AssetType::promptTokens` |
 | `outputSubpath` | `sanitiseName(project) / sanitiseName(assetType)` |
 | `allAssetTypes` | all asset types in the project (used to populate gallery tabs) |
+| `spec` | `AssetType::spec` — production contract forwarded from the active asset type |
 
 `constraintTokens` is recomputed every frame in `buildSelectedContext()` and compared via compiled string equality in `syncGeneratorSession()` to trigger session refresh when any toggle changes.
 
@@ -131,8 +174,33 @@ All fields serialize to `projects.json` (array of project objects). Constraint f
 
 ---
 
+---
+
+## AssetValidator
+
+`src/postprocess/AssetValidator` runs pixel-level checks against `AssetSpec` immediately after an image is selected in the gallery.
+
+Entry point: `AssetValidator::validate(const sf::Image&, const AssetSpec&) → Result`
+
+Three checks are implemented:
+
+| Check | Condition | Pass | Warning | Fail |
+|---|---|---|---|---|
+| Canvas | `canvasWidth > 0 \|\| canvasHeight > 0` | dims match spec | mismatch + `!enforceCanvasSize` | mismatch + `enforceCanvasSize` |
+| Alpha | `requiresTransparency` | any pixel alpha < 255 | none found + `!enforceTransparency` | none found + `enforceTransparency` |
+| Fill | always | ratio in `[minFillRatio, maxFillRatio]` | above max | below min |
+
+`Result::exportReady()` returns `true` when no check is status 2 (fail).
+
+Results are forwarded to `ResultPanel::validationChips` and rendered as a color-coded chip strip below the image frame: green = pass, gold = warning, red = fail. Chips are cleared when no image is selected or no project context is active.
+
+---
+
 ## Invariants
 
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier.
 - Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content.
 - `ProjectController` is the only place that reads `ProjectManager` and builds `ResolvedProjectContext`.
+- `AssetSpec` drives prompt compilation via `buildConstraintTokens()` — orientation, shape policy, transparency, and tileability all inject locked tokens automatically.
+- Spec toggle clicks call `projectManager_.updateAssetType()` directly — no dirty flag, no save button.
+- `ResolvedProjectContext::spec` carries the active asset type's `AssetSpec` — `ImageGeneratorController` reads it for transparency, validation, and gallery display without querying `ProjectManager`.

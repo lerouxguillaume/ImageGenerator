@@ -23,7 +23,8 @@ public:
     AssetType addAssetType(const std::string& projectId,
                            const std::string& name,
                            const Prompt&      promptTokens = {},
-                           const AssetConstraints& constraints = {});
+                           const AssetConstraints& constraints = {},
+                           const AssetSpec& spec = {});
 
     // Replace an existing asset type (matched by id) within a project and persist.
     // No-op with a log warning if either id is not found.

@@ -1,5 +1,7 @@
 #include "ImageGeneratorController.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
+#include "../postprocess/AlphaCutout.hpp"
+#include "../postprocess/AssetValidator.hpp"
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
 #include "../presets/PresetManager.hpp"
@@ -133,6 +135,19 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     gs.height  = sp.generationParams.height;
     gs.presetId = sp.activePresetId;
     return gs;
+}
+
+// Returns the transparent-version path for a raw generated image.
+// "output/img_123.png" → "output/img_123_t.png"
+static std::string transparentPath(const std::string& rawPath) {
+    const auto dot = rawPath.rfind('.');
+    if (dot == std::string::npos) return rawPath + "_t";
+    return rawPath.substr(0, dot) + "_t" + rawPath.substr(dot);
+}
+
+static bool isTransparentDerivative(const std::filesystem::path& path) {
+    const std::string stem = path.stem().string();
+    return stem.size() >= 2 && stem.substr(stem.size() - 2) == "_t";
 }
 
 static bool isGalleryImageFile(const std::filesystem::path& path) {
@@ -351,16 +366,35 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::atomic<int>*  imgNum   = &rp.generationImageNum;
     std::atomic<bool>* failed   = &rp.generationFailed;
     std::string*       errorMsg = &rp.generationErrorMsg;
+    const bool requiresTransparency = projectContext_.spec.requiresTransparency;
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
         [prompt, negPrompt, outPath, params, modelDir,
-         done, step, idPtr, imgNum, myId, failed, errorMsg]
+         done, step, idPtr, imgNum, myId, failed, errorMsg,
+         requiresTransparency]
         (std::stop_token st) {
             try {
                 PortraitGeneratorAi::generateFromPrompt(
                     prompt, negPrompt, outPath, params, modelDir, step, imgNum, std::move(st));
+
+                if (requiresTransparency) {
+                    // Apply alpha cutout to every generated image in the batch.
+                    auto applyAlpha = [](const std::string& path) {
+                        sf::Image raw;
+                        if (!raw.loadFromFile(path)) return;
+                        AlphaCutout::removeBackground(raw).saveToFile(transparentPath(path));
+                    };
+                    applyAlpha(outPath);
+                    for (int i = 2; i <= params.numImages; ++i) {
+                        const auto dot = outPath.rfind('.');
+                        const std::string nthPath = (dot == std::string::npos)
+                            ? outPath + "_" + std::to_string(i)
+                            : outPath.substr(0, dot) + "_" + std::to_string(i) + outPath.substr(dot);
+                        applyAlpha(nthPath);
+                    }
+                }
             } catch (const std::exception& e) {
                 Logger::error("Generation failed: " + std::string(e.what()));
                 *errorMsg = e.what();
@@ -416,17 +450,42 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
         rp.selectedIndex = -1;
         rp.resultLoaded = false;
         rp.displayedImagePath.clear();
+        rp.validationChips.clear();
         return;
     }
 
     rp.selectedIndex = index;
     const auto& item = rp.gallery[static_cast<size_t>(index)];
-    if (rp.resultTexture.loadFromFile(item.path)) {
+
+    // Prefer the transparent derivative if transparency is active and the file exists.
+    std::string displayPath = item.path;
+    if (projectContext_.spec.requiresTransparency) {
+        const std::string tp = transparentPath(item.path);
+        if (std::filesystem::exists(tp))
+            displayPath = tp;
+    }
+
+    // Load as sf::Image so we can run validation before creating the texture.
+    sf::Image img;
+    const bool loaded = img.loadFromFile(displayPath)
+                     || img.loadFromFile(item.path);
+    if (loaded) {
+        rp.resultTexture.loadFromImage(img);
         rp.resultLoaded = true;
-        rp.displayedImagePath = item.path;
+        rp.displayedImagePath = displayPath;
+
+        if (!projectContext_.empty()) {
+            auto vr = AssetValidator::validate(img, projectContext_.spec);
+            rp.validationChips.clear();
+            for (const auto& c : vr.checks)
+                rp.validationChips.push_back({c.name, c.status, c.detail});
+        } else {
+            rp.validationChips.clear();
+        }
     } else {
         rp.resultLoaded = false;
         rp.displayedImagePath.clear();
+        rp.validationChips.clear();
     }
 }
 
@@ -448,6 +507,7 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
         for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
             if (!entry.is_regular_file()) continue;
             if (!isGalleryImageFile(entry.path())) continue;
+            if (isTransparentDerivative(entry.path())) continue;
             entries.push_back({
                 entry.path().string(),
                 entry.path().filename().string(),

@@ -27,6 +27,7 @@ public:
     // ── Display ───────────────────────────────────────────────────────────────
     sf::Texture resultTexture;
     bool        resultLoaded = false;
+    bool        showCheckerboard = false; // render checkerboard behind transparent images
     std::vector<GalleryItem> gallery;
     int                      selectedIndex = -1;
     bool                     showImproveButton = true;
@@ -49,6 +50,14 @@ public:
     std::string       generationErrorMsg;
     std::string       lastImagePath;
     std::string       displayedImagePath;
+
+    // ── Validation chips (set by controller after selectGalleryImage) ─────────
+    struct ValidationChip {
+        std::string name;
+        int         status = 0; // 0=pass 1=warning 2=fail
+        std::string detail;
+    };
+    std::vector<ValidationChip> validationChips;
 
     // Action flag: set by handleEvent on Generate click; cleared by controller after launching
     bool generateRequested = false;

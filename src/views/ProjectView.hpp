@@ -77,6 +77,12 @@ public:
     std::array<sf::FloatRect, 6> packConstraintToggles = {};
     // Asset: [0]=allowFloor [1]=allowScene [2]=tileable [3]=topSurface
     std::array<sf::FloatRect, 4> assetConstraintToggles = {};
+    // Asset spec: orientation [0..5]=Unset/LeftWall/RightWall/FloorTile/Prop/Character
+    std::array<sf::FloatRect, 6> assetSpecOrientationToggles = {};
+    // Asset spec: misc [0]=requiresTransparency [1]=isTileable
+    std::array<sf::FloatRect, 2> assetSpecMiscToggles = {};
+    // Asset spec: shape policy [0]=Freeform [1]=Bounded [2]=SilhouetteLocked
+    std::array<sf::FloatRect, 3> assetSpecShapePolicyToggles = {};
 
     bool        themeDirty = false;
     bool        assetDirty = false;

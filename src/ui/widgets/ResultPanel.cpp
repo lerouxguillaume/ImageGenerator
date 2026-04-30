@@ -4,6 +4,7 @@
 #include "../../ui/Helpers.hpp"
 #include "../../ui/Theme.h"
 #include <algorithm>
+#include <cmath>
 
 using namespace Helpers;
 
@@ -155,10 +156,48 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         constexpr float navBtnSize = 34.f;
         constexpr float navBtnGap = 10.f;
 
+        if (showCheckerboard) {
+            constexpr float sqSz = 16.f;
+            const int cols = static_cast<int>(std::ceil(imgW / sqSz));
+            const int rows = static_cast<int>(std::ceil(imgH / sqSz));
+            for (int row = 0; row < rows; ++row) {
+                for (int col = 0; col < cols; ++col) {
+                    const float rx = imgX + static_cast<float>(col) * sqSz;
+                    const float ry = imgY + static_cast<float>(row) * sqSz;
+                    const float rw = std::min(sqSz, imgX + imgW - rx);
+                    const float rh = std::min(sqSz, imgY + imgH - ry);
+                    const sf::Color chCol = ((row + col) % 2 == 0)
+                        ? sf::Color(200, 200, 200) : sf::Color(155, 155, 155);
+                    drawRect(win, {rx, ry, rw, rh}, chCol, sf::Color::Transparent, 0.f);
+                }
+            }
+        }
+
         sf::Sprite sprite(resultTexture);
         sprite.setScale(scale, scale);
         sprite.setPosition(imgX, imgY);
         win.draw(sprite);
+
+        // ── Validation chips (below image frame, above gallery/action bar) ────
+        if (!validationChips.empty()) {
+            constexpr float chipH   = 20.f;
+            constexpr float chipGap = 6.f;
+            const float chipsY = frameY + frameH + 5.f;
+            const int   n      = static_cast<int>(validationChips.size());
+            const float totalGaps = static_cast<float>(n - 1) * chipGap;
+            const float chipW = (frameW - totalGaps) / static_cast<float>(n);
+            for (int ci = 0; ci < n; ++ci) {
+                const auto& chip = validationChips[static_cast<size_t>(ci)];
+                const float cx2  = frameX + static_cast<float>(ci) * (chipW + chipGap);
+                sf::Color borderCol = (chip.status == 0) ? sf::Color(60, 180, 80)
+                                    : (chip.status == 1) ? colors.goldLt
+                                                         : colors.redLt;
+                drawRect(win, {cx2, chipsY, chipW, chipH}, colors.panel2, borderCol, 1.f);
+                const std::string label = chip.name + ": " + chip.detail;
+                drawTextC(win, font, label, borderCol,
+                          cx2 + chipW / 2.f, chipsY + 3.f, type.helper);
+            }
+        }
 
         if (gallery.size() > 1) {
             const float navY = imgY + imgH / 2.f - navBtnSize / 2.f;

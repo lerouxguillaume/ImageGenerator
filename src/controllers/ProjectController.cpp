@@ -5,8 +5,11 @@
 #include "../prompt/PromptParser.hpp"
 
 static Prompt buildConstraintTokens(const PackConstraints& pack,
-                                    const AssetConstraints& asset) {
+                                    const AssetConstraints& asset,
+                                    const AssetSpec& spec) {
     Prompt p;
+
+    // ── Pack-level ────────────────────────────────────────────────────────────
     if (pack.transparentBg)
         p.positive.push_back({"transparent background", 1.0f});
     if (pack.isometricAngle) {
@@ -32,6 +35,75 @@ static Prompt buildConstraintTokens(const PackConstraints& pack,
         p.negative.push_back({"ground plane", 1.0f});
         p.negative.push_back({"shadow", 1.0f});
     }
+
+    // ── Spec-locked structural tokens ─────────────────────────────────────────
+    // These fire unconditionally from the spec so it is self-contained.
+    // Merge deduplicates any overlap with the pack/asset tokens above.
+
+    if (spec.requiresTransparency)
+        p.positive.push_back({"transparent background", 1.0f});
+
+    if (spec.isTileable)
+        p.positive.push_back({"seamless edges, tileable", 1.0f});
+
+    switch (spec.orientation) {
+        case Orientation::LeftWall:
+            p.positive.push_back({"isometric left wall", 1.0f});
+            p.positive.push_back({"left-facing wall plane", 1.0f});
+            if (!asset.allowFloorPlane) {
+                p.negative.push_back({"floor plane", 1.0f});
+                p.negative.push_back({"ground plane", 1.0f});
+                p.negative.push_back({"shadow", 1.0f});
+            }
+            break;
+        case Orientation::RightWall:
+            p.positive.push_back({"isometric right wall", 1.0f});
+            p.positive.push_back({"right-facing wall plane", 1.0f});
+            if (!asset.allowFloorPlane) {
+                p.negative.push_back({"floor plane", 1.0f});
+                p.negative.push_back({"ground plane", 1.0f});
+                p.negative.push_back({"shadow", 1.0f});
+            }
+            break;
+        case Orientation::FloorTile:
+            p.positive.push_back({"isometric floor plane", 1.0f});
+            p.positive.push_back({"top-down surface", 1.0f});
+            break;
+        case Orientation::Prop:
+            p.positive.push_back({"single isolated prop", 1.0f});
+            if (!asset.allowSceneContext) {
+                p.negative.push_back({"background scene", 1.0f});
+                p.negative.push_back({"room", 1.0f});
+                p.negative.push_back({"environment", 1.0f});
+            }
+            break;
+        case Orientation::Character:
+            p.positive.push_back({"isometric character", 1.0f});
+            p.positive.push_back({"facing camera", 1.0f});
+            break;
+        case Orientation::Unset:
+            break;
+    }
+
+    switch (spec.shapePolicy) {
+        case ShapePolicy::SilhouetteLocked:
+            p.positive.push_back({"exact silhouette preserved", 1.0f});
+            [[fallthrough]];
+        case ShapePolicy::Bounded:
+            p.positive.push_back({"single isolated subject", 1.0f});
+            p.positive.push_back({"full object visible", 1.0f});
+            p.negative.push_back({"cropped", 1.0f});
+            p.negative.push_back({"partially visible", 1.0f});
+            if (!asset.allowSceneContext) {
+                p.negative.push_back({"background", 1.0f});
+                p.negative.push_back({"environment", 1.0f});
+                p.negative.push_back({"clutter", 1.0f});
+            }
+            break;
+        case ShapePolicy::Freeform:
+            break;
+    }
+
     return p;
 }
 
@@ -429,6 +501,67 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         }
     }
 
+    // Asset spec — orientation toggles (radio: click active to deselect)
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
+        static const Orientation kOrientations[] = {
+            Orientation::Unset, Orientation::LeftWall, Orientation::RightWall,
+            Orientation::FloorTile, Orientation::Prop, Orientation::Character
+        };
+        for (int i = 0; i < 6; ++i) {
+            if (view.assetSpecOrientationToggles[static_cast<size_t>(i)].contains(pos)) {
+                auto proj = projectManager_.getProject(view.selectedProjectId);
+                if (!proj) return;
+                for (auto& at : proj->assetTypes) {
+                    if (at.id != view.selectedAssetTypeId) continue;
+                    at.spec.orientation = (at.spec.orientation == kOrientations[i] && i != 0)
+                        ? Orientation::Unset : kOrientations[i];
+                    projectManager_.updateAssetType(proj->id, at);
+                    return;
+                }
+                return;
+            }
+        }
+    }
+
+    // Asset spec — misc toggles (requiresTransparency, isTileable)
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
+        for (int i = 0; i < 2; ++i) {
+            if (view.assetSpecMiscToggles[static_cast<size_t>(i)].contains(pos)) {
+                auto proj = projectManager_.getProject(view.selectedProjectId);
+                if (!proj) return;
+                for (auto& at : proj->assetTypes) {
+                    if (at.id != view.selectedAssetTypeId) continue;
+                    if (i == 0) at.spec.requiresTransparency = !at.spec.requiresTransparency;
+                    else        at.spec.isTileable           = !at.spec.isTileable;
+                    projectManager_.updateAssetType(proj->id, at);
+                    return;
+                }
+                return;
+            }
+        }
+    }
+
+    // Asset spec — shape policy toggles (radio: click active to deselect → Freeform)
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
+        static const ShapePolicy kPolicies[] = {
+            ShapePolicy::Freeform, ShapePolicy::Bounded, ShapePolicy::SilhouetteLocked
+        };
+        for (int i = 0; i < 3; ++i) {
+            if (view.assetSpecShapePolicyToggles[static_cast<size_t>(i)].contains(pos)) {
+                auto proj = projectManager_.getProject(view.selectedProjectId);
+                if (!proj) return;
+                for (auto& at : proj->assetTypes) {
+                    if (at.id != view.selectedAssetTypeId) continue;
+                    at.spec.shapePolicy = (at.spec.shapePolicy == kPolicies[i] && i != 0)
+                        ? ShapePolicy::Freeform : kPolicies[i];
+                    projectManager_.updateAssetType(proj->id, at);
+                    return;
+                }
+                return;
+            }
+        }
+    }
+
     // Project rows: select or delete
     for (const auto& row : view.projectRows) {
         if (row.btnDelete.contains(pos)) {
@@ -546,7 +679,8 @@ void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const Ass
         view.selectedProjectId,
         assetTemplate.defaultName,
         assetTemplate.promptTokens,
-        assetTemplate.constraints);
+        assetTemplate.constraints,
+        assetTemplate.spec);
     if (assetType.id.empty())
         return;
     view.newAssetTypeInputActive = false;
@@ -593,6 +727,7 @@ void ProjectController::populateEditors(ProjectView& view) const {
 
 void ProjectController::syncGeneratorSession(ProjectView& view) {
     const ResolvedProjectContext ctx = buildSelectedContext(view);
+    view.generatorView.resultPanel.showCheckerboard = !ctx.empty() && ctx.spec.requiresTransparency;
     if (ctx.empty()) {
         generatorController_.clearProjectContext();
         return;
@@ -669,11 +804,12 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.projectName = proj->name;
         ctx.assetTypeId = at.id;
         ctx.assetTypeName = at.name;
-        ctx.stylePrompt     = proj->stylePrompt;
-        ctx.constraintTokens = buildConstraintTokens(proj->constraints, at.constraints);
-        ctx.assetTypeTokens = at.promptTokens;
-        ctx.outputSubpath = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
-        ctx.allAssetTypes = proj->assetTypes;
+        ctx.stylePrompt      = proj->stylePrompt;
+        ctx.constraintTokens = buildConstraintTokens(proj->constraints, at.constraints, at.spec);
+        ctx.assetTypeTokens  = at.promptTokens;
+        ctx.spec             = at.spec;
+        ctx.outputSubpath    = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
+        ctx.allAssetTypes    = proj->assetTypes;
         return ctx;
     }
     return {};
