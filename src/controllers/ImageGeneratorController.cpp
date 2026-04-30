@@ -201,6 +201,146 @@ struct SelectedImageMetadata {
     float       structureStrength = 0.0f;
 };
 
+struct CandidateScore {
+    int         index = -1;
+    std::string processedPath;
+    std::string rawPath;
+    float       score = 0.0f;
+    bool        valid = false;
+};
+
+static std::optional<OccupiedBounds> computeOpaqueBoundsForScore(const sf::Image& img) {
+    const unsigned w = img.getSize().x;
+    const unsigned h = img.getSize().y;
+    if (w == 0 || h == 0) return std::nullopt;
+    bool found = false;
+    unsigned minX = w;
+    unsigned minY = h;
+    unsigned maxX = 0;
+    unsigned maxY = 0;
+    for (unsigned py = 0; py < h; ++py) {
+        for (unsigned px = 0; px < w; ++px) {
+            if (img.getPixel(px, py).a < 128) continue;
+            found = true;
+            minX = std::min(minX, px);
+            minY = std::min(minY, py);
+            maxX = std::max(maxX, px);
+            maxY = std::max(maxY, py);
+        }
+    }
+    if (!found) return std::nullopt;
+    return OccupiedBounds{
+        static_cast<int>(minX),
+        static_cast<int>(minY),
+        static_cast<int>(maxX - minX + 1),
+        static_cast<int>(maxY - minY + 1)
+    };
+}
+
+static bool hasAnyTransparency(const sf::Image& img) {
+    const unsigned w = img.getSize().x;
+    const unsigned h = img.getSize().y;
+    for (unsigned py = 0; py < h; ++py)
+        for (unsigned px = 0; px < w; ++px)
+            if (img.getPixel(px, py).a < 255) return true;
+    return false;
+}
+
+static float computeFillRatioForScore(const sf::Image& img) {
+    const unsigned w = img.getSize().x;
+    const unsigned h = img.getSize().y;
+    if (w == 0 || h == 0) return 0.0f;
+    unsigned opaque = 0;
+    for (unsigned py = 0; py < h; ++py)
+        for (unsigned px = 0; px < w; ++px)
+            if (img.getPixel(px, py).a >= 128) ++opaque;
+    return static_cast<float>(opaque) / static_cast<float>(w * h);
+}
+
+static CandidateScore scoreWallCandidate(const std::string& processedPath,
+                                         const AssetSpec& spec, int index) {
+    CandidateScore candidate;
+    candidate.index = index;
+    candidate.processedPath = processedPath;
+    candidate.rawPath = rawPathForProcessed(processedPath).string();
+
+    sf::Image img;
+    if (!img.loadFromFile(processedPath))
+        return candidate;
+
+    const unsigned w = img.getSize().x;
+    const unsigned h = img.getSize().y;
+    if (w == 0 || h == 0)
+        return candidate;
+
+    float score = 0.0f;
+    if ((spec.canvasWidth > 0 && static_cast<int>(w) != spec.canvasWidth)
+        || (spec.canvasHeight > 0 && static_cast<int>(h) != spec.canvasHeight)) {
+        score += 10000.0f;
+    }
+    if (spec.requiresTransparency && !hasAnyTransparency(img))
+        score += 10000.0f;
+
+    const auto bounds = computeOpaqueBoundsForScore(img);
+    if (!bounds) {
+        score += 20000.0f;
+        candidate.score = score;
+        return candidate;
+    }
+
+    const float fillRatio = computeFillRatioForScore(img);
+    score += std::abs(fillRatio - spec.targetFillRatio) * 100.0f;
+    if (fillRatio < spec.minFillRatio)
+        score += 5000.0f;
+    else if (fillRatio > spec.maxFillRatio)
+        score += 2000.0f;
+
+    if (spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0) {
+        const float boundsError =
+            static_cast<float>(std::abs(bounds->x - spec.expectedBounds.x)
+            + std::abs(bounds->y - spec.expectedBounds.y)
+            + std::abs(bounds->w - spec.expectedBounds.w)
+            + std::abs(bounds->h - spec.expectedBounds.h));
+        score += boundsError * 3.0f;
+    }
+
+    if (spec.anchor.x != 0 || spec.anchor.y != 0) {
+        const int anchorX = bounds->x + bounds->w / 2;
+        const int anchorY = bounds->y + bounds->h;
+        const float dx = static_cast<float>(anchorX - spec.anchor.x);
+        const float dy = static_cast<float>(anchorY - spec.anchor.y);
+        score += std::sqrt(dx * dx + dy * dy) * 2.0f;
+    }
+
+    candidate.score = score;
+    candidate.valid = true;
+    return candidate;
+}
+
+static std::optional<CandidateScore> findBestWallCandidate(const ResultPanel& panel,
+                                                           const AssetSpec& spec) {
+    std::optional<CandidateScore> best;
+    for (int i = 0; i < static_cast<int>(panel.gallery.size()); ++i) {
+        const auto candidate = scoreWallCandidate(panel.gallery[static_cast<size_t>(i)].path, spec, i);
+        if (!candidate.valid) continue;
+        if (!best || candidate.score < best->score)
+            best = candidate;
+    }
+    return best;
+}
+
+static std::optional<CandidateScore> findBestWallCandidateInPaths(
+    const std::vector<std::string>& processedPaths, const AssetSpec& spec) {
+    std::optional<CandidateScore> best;
+    for (int i = 0; i < static_cast<int>(processedPaths.size()); ++i) {
+        const auto candidate = scoreWallCandidate(processedPaths[static_cast<size_t>(i)], spec, i);
+        if (!candidate.valid) continue;
+        if (!best || candidate.score < best->score)
+            best = candidate;
+    }
+    return best;
+}
+
 static SelectedImageMetadata loadSelectedImageMetadata(const std::filesystem::path& imagePath) {
     SelectedImageMetadata metadata;
     std::ifstream metaFile(metadataPathFor(imagePath.string()));
@@ -383,6 +523,18 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const std::string filename = "img_" + std::to_string(now) + ".png";
     const std::string rawOutPath = (rawDir / filename).string();
     rp.lastImagePath = (assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string();
+    lastBatchProcessedPaths_.clear();
+    for (int i = 1; i <= sp.generationParams.numImages; ++i) {
+        if (i == 1) {
+            lastBatchProcessedPaths_.push_back((assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string());
+            continue;
+        }
+        const auto dot = filename.rfind('.');
+        const std::string nthName = (dot == std::string::npos)
+            ? filename + "_" + std::to_string(i)
+            : filename.substr(0, dot) + "_" + std::to_string(i) + filename.substr(dot);
+        lastBatchProcessedPaths_.push_back((assetModeEnabled ? (processedDir / nthName) : (rawDir / nthName)).string());
+    }
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -421,6 +573,18 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rawOutPath;
     GenerationParams params = sp.generationParams;
+    const bool refinementUsed = pendingWallRefinement_ && !pendingWallRefinementSourcePath_.empty();
+    const std::string refinementSourcePath = pendingWallRefinementSourcePath_;
+    const float refinementStrength = pendingWallRefinementStrength_;
+    const int refinementAutoRound = pendingWallRefinementAutoRound_;
+    if (refinementUsed) {
+        params.initImagePath = refinementSourcePath;
+        params.strength = refinementStrength;
+    }
+    pendingWallRefinement_ = false;
+    pendingWallRefinementSourcePath_.clear();
+    pendingWallRefinementStrength_ = 0.0f;
+    pendingWallRefinementAutoRound_ = 0;
     if (!sp.seedInput.empty()) {
         try { params.seed = std::stoll(sp.seedInput); }
         catch (const std::exception&) { params.seed = -1; }
@@ -453,6 +617,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
          done, step, idPtr, imgNum, myId, failed, errorMsg,
          requiresTransparency, assetModeEnabled, processedDir, exportSpec,
          referenceEnabled, referenceImagePath, structureStrength,
+         refinementUsed, refinementSourcePath, refinementStrength, refinementAutoRound,
          generationWidth, generationHeight, refCacheDir]
         (std::stop_token st) {
             try {
@@ -507,6 +672,10 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
                     metaJson["referenceUsed"] = usedReference;
                     metaJson["referenceImage"] = usedReference ? referenceImagePath : std::string{};
                     metaJson["structureStrength"] = usedReference ? structureStrength : 0.0f;
+                    metaJson["refinementUsed"] = refinementUsed;
+                    metaJson["refinementSource"] = refinementUsed ? refinementSourcePath : std::string{};
+                    metaJson["refinementStrength"] = refinementUsed ? refinementStrength : 0.0f;
+                    metaJson["refinementAutoRound"] = refinementAutoRound;
                     std::ofstream meta(metadataPathFor(processedPath.string()));
                     meta << metaJson.dump(4);
                 };
@@ -530,6 +699,59 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
             }
             if (idPtr->load() == myId) done->store(true);
         });
+}
+
+void ImageGeneratorController::launchWallRefinement(ImageGeneratorView& view) {
+    auto& rp = view.resultPanel;
+    if (projectContext_.empty()
+        || projectContext_.spec.orientation != Orientation::LeftWall
+        || projectContext_.referenceImagePath.empty()) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "Wall refinement is only available for left-wall asset generation.";
+        return;
+    }
+
+    const auto best = findBestWallCandidate(rp, projectContext_.spec);
+    if (!best || best->rawPath.empty() || !std::filesystem::exists(best->rawPath)) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "No usable wall candidate found to refine.";
+        return;
+    }
+
+    pendingWallRefinement_ = true;
+    pendingWallRefinementSourcePath_ = best->rawPath;
+    pendingWallRefinementStrength_ = std::min(projectContext_.structureStrength, 0.30f);
+    pendingWallRefinementAutoRound_ = autoWallRefinementActive_ ? autoWallRefinementRound_ : 0;
+    launchGeneration(view);
+}
+
+void ImageGeneratorController::startAutoWallRefinement(ImageGeneratorView& view) {
+    auto& rp = view.resultPanel;
+    if (projectContext_.empty()
+        || projectContext_.spec.orientation != Orientation::LeftWall
+        || projectContext_.referenceImagePath.empty()) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "Auto refinement is only available for left-wall asset generation.";
+        return;
+    }
+
+    const auto best = findBestWallCandidate(rp, projectContext_.spec);
+    if (!best || !best->valid) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "No usable wall candidate found to auto-refine.";
+        return;
+    }
+
+    autoWallRefinementActive_ = true;
+    autoWallRefinementRound_ = 1;
+    autoWallRefinementMaxRounds_ = 2;
+    autoWallRefinementBestScore_ = best->score;
+    autoWallRefinementStrength_ = std::min(projectContext_.structureStrength, 0.30f);
+    launchWallRefinement(view);
 }
 
 void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
@@ -693,6 +915,13 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
         selected = 0;
 
     selectGalleryImage(view, selected);
+
+    if (projectContext_.spec.orientation == Orientation::LeftWall && !rp.gallery.empty()) {
+        const auto best = findBestWallCandidate(rp, projectContext_.spec);
+        rp.bestWallCandidateScore = (best && best->valid) ? best->score : -1.f;
+    } else {
+        rp.bestWallCandidateScore = -1.f;
+    }
 }
 
 void ImageGeneratorController::flushPendingThumbs(ImageGeneratorView& view) {
@@ -828,6 +1057,15 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             if (mode_ == WorkflowMode::Generate) {
                 pendingEditNavigationPath_ = view.resultPanel.displayedImagePath;
             }
+        }
+        if (view.resultPanel.refineBestRequested) {
+            view.resultPanel.refineBestRequested = false;
+            autoWallRefinementActive_ = false;
+            launchWallRefinement(view);
+        }
+        if (view.resultPanel.autoRefineRequested) {
+            view.resultPanel.autoRefineRequested = false;
+            startAutoWallRefinement(view);
         }
         if (view.resultPanel.deleteRequested) {
             view.resultPanel.deleteRequested = false;
@@ -980,7 +1218,29 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                         : rp.lastImagePath.substr(0, dot) + "_" + idx + rp.lastImagePath.substr(dot);
                 }
                 refreshGallery(view, preferred);
+                if (autoWallRefinementActive_) {
+                    const auto batchBest = findBestWallCandidateInPaths(lastBatchProcessedPaths_, projectContext_.spec);
+                    if (batchBest
+                        && batchBest->score + 0.5f < autoWallRefinementBestScore_
+                        && autoWallRefinementRound_ < autoWallRefinementMaxRounds_
+                        && std::filesystem::exists(batchBest->rawPath)) {
+                        autoWallRefinementBestScore_ = batchBest->score;
+                        autoWallRefinementRound_ += 1;
+                        autoWallRefinementStrength_ = std::max(0.22f, autoWallRefinementStrength_ - 0.04f);
+                        pendingWallRefinement_ = true;
+                        pendingWallRefinementSourcePath_ = batchBest->rawPath;
+                        pendingWallRefinementStrength_ = autoWallRefinementStrength_;
+                        pendingWallRefinementAutoRound_ = autoWallRefinementRound_;
+                        launchGeneration(view);
+                    } else {
+                        autoWallRefinementActive_ = false;
+                    }
+                }
+            } else {
+                autoWallRefinementActive_ = false;
             }
+        } else {
+            autoWallRefinementActive_ = false;
         }
     }
 

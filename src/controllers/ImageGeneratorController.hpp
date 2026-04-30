@@ -53,6 +53,8 @@ private:
 
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
+    void launchWallRefinement(ImageGeneratorView& view);
+    void startAutoWallRefinement(ImageGeneratorView& view);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});
     void selectGalleryImage(ImageGeneratorView& view, int index);
@@ -97,4 +99,14 @@ private:
     std::vector<PendingThumb> pendingThumbs_;
     void flushPendingThumbs(ImageGeneratorView& view);
     std::string pendingEditNavigationPath_;
+    bool        pendingWallRefinement_ = false;
+    std::string pendingWallRefinementSourcePath_;
+    float       pendingWallRefinementStrength_ = 0.0f;
+    int         pendingWallRefinementAutoRound_ = 0;
+    std::vector<std::string> lastBatchProcessedPaths_;
+    bool        autoWallRefinementActive_ = false;
+    int         autoWallRefinementRound_ = 0;
+    int         autoWallRefinementMaxRounds_ = 0;
+    float       autoWallRefinementBestScore_ = 0.0f;
+    float       autoWallRefinementStrength_ = 0.0f;
 };

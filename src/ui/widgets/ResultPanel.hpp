@@ -72,6 +72,11 @@ public:
     bool generateRequested = false;
     bool improveRequested  = false;
     bool deleteRequested   = false;
+    bool refineBestRequested = false;
+    bool autoRefineRequested = false;
+    bool showRefineBestButton = false;
+    bool showAutoRefineButton = false;
+    float bestWallCandidateScore = -1.f; // < 0 = not computed
 
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
@@ -89,6 +94,8 @@ private:
     sf::FloatRect btnCancelGenerate_;
     sf::FloatRect btnImprove_;
     sf::FloatRect btnDelete_;
+    sf::FloatRect btnRefineBest_;
+    sf::FloatRect btnAutoRefine_;
     sf::FloatRect btnPrevImage_;
     sf::FloatRect btnNextImage_;
     sf::FloatRect btnPrevThumbs_;

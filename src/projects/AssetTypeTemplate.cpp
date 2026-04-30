@@ -70,16 +70,17 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         makePrompt(
             {"isometric view", "3/4 angle", "left wall segment", "flat vertical wall panel",
              "single object", "centered composition", "full object visible", "no perspective distortion",
-             "clean silhouette", "modular game asset", "tile-safe edges"},
+             "clean silhouette", "isolated wall plane", "modular game asset", "tile-safe edges"},
             {"characters", "background scene", "room interior", "text", "watermark", "ornate", "complex",
-             "multiple objects", "top view", "cinematic lighting", "wide shot", "full building", "floor scene"}
+             "multiple objects", "top view", "cinematic lighting", "wide shot", "full building",
+             "floor scene", "floor plane", "ground plane", "ceiling"}
         ),
         AssetConstraints{false, false, true, false},
         makeWallLeftSpec(),
         makeObjectFitExport(128, 192, 112, 176, 8),
         true,
         "assets/references/wall_left.pgm",
-        0.40f,
+        0.34f,
         {"modular", "tileable", "vertical", "left_wall"}
     },
     {

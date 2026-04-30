@@ -155,7 +155,7 @@ Current built-in behavior:
 
 - `wall_left` ships with a default reference image:
   - `assets/references/wall_left.pgm`
-- `wall_left` enables reference-driven img2img by default with `structureStrength = 0.40`
+- `wall_left` enables reference-driven img2img by default with `structureStrength = 0.34`
 
 Generation only uses this path in project asset mode and only when the reference file exists.
 
