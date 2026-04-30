@@ -276,17 +276,14 @@ void ProjectController::commitSpecField(ProjectView& view) {
 void ProjectController::update(ProjectView& view) {
     view.projects = projectManager_.getAllProjects();
     const auto& templates = AssetTypeTemplates::all();
-    const size_t expectedTemplateCount = templates.size() + 1; // + Blank
+    const size_t expectedTemplateCount = templates.size();
     if (view.assetTemplateOptions.size() != expectedTemplateCount) {
         view.assetTemplateOptions.clear();
-        view.assetTemplateOptions.push_back({"blank", "Blank", {}});
         for (const auto& tmpl : templates)
             view.assetTemplateOptions.push_back({tmpl.id, tmpl.label, {}});
     } else {
-        view.assetTemplateOptions.front().id = "blank";
-        view.assetTemplateOptions.front().label = "Blank";
         for (size_t i = 0; i < templates.size(); ++i) {
-            auto& option = view.assetTemplateOptions[i + 1];
+            auto& option = view.assetTemplateOptions[i];
             option.id = templates[i].id;
             option.label = templates[i].label;
         }
@@ -703,10 +700,9 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
     // Asset spec — orientation toggles (radio: click active to deselect)
     if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
         static const Orientation kOrientations[] = {
-            Orientation::Unset, Orientation::LeftWall, Orientation::RightWall,
-            Orientation::FloorTile, Orientation::Prop, Orientation::Character
+            Orientation::Unset, Orientation::LeftWall, Orientation::RightWall
         };
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 3; ++i) {
             if (view.assetSpecOrientationToggles[static_cast<size_t>(i)].contains(pos)) {
                 auto proj = projectManager_.getProject(view.selectedProjectId);
                 if (!proj) return;
@@ -769,9 +765,9 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
     // Asset spec — shape policy toggles (radio: click active to deselect → Freeform)
     if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty()) {
         static const ShapePolicy kPolicies[] = {
-            ShapePolicy::Freeform, ShapePolicy::Bounded, ShapePolicy::SilhouetteLocked
+            ShapePolicy::Freeform, ShapePolicy::Bounded
         };
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 2; ++i) {
             if (view.assetSpecShapePolicyToggles[static_cast<size_t>(i)].contains(pos)) {
                 auto proj = projectManager_.getProject(view.selectedProjectId);
                 if (!proj) return;

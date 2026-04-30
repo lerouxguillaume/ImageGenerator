@@ -17,6 +17,10 @@ public:
         std::string                 path;
         std::string                 filename;
         std::shared_ptr<sf::Texture> thumbnail;
+        float                       score = -1.f;
+        bool                        recommended = false;
+        bool                        usable = false;
+        bool                        near = false;
     };
 
     struct GalleryTab {
@@ -38,6 +42,7 @@ public:
     std::vector<GalleryTab> tabs;
     int                     activeTabIndex = 0;
     bool                    tabChanged     = false;
+    std::string             generateButtonLabel = "Generate";
 
     // ── Phase tabs (PhasedRefinement assets only) ─────────────────────────────
     struct PhaseTab { int phase; std::string label; };

@@ -2,9 +2,9 @@
 
 The project system organises generation work into **asset packs**. Each pack holds a shared style theme, a list of asset types, and a set of generation constraints that compile into prompts automatically.
 
-Asset types can now be created either:
-- from `Blank`
-- from built-in templates in the project workspace `+ Asset` picker
+The project workspace currently exposes one supported built-in template in the `+ Asset` picker:
+
+- `Wall Left`
 
 ---
 
@@ -153,11 +153,11 @@ enum class GenerationWorkflow { Standard, PhasedRefinement };
 | Value | Behaviour |
 |---|---|
 | `Standard` | Single-phase txt2img or reference-driven img2img. Output goes to `raw/` + `processed/`. |
-| `PhasedRefinement` | Multi-phase: Phase 1 is txt2img, Phase 2+ are img2img from the best prior phase raw. Each phase has its own `phase_N/raw/` and `phase_N/processed/` directory. Reference-driven img2img is disabled. |
+| `PhasedRefinement` | Candidate-run wall workflow: generate an exploration batch, score correctness, refine the top candidates, then rank proposed outputs. Reference-driven img2img is disabled. |
 
-`workflow` is persisted in `projects.json` and carried in `ResolvedProjectContext`. Only `wall_left` uses `PhasedRefinement` by default.
+`workflow` is persisted in `projects.json` and carried in `ResolvedProjectContext`. Only `wall_left` uses `PhasedRefinement` by default. The enum name is historical; current wall generation uses the candidate-run pipeline in `docs/features/auto_generate.md`.
 
-See `docs/75_projects/wall_refinement_plan.md` for the full PhasedRefinement specification.
+Candidate runs write to `runs/<run_id>/explore/`, `runs/<run_id>/refine/`, and `runs/<run_id>/manifest.json`.
 
 ---
 
@@ -188,13 +188,8 @@ Both workflows provide the result-panel `Processed` / `Raw` preview toggle.
 
 Built-in templates are defined in code in `src/projects/AssetTypeTemplate.cpp`.
 
-Current templates:
+Current exposed template:
 - `Wall Left` (`wall_left`) — `LeftWall`, `Bounded`, tileable, fixed generation canvas `512×768`, `PhasedRefinement` workflow, reference disabled
-- `Floor Tile` — `FloorTile`, `Bounded`, tileable, fill 0.6–0.95
-- `Corner Wall` — `Unset`, `Bounded`, fill 0.4–0.85
-- `Door` — `LeftWall`, `Bounded`, fill 0.45–0.8
-- `Stairs` — `Unset`, `Bounded`, fill 0.45–0.85
-- `Prop` — `Prop`, `Bounded`, fill 0.38–0.78
 
 Each template provides:
 - `id`, `label`, `defaultName`
@@ -209,8 +204,8 @@ Templates are **not** persisted directly. Only the created `AssetType` result is
 
 Creation flow:
 - click `+ Asset` in `ProjectView`
-- choose `Blank` or a built-in template
-- if a template is chosen, `ProjectController` creates the asset type immediately using the template prompt tokens and constraints
+- choose the built-in wall template
+- `ProjectController` creates the asset type immediately using the template prompt tokens and constraints
 - the resulting asset type remains fully editable like any other asset type
 
 ---
@@ -286,27 +281,22 @@ output/<project>/<asset>/
 
 The gallery scans `processed/`.
 
-### PhasedRefinement workflow
+### Candidate-run workflow
 
 ```text
 output/<project>/<asset>/
-    phase_1/
-        raw/
-            img_<id>.png
-        processed/
-            img_<id>.png
-            img_<id>.json
-    phase_2/
-        raw/
-        processed/
-    phase_3/
-        raw/
-        processed/
+    runs/
+        run_<id>/
+            explore/
+                raw/
+                processed/
+            refine/
+                raw/
+                processed/
+            manifest.json
 ```
 
-The gallery scans `phase_N/processed/` for the currently active phase tab.
-
-Generation writes to `phase_N_tmp/` during the generation thread and renames it to `phase_N/` once the thread completes successfully. If the user cancels, the `_tmp` directory is deleted.
+The gallery scans the latest run's `refine/processed/` directory first, falling back to `explore/processed/` if no refined proposals were produced.
 
 The `processed/` variant is the normalized export candidate produced by `AssetPostProcessor`. Review, overlays, and validation are always aligned with the processed output.
 

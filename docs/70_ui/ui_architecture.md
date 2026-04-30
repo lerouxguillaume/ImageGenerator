@@ -109,7 +109,7 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 
 Key differences from the standalone generate screen:
 - project theme + asset prompt are the authored prompt layers
-- asset types can be created from `Blank` or built-in templates from the `+ Asset` picker
+- asset types can be created from the supported wall template in the `+ Asset` picker
 - no standalone positive/negative prompt editor from `SettingsPanel`
 - generation controls live in a project-native toolbar
 - the result gallery is scoped to the selected asset type

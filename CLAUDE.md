@@ -75,8 +75,7 @@ UI theme facts:
 
 ## Project system — `src/projects/` (`Project`, `AssetType`, `ProjectManager`)
 → docs/75_projects/project_overview.md  
-→ docs/75_projects/wall_refinement_plan.md (PhasedRefinement workflow spec)  
-→ docs/75_projects/wall_generation_current_state.md (wall_left current state)
+→ docs/features/auto_generate.md (candidate-run generation workflow)
 
 Key facts:
 - `ProjectView` is a first-class themed asset-pack workspace, not just a launcher into the standalone generator
@@ -86,8 +85,9 @@ Key facts:
 - `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
 - Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content
-- `wall_left` uses `GenerationWorkflow::PhasedRefinement` — reference-driven img2img is disabled; phase directories are `phase_N/raw/` and `phase_N/processed/`
-- Scoring always loads the raw image (not processed) — `AssetSpec` coordinates are in 512×768 canvas space
+- Current `wall_left` generation uses the candidate-run workflow under the existing `GenerationWorkflow::PhasedRefinement` enum
+- Candidate runs write to `runs/<run_id>/explore/` and `runs/<run_id>/refine/`, plus `manifest.json`
+- Wall scoring loads the raw image after alpha cutout — `AssetSpec` coordinates are in 512×768 canvas space
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
 → docs/85_prompt/prompt_dsl.md

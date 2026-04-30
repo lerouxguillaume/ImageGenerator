@@ -53,6 +53,7 @@ private:
 
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
+    void launchCandidateRun(ImageGeneratorView& view);
     void launchPhaseRefinement(ImageGeneratorView& view, bool useSelected);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});

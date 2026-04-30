@@ -429,7 +429,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             drawRect(win, {actionBarX, actionBarY, actionBarW, actionBarH},
                      colors.panel, colors.border, metrics.borderWidth);
 
-            if (showRefineButton && bestWallCandidateScore >= 0.f) {
+            if (bestWallCandidateScore >= 0.f) {
                 char scoreBuf[32];
                 std::snprintf(scoreBuf, sizeof(scoreBuf), "best: %.0f", bestWallCandidateScore);
                 const sf::Color scoreCol = (bestWallCandidateScore < 150.f) ? sf::Color(60, 180, 80)
@@ -498,7 +498,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
                 btnAutoRefineToggle_ = {};
                 btnGenerate_ = {cx - actionGenerateW / 2.f, y + h - 52.f, actionGenerateW, 38.f};
             }
-            drawButton(win, btnGenerate_, "Generate", colors.blue, colors.goldLt, false, 13, font);
+            drawButton(win, btnGenerate_, generateButtonLabel, colors.blue, colors.goldLt, false, 13, font);
         }
     }
 }
@@ -669,6 +669,17 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
         } else {
             drawTextC(win, font, "No preview", Col::Muted,
                       thumbX + thumbW / 2.f, thumbY + thumbH / 2.f - 6.f, 10);
+        }
+        if (item.recommended || item.usable || item.near) {
+            const std::string badge = item.recommended ? "BEST" : (item.usable ? "OK" : "NEAR");
+            const sf::Color badgeFill = item.recommended ? Col::GoldLt
+                                      : item.usable ? sf::Color(60, 180, 80)
+                                                    : sf::Color(180, 140, 60);
+            const sf::FloatRect badgeRect{thumbX + 5.f, thumbY + 5.f,
+                                          item.recommended ? 34.f : (item.usable ? 24.f : 34.f), 15.f};
+            drawRect(win, badgeRect, badgeFill, sf::Color::Transparent, 0.f);
+            drawTextC(win, font, badge, sf::Color(24, 26, 30),
+                      badgeRect.left + badgeRect.width / 2.f, badgeRect.top + 2.f, 9, true);
         }
         thumbX += thumbW + gap;
     }

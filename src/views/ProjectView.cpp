@@ -242,7 +242,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     drawButton(win, btnImagesUp, "+", colors.panel2, colors.text, false, type.body, font);
 
     btnGenerateAsset = {imagesX + statW + gap, rowY + metrics.toolbarLabelGap, genW, metrics.toolbarFieldHeight};
-    drawButton(win, btnGenerateAsset, "Generate", colors.blue, colors.goldLt, false, type.body, font);
+    drawButton(win, btnGenerateAsset, "Generate Candidates", colors.blue, colors.goldLt, false, type.compact, font);
 
     modelDropdownRect = {};
     modelDropdownItems.clear();
@@ -483,14 +483,14 @@ void ProjectView::render(sf::RenderWindow& win) {
             Helpers::drawText(win, font, "Asset spec", colors.muted,
                               chipX0, specLabelY, type.compact, false);
 
-            // Orientation — 2 rows of 3
+            // Orientation — wall-focused exposed choices
             const float orientY0 = specLabelY + 16.f;
-            const char* orientLabels[6] = { "None", "L. Wall", "R. Wall", "Floor", "Prop", "Char." };
-            const Orientation orientValues[6] = {
-                Orientation::Unset, Orientation::LeftWall, Orientation::RightWall,
-                Orientation::FloorTile, Orientation::Prop, Orientation::Character
+            assetSpecOrientationToggles = {};
+            const char* orientLabels[3] = { "None", "L. Wall", "R. Wall" };
+            const Orientation orientValues[3] = {
+                Orientation::Unset, Orientation::LeftWall, Orientation::RightWall
             };
-            for (int i = 0; i < 6; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 const float cx     = chipX0 + static_cast<float>(i % 3) * (chip3W + metrics.spaceSm);
                 const float cy     = orientY0 + static_cast<float>(i / 3) * (chipH + metrics.spaceXs);
                 const bool  active = spec.orientation == orientValues[i];
@@ -503,7 +503,7 @@ void ProjectView::render(sf::RenderWindow& win) {
             }
 
             // requiresTransparency + isTileable
-            const float miscY = orientY0 + 2.f * (chipH + metrics.spaceXs) + metrics.spaceXs;
+            const float miscY = orientY0 + chipH + metrics.spaceXs;
             const char*  miscLabels[2]  = { "Transparent", "Tileable" };
             const bool   miscActive[2]  = { spec.requiresTransparency, spec.isTileable };
             for (int i = 0; i < 2; ++i) {
@@ -516,16 +516,17 @@ void ProjectView::render(sf::RenderWindow& win) {
                 assetSpecMiscToggles[static_cast<size_t>(i)] = chip;
             }
 
-            // Shape policy — 1 row of 3
+            // Shape policy — silhouette locking is not exposed until validation exists.
             const float shapeY = miscY + chipH + metrics.spaceXs;
-            const char* shapeLabels[3]  = { "Freeform", "Bounded", "Silhouette" };
-            const ShapePolicy shapePols[3] = {
-                ShapePolicy::Freeform, ShapePolicy::Bounded, ShapePolicy::SilhouetteLocked
+            assetSpecShapePolicyToggles = {};
+            const char* shapeLabels[2]  = { "Freeform", "Bounded" };
+            const ShapePolicy shapePols[2] = {
+                ShapePolicy::Freeform, ShapePolicy::Bounded
             };
-            for (int i = 0; i < 3; ++i) {
-                const float cx     = chipX0 + static_cast<float>(i) * (chip3W + metrics.spaceSm);
+            for (int i = 0; i < 2; ++i) {
+                const float cx     = chipX0 + static_cast<float>(i) * (chip2W + metrics.spaceSm);
                 const bool  active = spec.shapePolicy == shapePols[i];
-                const sf::FloatRect chip{cx, shapeY, chip3W, chipH};
+                const sf::FloatRect chip{cx, shapeY, chip2W, chipH};
                 drawButton(win, chip, shapeLabels[i],
                            active ? colors.blue : colors.panel,
                            active ? colors.goldLt : colors.muted,
@@ -597,9 +598,10 @@ void ProjectView::render(sf::RenderWindow& win) {
 
     generatorView.resultPanel.showImproveButton = false;
     generatorView.resultPanel.showTabs = false;
+    generatorView.resultPanel.generateButtonLabel = wallRefinementEligible ? "Generate Candidates" : "Generate";
     generatorView.resultPanel.showOutputModeToggle = true;
     generatorView.resultPanel.showRefineButton      = wallRefinementEligible;
-    generatorView.resultPanel.showAutoRefineToggle  = wallRefinementEligible;
+    generatorView.resultPanel.showAutoRefineToggle  = false;
 
     Helpers::drawRect(win, {resultX, railY, resultW, railH}, colors.panel2, colors.border, metrics.borderWidth);
     Helpers::drawText(win, font, "Results", colors.gold, resultX + metrics.spaceMd, railY + metrics.spaceMd, type.sectionTitle, true);

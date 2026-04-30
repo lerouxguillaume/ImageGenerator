@@ -80,11 +80,11 @@ public:
     std::array<sf::FloatRect, 6> packConstraintToggles = {};
     // Asset: [0]=allowFloor [1]=allowScene [2]=tileable [3]=topSurface
     std::array<sf::FloatRect, 4> assetConstraintToggles = {};
-    // Asset spec: orientation [0..5]=Unset/LeftWall/RightWall/FloorTile/Prop/Character
+    // Asset spec: exposed orientation [0..2]=Unset/LeftWall/RightWall; remaining slots unused.
     std::array<sf::FloatRect, 6> assetSpecOrientationToggles = {};
     // Asset spec: misc [0]=requiresTransparency [1]=isTileable
     std::array<sf::FloatRect, 2> assetSpecMiscToggles = {};
-    // Asset spec: shape policy [0]=Freeform [1]=Bounded [2]=SilhouetteLocked
+    // Asset spec: exposed shape policy [0]=Freeform [1]=Bounded; remaining slot unused.
     std::array<sf::FloatRect, 3> assetSpecShapePolicyToggles = {};
     std::array<sf::FloatRect, 6> assetSpecNumericFields = {};
     sf::FloatRect                assetReferenceToggle = {};

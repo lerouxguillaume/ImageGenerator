@@ -1,6 +1,6 @@
 # ImageGenerator
 
-Generate images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required. Includes a project system for organised game asset generation (isometric tiles, sprites, props, etc.).
+Generate images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required. Includes a project workspace currently focused on phased isometric wall asset generation.
 
 Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceleration via CUDA or DirectML.
 
@@ -160,7 +160,7 @@ Generated images are saved to `assets/generated/`.
 
 The main menu offers three entry points:
 
-**Projects** — create named projects for themed asset sets (e.g. a game tileset). Each project is a dedicated workspace: define the shared project theme once, create asset types from `Blank` or built-in templates such as `Wall`, `Floor Tile`, `Corner Wall`, `Door`, `Stairs`, and `Prop`, then generate directly inside the same screen. The project workspace uses a dedicated top generation toolbar, left-side authoring rail, and embedded results area. Outputs are saved to `assets/generated/<project>/<asset_type>/`, and the embedded results panel shows the gallery for the currently selected asset type.
+**Projects** — create named projects for wall asset generation. The supported built-in asset template is currently `Wall Left`. `Generate Candidates` runs an automatic candidate pipeline: explore a batch, score correctness, refine the top candidates, then show the best proposals first. Outputs are saved to `assets/generated/<project>/<asset_type>/`.
 
 **Generate Images** — standalone prompt-first txt2img workflow with preset support and the shared dark tool UI.
 

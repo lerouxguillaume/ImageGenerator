@@ -197,6 +197,25 @@ static std::filesystem::path phaseDir(const std::filesystem::path& base, int pha
 static std::filesystem::path phaseTmpDir(const std::filesystem::path& base, int phase) {
     return base / ("phase_" + std::to_string(phase) + "_tmp");
 }
+static std::filesystem::path runsDir(const std::filesystem::path& base) {
+    return base / "runs";
+}
+static std::filesystem::path latestCandidateRunDir(const std::filesystem::path& base) {
+    const auto dir = runsDir(base);
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec)) return {};
+    std::filesystem::path latest;
+    std::filesystem::file_time_type latestTime{};
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_directory()) continue;
+        const auto t = entry.last_write_time(ec);
+        if (latest.empty() || t > latestTime) {
+            latest = entry.path();
+            latestTime = t;
+        }
+    }
+    return latest;
+}
 
 static std::filesystem::path referenceTempDir(const std::filesystem::path& baseDir) {
     return baseDir / ".reference_cache";
@@ -264,22 +283,29 @@ static float computeFillRatioForScore(const sf::Image& img) {
     return static_cast<float>(opaque) / static_cast<float>(w * h);
 }
 
-static CandidateScore scoreWallCandidate(const std::string& processedPath,
+static CandidateScore scoreWallCandidate(const std::string& imagePath,
                                          const AssetSpec& spec, int index) {
     CandidateScore candidate;
     candidate.index = index;
-    candidate.processedPath = processedPath;
-    candidate.rawPath = rawPathForProcessed(processedPath).string();
+    const std::filesystem::path inputPath(imagePath);
+    const bool inputIsRaw = inputPath.parent_path().filename().string() == "raw";
+    candidate.rawPath = inputIsRaw ? inputPath.string()
+                                   : rawPathForProcessed(inputPath).string();
+    candidate.processedPath = inputIsRaw ? processedPathForRaw(inputPath).string()
+                                         : inputPath.string();
 
-    // Score against the raw (512×768) image — spec coords are in canvas space
+    // Score against the raw canvas after alpha cutout: spec coords are in generation space.
     sf::Image img;
-    if (!img.loadFromFile(candidate.rawPath) && !img.loadFromFile(processedPath))
+    if (!img.loadFromFile(candidate.rawPath) && !img.loadFromFile(candidate.processedPath))
         return candidate;
 
     const unsigned w = img.getSize().x;
     const unsigned h = img.getSize().y;
     if (w == 0 || h == 0)
         return candidate;
+
+    if (spec.requiresTransparency)
+        img = AlphaCutout::removeBackground(img);
 
     float score = 0.0f;
     if ((spec.canvasWidth > 0 && static_cast<int>(w) != spec.canvasWidth)
@@ -730,6 +756,238 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         });
 }
 
+void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
+    auto& sp = view.settingsPanel;
+    auto& rp = view.resultPanel;
+
+    if (projectContext_.empty()
+        || projectContext_.workflow != GenerationWorkflow::PhasedRefinement) {
+        launchGeneration(view);
+        return;
+    }
+
+    const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+    const std::string runId = "run_" + std::to_string(now);
+    std::filesystem::path outDir = config.outputDir;
+    if (!projectContext_.outputSubpath.empty())
+        outDir /= projectContext_.outputSubpath;
+
+    const auto runPath = runsDir(outDir) / runId;
+    const auto exploreRawDir = runPath / "explore" / "raw";
+    const auto exploreProcessedDir = runPath / "explore" / "processed";
+    const auto refineRawDir = runPath / "refine" / "raw";
+    const auto refineProcessedDir = runPath / "refine" / "processed";
+    std::filesystem::create_directories(exploreRawDir);
+    std::filesystem::create_directories(exploreProcessedDir);
+    std::filesystem::create_directories(refineRawDir);
+    std::filesystem::create_directories(refineProcessedDir);
+
+    phaseSession_.autoRefine = false;
+    phaseSession_.sourcePath.clear();
+    phaseSession_.targetPhase = 0;
+
+    constexpr int kMinExploreImages = 8;
+    constexpr int kCandidateCount = 3;
+    constexpr int kRefineVariants = 2;
+    const int exploreCount = std::max(kMinExploreImages, sp.generationParams.numImages);
+    const int expectedTotalImages = exploreCount + kCandidateCount * kRefineVariants;
+
+    rp.generating = true;
+    rp.generationDone.store(false);
+    rp.cancelToken.store(false);
+    rp.generationStep.store(0);
+    rp.resultLoaded = false;
+    rp.displayedImagePath.clear();
+    rp.generationFailed.store(false);
+    rp.generationErrorMsg.clear();
+    rp.generationTotalImages.store(expectedTotalImages);
+    rp.lastImagePath = (refineProcessedDir / "ref_1.png").string();
+
+    const int myId = ++rp.generationId;
+
+    const std::string modelDir  = sp.getSelectedModelDir();
+    Prompt userDsl = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
+    Prompt dsl = userDsl;
+    Prompt base = projectContext_.stylePrompt;
+    if (!projectContext_.constraintTokens.positive.empty()
+        || !projectContext_.constraintTokens.negative.empty())
+        base = PromptMerge::merge(base, projectContext_.constraintTokens);
+    if (!projectContext_.assetTypeTokens.positive.empty()
+        || projectContext_.assetTypeTokens.subject.has_value())
+        base = PromptMerge::merge(base, projectContext_.assetTypeTokens);
+    dsl = PromptMerge::merge(base, userDsl);
+
+    const ModelType modelType = inferModelType(modelDir);
+    const std::string modelKey = std::filesystem::path(modelDir).filename().string();
+    if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
+        injectBoosters(dsl, it->second);
+
+    const std::string prompt = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
+    const std::string negPrompt = PromptCompiler::compileNegative(dsl);
+
+    GenerationParams baseParams = sp.generationParams;
+    if (!sp.seedInput.empty()) {
+        try { baseParams.seed = std::stoll(sp.seedInput); }
+        catch (const std::exception&) { baseParams.seed = -1; }
+    }
+    for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
+        if (i < sp.loraSelected.size() && sp.loraSelected[i])
+            baseParams.loras.push_back({sp.availableLoras[i],
+                                        i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+    }
+
+    std::atomic<bool>* done     = &rp.generationDone;
+    std::atomic<int>*  step     = &rp.generationStep;
+    std::atomic<int>*  idPtr    = &rp.generationId;
+    std::atomic<int>*  imgNum   = &rp.generationImageNum;
+    std::atomic<bool>* failed   = &rp.generationFailed;
+    std::string*       errorMsg = &rp.generationErrorMsg;
+    const AssetSpec spec = projectContext_.spec;
+    const AssetExportSpec exportSpec = projectContext_.exportSpec;
+    const std::string assetTypeId = projectContext_.assetTypeId;
+    const bool requiresTransparency = spec.requiresTransparency;
+    const float refinementStrength = phaseSession_.refinementStrength;
+    const float scoreThreshold = phaseSession_.scoreThreshold;
+
+    generationThread_ = std::jthread(
+        [prompt, negPrompt, modelDir, baseParams, done, step, idPtr, imgNum, myId,
+         failed, errorMsg, runId, runPath, exploreRawDir, exploreProcessedDir,
+         refineRawDir, refineProcessedDir, exploreCount, requiresTransparency,
+         exportSpec, spec, assetTypeId, refinementStrength, scoreThreshold]
+        (std::stop_token st) {
+            auto nthPath = [](const std::filesystem::path& firstPath, int index) {
+                if (index == 1) return firstPath.string();
+                const auto stem = firstPath.stem().string();
+                const auto ext = firstPath.extension().string();
+                return (firstPath.parent_path() / (stem + "_" + std::to_string(index) + ext)).string();
+            };
+
+            auto processOutput = [&](const std::string& rawPath,
+                                     const std::filesystem::path& processedDir,
+                                     const std::string& stage,
+                                     bool refinementUsed,
+                                     const std::string& refinementSource) -> std::string {
+                sf::Image sfRaw;
+                if (!sfRaw.loadFromFile(rawPath)) return {};
+                if (requiresTransparency)
+                    sfRaw = AlphaCutout::removeBackground(sfRaw);
+
+                std::vector<sf::Uint8> pixels(sfRaw.getPixelsPtr(),
+                                              sfRaw.getPixelsPtr() + sfRaw.getSize().x * sfRaw.getSize().y * 4);
+                cv::Mat rgba(static_cast<int>(sfRaw.getSize().y), static_cast<int>(sfRaw.getSize().x),
+                             CV_8UC4, pixels.data());
+                cv::Mat bgra;
+                cv::cvtColor(rgba, bgra, cv::COLOR_RGBA2BGRA);
+
+                const AssetProcessResult result = AssetPostProcessor::process(bgra, exportSpec);
+                const std::filesystem::path processedPath = processedDir / std::filesystem::path(rawPath).filename();
+                cv::imwrite(processedPath.string(), result.image);
+
+                nlohmann::json metaJson = toJson(result, exportSpec);
+                metaJson["candidateRunId"] = runId;
+                metaJson["candidateStage"] = stage;
+                metaJson["referenceUsed"] = false;
+                metaJson["referenceImage"] = std::string{};
+                metaJson["structureStrength"] = 0.0f;
+                metaJson["refinementUsed"] = refinementUsed;
+                metaJson["refinementSource"] = refinementSource;
+                metaJson["refinementStrength"] = refinementUsed ? refinementStrength : 0.0f;
+                std::ofstream meta(metadataPathFor(processedPath.string()));
+                meta << metaJson.dump(4);
+                return processedPath.string();
+            };
+
+            try {
+                const std::filesystem::path exploreFirst = exploreRawDir / "explore.png";
+                GenerationParams exploreParams = baseParams;
+                exploreParams.numImages = exploreCount;
+                exploreParams.initImagePath.clear();
+                PortraitGeneratorAi::generateFromPrompt(
+                    prompt, negPrompt, exploreFirst.string(), exploreParams, modelDir, step, imgNum, st);
+
+                std::vector<CandidateScore> explorationScores;
+                for (int i = 1; i <= exploreCount; ++i) {
+                    const std::string rawPath = nthPath(exploreFirst, i);
+                    const std::string processedPath =
+                        processOutput(rawPath, exploreProcessedDir, "explore", false, {});
+                    if (processedPath.empty()) continue;
+                    const auto score = scoreWallCandidate(processedPath, spec, i - 1);
+                    if (score.valid)
+                        explorationScores.push_back(score);
+                }
+
+                std::sort(explorationScores.begin(), explorationScores.end(),
+                          [](const auto& a, const auto& b) { return a.score < b.score; });
+                if (static_cast<int>(explorationScores.size()) > kCandidateCount)
+                    explorationScores.resize(kCandidateCount);
+
+                std::vector<CandidateScore> refinementScores;
+                int candidateIndex = 0;
+                for (const auto& candidate : explorationScores) {
+                    if (st.stop_requested()) break;
+                    ++candidateIndex;
+                    const std::filesystem::path refineFirst =
+                        refineRawDir / ("ref_" + std::to_string(candidateIndex) + ".png");
+                    GenerationParams refineParams = baseParams;
+                    refineParams.numImages = kRefineVariants;
+                    refineParams.initImagePath = candidate.rawPath;
+                    refineParams.strength = refinementStrength;
+                    PortraitGeneratorAi::generateFromPrompt(
+                        prompt, negPrompt, refineFirst.string(), refineParams, modelDir, step, imgNum, st);
+
+                    for (int i = 1; i <= kRefineVariants; ++i) {
+                        const std::string rawPath = nthPath(refineFirst, i);
+                        const std::string processedPath =
+                            processOutput(rawPath, refineProcessedDir, "refine", true, candidate.rawPath);
+                        if (processedPath.empty()) continue;
+                        const auto score = scoreWallCandidate(processedPath, spec,
+                                                              static_cast<int>(refinementScores.size()));
+                        if (score.valid)
+                            refinementScores.push_back(score);
+                    }
+                }
+
+                std::sort(refinementScores.begin(), refinementScores.end(),
+                          [](const auto& a, const auto& b) { return a.score < b.score; });
+
+                nlohmann::json manifest;
+                manifest["runId"] = runId;
+                manifest["assetTypeId"] = assetTypeId;
+                manifest["scoreThreshold"] = scoreThreshold;
+                manifest["exploration"] = nlohmann::json::array();
+                for (const auto& score : explorationScores) {
+                    manifest["exploration"].push_back({
+                        {"rawPath", score.rawPath},
+                        {"processedPath", score.processedPath},
+                        {"correctnessScore", score.score},
+                        {"status", score.score <= scoreThreshold ? "ok" : "candidate"}
+                    });
+                }
+                manifest["proposals"] = nlohmann::json::array();
+                for (int i = 0; i < static_cast<int>(refinementScores.size()); ++i) {
+                    const auto& score = refinementScores[static_cast<size_t>(i)];
+                    manifest["proposals"].push_back({
+                        {"rawPath", score.rawPath},
+                        {"processedPath", score.processedPath},
+                        {"correctnessScore", score.score},
+                        {"status", i == 0 ? "best" : (score.score <= scoreThreshold ? "ok" : "near")}
+                    });
+                }
+                std::ofstream manifestFile(runPath / "manifest.json");
+                manifestFile << manifest.dump(4);
+            } catch (const std::exception& e) {
+                Logger::error("Candidate run failed: " + std::string(e.what()));
+                *errorMsg = e.what();
+                failed->store(true);
+            } catch (...) {
+                Logger::error("Candidate run failed: unknown error");
+                *errorMsg = "Unknown error during candidate run. See log for details.";
+                failed->store(true);
+            }
+            if (idPtr->load() == myId) done->store(true);
+        });
+}
+
 void ImageGeneratorController::launchPhaseRefinement(ImageGeneratorView& view, bool useSelected) {
     auto& rp = view.resultPanel;
     if (projectContext_.empty()
@@ -885,6 +1143,8 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
         std::string path;
         std::string filename;
         std::filesystem::file_time_type modified;
+        float score = -1.f;
+        bool scoreValid = false;
     };
 
     std::vector<ImageEntry> entries;
@@ -894,9 +1154,19 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
         galleryBaseDir /= projectContext_.outputSubpath;
     const bool isPhasedWorkflow = !projectContext_.empty()
         && projectContext_.workflow == GenerationWorkflow::PhasedRefinement;
+    const std::filesystem::path latestRunDir = isPhasedWorkflow
+        ? latestCandidateRunDir(galleryBaseDir) : std::filesystem::path{};
+    const bool hasCandidateRun = !latestRunDir.empty();
 
     // Build phase tabs and pick gallery directory
-    if (isPhasedWorkflow) {
+    if (isPhasedWorkflow && hasCandidateRun) {
+        rp.phaseTabs.clear();
+        rp.showPhaseTabs = false;
+        rp.phaseIndicatorCurrent = 0;
+        rp.phaseIndicatorMax = 0;
+        rp.showRefineButton = false;
+        rp.showAutoRefineToggle = false;
+    } else if (isPhasedWorkflow) {
         std::vector<ResultPanel::PhaseTab> newTabs;
         for (int p = 1; p <= phaseSession_.maxPhases; ++p) {
             if (std::filesystem::exists(phaseDir(galleryBaseDir, p), ec))
@@ -918,7 +1188,7 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
         // Refine button visibility: show when not at max phase
         rp.showRefineButton    = phaseSession_.currentPhase > 0
             && phaseSession_.currentPhase < phaseSession_.maxPhases;
-        rp.showAutoRefineToggle = rp.showRefineButton;
+        rp.showAutoRefineToggle = false;
     } else {
         rp.showPhaseTabs = false;
         rp.phaseTabs.clear();
@@ -926,7 +1196,21 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
 
     // Determine which directory to scan for gallery images
     std::filesystem::path galleryDir;
-    if (isPhasedWorkflow && !rp.phaseTabs.empty()) {
+    if (isPhasedWorkflow && hasCandidateRun) {
+        galleryDir = latestRunDir / "refine" / "processed";
+        bool hasRefined = false;
+        if (std::filesystem::exists(galleryDir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
+                if (entry.is_regular_file() && isGalleryImageFile(entry.path())
+                    && !isTransparentDerivative(entry.path())) {
+                    hasRefined = true;
+                    break;
+                }
+            }
+        }
+        if (!hasRefined)
+            galleryDir = latestRunDir / "explore" / "processed";
+    } else if (isPhasedWorkflow && !rp.phaseTabs.empty()) {
         const int activePhase = rp.phaseTabs[static_cast<size_t>(rp.activePhaseTabIndex)].phase;
         galleryDir = phaseDir(galleryBaseDir, activePhase) / "processed";
     } else if (!projectContext_.empty()) {
@@ -943,20 +1227,47 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
             entries.push_back({
                 entry.path().string(),
                 entry.path().filename().string(),
-                entry.last_write_time(ec)
+                entry.last_write_time(ec),
+                -1.f,
+                false
             });
         }
     }
 
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-        return a.modified > b.modified;
-    });
+    if (isPhasedWorkflow) {
+        for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+            const auto score = scoreWallCandidate(entries[static_cast<size_t>(i)].path,
+                                                  projectContext_.spec, i);
+            entries[static_cast<size_t>(i)].score = score.score;
+            entries[static_cast<size_t>(i)].scoreValid = score.valid;
+        }
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            if (a.scoreValid != b.scoreValid) return a.scoreValid;
+            if (a.scoreValid && b.scoreValid && a.score != b.score) return a.score < b.score;
+            return a.modified > b.modified;
+        });
+    } else {
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            return a.modified > b.modified;
+        });
+    }
 
     pendingThumbs_.clear();
     std::vector<ResultPanel::GalleryItem> gallery;
     gallery.reserve(entries.size());
-    for (const auto& entry : entries) {
-        gallery.push_back({entry.path, entry.filename, nullptr});
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        const auto& entry = entries[static_cast<size_t>(i)];
+        const bool usable = isPhasedWorkflow && entry.scoreValid
+            && entry.score <= phaseSession_.scoreThreshold;
+        gallery.push_back({
+            entry.path,
+            entry.filename,
+            nullptr,
+            entry.scoreValid ? entry.score : -1.f,
+            isPhasedWorkflow && i == 0 && entry.scoreValid,
+            usable,
+            isPhasedWorkflow && entry.scoreValid && !usable
+        });
         pendingThumbs_.push_back({
             entry.path,
             std::async(std::launch::async, [path = entry.path]() -> sf::Image {
@@ -976,8 +1287,10 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
     }
     rp.gallery = std::move(gallery);
 
-    std::string target = preferredSelection.empty() ? processedPathForRaw(rp.displayedImagePath).string()
-                                                    : processedPathForRaw(preferredSelection).string();
+    std::string target;
+    if (!isPhasedWorkflow)
+        target = preferredSelection.empty() ? processedPathForRaw(rp.displayedImagePath).string()
+                                            : processedPathForRaw(preferredSelection).string();
     int selected = -1;
     for (int i = 0; i < static_cast<int>(rp.gallery.size()); ++i) {
         if (rp.gallery[static_cast<size_t>(i)].path == target) {
@@ -991,8 +1304,7 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
     selectGalleryImage(view, selected);
 
     if (isPhasedWorkflow && !rp.gallery.empty()) {
-        const auto best = findBestWallCandidate(rp, projectContext_.spec);
-        rp.bestWallCandidateScore = (best && best->valid) ? best->score : -1.f;
+        rp.bestWallCandidateScore = rp.gallery.front().score;
     } else {
         rp.bestWallCandidateScore = -1.f;
     }
@@ -1124,7 +1436,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         }
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
-            launchGeneration(view);
+            triggerGeneration(view);
         }
         if (view.resultPanel.improveRequested) {
             view.resultPanel.improveRequested = false;
@@ -1479,6 +1791,13 @@ ResolvedProjectContext ImageGeneratorController::getProjectContext() const {
 }
 
 void ImageGeneratorController::triggerGeneration(ImageGeneratorView& view) {
+    if (!projectContext_.empty()
+        && projectContext_.workflow == GenerationWorkflow::PhasedRefinement) {
+        phaseSession_.autoRefine = false;
+        view.resultPanel.autoRefineEnabled = false;
+        launchCandidateRun(view);
+        return;
+    }
     launchGeneration(view);
 }
 
