@@ -35,6 +35,16 @@ enum class AssetFitMode { ObjectFit, TileExact, NoResize };
 struct Anchor        { int x = 0; int y = 0; };
 struct OccupiedBounds { int x = 0; int y = 0; int w = 0; int h = 0; };
 
+struct AssetExportSpec {
+    int exportWidth = 128;
+    int exportHeight = 128;
+    int maxObjectWidth = 112;
+    int maxObjectHeight = 112;
+    int paddingPx = 8;
+    AssetFitMode fitMode = AssetFitMode::ObjectFit;
+    bool requireAlpha = true;
+};
+
 struct ValidationPolicy {
     bool  enforceCanvasSize      = true;
     bool  enforceTransparency    = true;
@@ -70,6 +80,7 @@ struct AssetType {
     Prompt           promptTokens;
     AssetConstraints constraints;
     AssetSpec        spec;
+    AssetExportSpec  exportSpec;
 };
 
 struct Project {
@@ -96,6 +107,7 @@ struct ResolvedProjectContext {
     Prompt      constraintTokens; // compiled from PackConstraints + AssetConstraints
     Prompt      assetTypeTokens;
     AssetSpec   spec;             // production contract for the active asset type
+    AssetExportSpec exportSpec;   // deterministic post-process export contract
     std::string            outputSubpath; // sanitised relative path, e.g. "Medieval Dungeon/Wall Tile"
     std::vector<AssetType> allAssetTypes; // all types in the project, used to populate gallery tabs
 

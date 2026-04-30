@@ -120,6 +120,79 @@ static std::string sanitiseName(const std::string& s) {
     return r;
 }
 
+static AssetSpec resolveScratchSpecForProject(const Project& project, const AssetSpec& input) {
+    AssetSpec spec = input;
+    if (spec.canvasWidth <= 0)  spec.canvasWidth = project.width;
+    if (spec.canvasHeight <= 0) spec.canvasHeight = project.height;
+
+    const int w = std::max(1, spec.canvasWidth);
+    const int h = std::max(1, spec.canvasHeight);
+
+    if (spec.expectedBounds.w <= 0 || spec.expectedBounds.h <= 0) {
+        switch (spec.orientation) {
+            case Orientation::LeftWall:
+            case Orientation::RightWall:
+                spec.expectedBounds = {static_cast<int>(w * 0.18f), static_cast<int>(h * 0.12f),
+                                       static_cast<int>(w * 0.64f), static_cast<int>(h * 0.72f)};
+                break;
+            case Orientation::FloorTile:
+                spec.expectedBounds = {static_cast<int>(w * 0.10f), static_cast<int>(h * 0.54f),
+                                       static_cast<int>(w * 0.80f), static_cast<int>(h * 0.28f)};
+                break;
+            case Orientation::Character:
+                spec.expectedBounds = {static_cast<int>(w * 0.22f), static_cast<int>(h * 0.08f),
+                                       static_cast<int>(w * 0.56f), static_cast<int>(h * 0.82f)};
+                break;
+            case Orientation::Prop:
+                spec.expectedBounds = {static_cast<int>(w * 0.24f), static_cast<int>(h * 0.18f),
+                                       static_cast<int>(w * 0.52f), static_cast<int>(h * 0.64f)};
+                break;
+            case Orientation::Unset:
+                if (spec.isTileable) {
+                    spec.expectedBounds = {static_cast<int>(w * 0.14f), static_cast<int>(h * 0.18f),
+                                           static_cast<int>(w * 0.72f), static_cast<int>(h * 0.68f)};
+                } else {
+                    spec.expectedBounds = {static_cast<int>(w * 0.20f), static_cast<int>(h * 0.16f),
+                                           static_cast<int>(w * 0.60f), static_cast<int>(h * 0.66f)};
+                }
+                break;
+        }
+    }
+
+    if (spec.anchor.x == 0 && spec.anchor.y == 0 && spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0) {
+        spec.anchor.x = spec.expectedBounds.x + spec.expectedBounds.w / 2;
+        spec.anchor.y = spec.expectedBounds.y + spec.expectedBounds.h;
+    }
+
+    if (spec.shapePolicy != ShapePolicy::Freeform && spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0)
+        spec.validation.enforceAnchor = true;
+
+    return spec;
+}
+
+static std::string specSignature(const AssetSpec& spec) {
+    return std::to_string(spec.canvasWidth) + "|"
+        + std::to_string(spec.canvasHeight) + "|"
+        + std::to_string(static_cast<int>(spec.orientation)) + "|"
+        + std::to_string(static_cast<int>(spec.shapePolicy)) + "|"
+        + std::to_string(static_cast<int>(spec.fitMode)) + "|"
+        + std::to_string(spec.expectedBounds.x) + "|"
+        + std::to_string(spec.expectedBounds.y) + "|"
+        + std::to_string(spec.expectedBounds.w) + "|"
+        + std::to_string(spec.expectedBounds.h) + "|"
+        + std::to_string(spec.anchor.x) + "|"
+        + std::to_string(spec.anchor.y) + "|"
+        + std::to_string(spec.requiresTransparency ? 1 : 0) + "|"
+        + std::to_string(spec.isTileable ? 1 : 0) + "|"
+        + std::to_string(spec.targetFillRatio) + "|"
+        + std::to_string(spec.minFillRatio) + "|"
+        + std::to_string(spec.maxFillRatio) + "|"
+        + std::to_string(spec.validation.enforceCanvasSize ? 1 : 0) + "|"
+        + std::to_string(spec.validation.enforceTransparency ? 1 : 0) + "|"
+        + std::to_string(spec.validation.enforceAnchor ? 1 : 0) + "|"
+        + std::to_string(spec.validation.maxSilhouetteDeviation);
+}
+
 ProjectController::ProjectController(AppConfig& cfg)
     : config_(cfg)
     , generatorController_(cfg, WorkflowMode::Generate)
@@ -152,6 +225,45 @@ void ProjectController::commitToolbarField(ProjectView& view) {
     view.activeToolbarField = ProjectView::ToolbarField::None;
     view.toolbarInput.clear();
     sp.seedInputActive = false;
+}
+
+void ProjectController::commitSpecField(ProjectView& view) {
+    if (view.activeSpecField == ProjectView::SpecField::None)
+        return;
+    if (view.selectedProjectId.empty() || view.selectedAssetTypeId.empty()) {
+        view.activeSpecField = ProjectView::SpecField::None;
+        view.specInput.clear();
+        return;
+    }
+
+    auto proj = projectManager_.getProject(view.selectedProjectId);
+    if (!proj) {
+        view.activeSpecField = ProjectView::SpecField::None;
+        view.specInput.clear();
+        return;
+    }
+
+    try {
+        const int value = view.specInput.empty() ? 0 : std::max(0, std::stoi(view.specInput));
+        for (auto& at : proj->assetTypes) {
+            if (at.id != view.selectedAssetTypeId) continue;
+            switch (view.activeSpecField) {
+                case ProjectView::SpecField::BoundsX: at.spec.expectedBounds.x = value; break;
+                case ProjectView::SpecField::BoundsY: at.spec.expectedBounds.y = value; break;
+                case ProjectView::SpecField::BoundsW: at.spec.expectedBounds.w = value; break;
+                case ProjectView::SpecField::BoundsH: at.spec.expectedBounds.h = value; break;
+                case ProjectView::SpecField::AnchorX: at.spec.anchor.x = value; break;
+                case ProjectView::SpecField::AnchorY: at.spec.anchor.y = value; break;
+                case ProjectView::SpecField::None: break;
+            }
+            projectManager_.updateAssetType(proj->id, at);
+            break;
+        }
+    } catch (...) {
+    }
+
+    view.activeSpecField = ProjectView::SpecField::None;
+    view.specInput.clear();
 }
 
 void ProjectController::update(ProjectView& view) {
@@ -230,6 +342,16 @@ void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
     }
 
     if (e.type == sf::Event::KeyPressed) {
+        if (view.activeSpecField != ProjectView::SpecField::None) {
+            if (e.key.code == sf::Keyboard::BackSpace && !view.specInput.empty()) {
+                view.specInput.pop_back();
+                return;
+            }
+            if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::Return) {
+                commitSpecField(view);
+                return;
+            }
+        }
         if (view.activeToolbarField != ProjectView::ToolbarField::None) {
             if (e.key.code == sf::Keyboard::BackSpace && !view.toolbarInput.empty()) {
                 view.toolbarInput.pop_back();
@@ -287,6 +409,12 @@ void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
         }
     }
     if (e.type == sf::Event::TextEntered) {
+        if (view.activeSpecField != ProjectView::SpecField::None) {
+            const sf::Uint32 unicode = e.text.unicode;
+            if (unicode >= '0' && unicode <= '9')
+                view.specInput.push_back(static_cast<char>(unicode));
+            return;
+        }
         if (view.activeToolbarField != ProjectView::ToolbarField::None) {
             const sf::Uint32 unicode = e.text.unicode;
             if (unicode >= '0' && unicode <= '9')
@@ -406,12 +534,23 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         view.activeToolbarField = field;
         view.toolbarInput = value;
     };
+    auto activateSpecField = [&view](ProjectView::SpecField field, const std::string& value) {
+        view.activeSpecField = field;
+        view.specInput = value;
+    };
     auto fieldAtPos = [&view, pos]() {
         if (view.stepsField.contains(pos)) return ProjectView::ToolbarField::Steps;
         if (view.cfgField.contains(pos)) return ProjectView::ToolbarField::Cfg;
         if (view.imagesField.contains(pos)) return ProjectView::ToolbarField::Images;
         if (view.seedField.contains(pos)) return ProjectView::ToolbarField::Seed;
         return ProjectView::ToolbarField::None;
+    };
+    auto specFieldAtPos = [&view, pos]() {
+        for (int i = 0; i < static_cast<int>(view.assetSpecNumericFields.size()); ++i) {
+            if (view.assetSpecNumericFields[static_cast<size_t>(i)].contains(pos))
+                return static_cast<ProjectView::SpecField>(i + 1);
+        }
+        return ProjectView::SpecField::None;
     };
     if (view.showModelDropdown) {
         for (size_t i = 0; i < view.modelDropdownItems.size(); ++i) {
@@ -428,6 +567,11 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
     if (view.activeToolbarField != ProjectView::ToolbarField::None
         && clickedField != view.activeToolbarField) {
         commitToolbarField(view);
+    }
+    const auto clickedSpecField = specFieldAtPos();
+    if (view.activeSpecField != ProjectView::SpecField::None
+        && clickedSpecField != view.activeSpecField) {
+        commitSpecField(view);
     }
     if (view.btnModelCycle.contains(pos)) {
         if (!sp.availableModels.empty())
@@ -477,8 +621,28 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
         sp.seedInputActive = true;
         return;
     }
+    if (!view.selectedProjectId.empty() && !view.selectedAssetTypeId.empty() && clickedSpecField != ProjectView::SpecField::None) {
+        auto proj = projectManager_.getProject(view.selectedProjectId);
+        if (!proj) return;
+        for (const auto& at : proj->assetTypes) {
+            if (at.id != view.selectedAssetTypeId) continue;
+            const AssetSpec spec = resolveScratchSpecForProject(*proj, at.spec);
+            switch (clickedSpecField) {
+                case ProjectView::SpecField::BoundsX: activateSpecField(clickedSpecField, std::to_string(spec.expectedBounds.x)); break;
+                case ProjectView::SpecField::BoundsY: activateSpecField(clickedSpecField, std::to_string(spec.expectedBounds.y)); break;
+                case ProjectView::SpecField::BoundsW: activateSpecField(clickedSpecField, std::to_string(spec.expectedBounds.w)); break;
+                case ProjectView::SpecField::BoundsH: activateSpecField(clickedSpecField, std::to_string(spec.expectedBounds.h)); break;
+                case ProjectView::SpecField::AnchorX: activateSpecField(clickedSpecField, std::to_string(spec.anchor.x)); break;
+                case ProjectView::SpecField::AnchorY: activateSpecField(clickedSpecField, std::to_string(spec.anchor.y)); break;
+                case ProjectView::SpecField::None: break;
+            }
+            return;
+        }
+    }
     view.activeToolbarField = ProjectView::ToolbarField::None;
     view.toolbarInput.clear();
+    view.activeSpecField = ProjectView::SpecField::None;
+    view.specInput.clear();
     sp.seedInputActive = false;
     if (view.btnGenerateAsset.contains(pos)) {
         generatorController_.triggerGeneration(view.generatorView);
@@ -703,12 +867,16 @@ void ProjectController::commitNewAssetType(ProjectView& view) {
 
 void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const AssetTypeTemplate& assetTemplate) {
     if (view.selectedProjectId.empty()) return;
+    auto proj = projectManager_.getProject(view.selectedProjectId);
+    if (!proj) return;
+    const AssetSpec resolvedSpec = resolveScratchSpecForProject(*proj, assetTemplate.spec);
     const AssetType assetType = projectManager_.addAssetType(
         view.selectedProjectId,
         assetTemplate.defaultName,
         assetTemplate.promptTokens,
         assetTemplate.constraints,
-        assetTemplate.spec);
+        resolvedSpec,
+        assetTemplate.exportSpec);
     if (assetType.id.empty())
         return;
     view.newAssetTypeInputActive = false;
@@ -756,6 +924,8 @@ void ProjectController::populateEditors(ProjectView& view) const {
 void ProjectController::syncGeneratorSession(ProjectView& view) {
     const ResolvedProjectContext ctx = buildSelectedContext(view);
     view.generatorView.resultPanel.showCheckerboard = !ctx.empty() && ctx.spec.requiresTransparency;
+    view.generatorView.resultPanel.showContractOverlay = !ctx.empty();
+    view.generatorView.resultPanel.activeSpec = ctx.spec;
     if (ctx.empty()) {
         generatorController_.clearProjectContext();
         return;
@@ -776,11 +946,13 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
             == PromptCompiler::compile(ctx.assetTypeTokens, ModelType::SDXL)
         && PromptCompiler::compileNegative(current.assetTypeTokens)
             == PromptCompiler::compileNegative(ctx.assetTypeTokens);
+    const bool sameSpec = specSignature(current.spec) == specSignature(ctx.spec);
     if (current.projectId == ctx.projectId
         && current.assetTypeId == ctx.assetTypeId
         && sameTheme
         && sameConstraints
-        && sameAsset) {
+        && sameAsset
+        && sameSpec) {
         return;
     }
     generatorController_.activateProjectSession(view.generatorView, ctx);
@@ -835,7 +1007,8 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.stylePrompt      = proj->stylePrompt;
         ctx.constraintTokens = buildConstraintTokens(proj->constraints, at.constraints, at.spec);
         ctx.assetTypeTokens  = at.promptTokens;
-        ctx.spec             = at.spec;
+        ctx.spec             = resolveScratchSpecForProject(*proj, at.spec);
+        ctx.exportSpec       = at.exportSpec;
         ctx.outputSubpath    = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
         ctx.allAssetTypes    = proj->assetTypes;
         return ctx;

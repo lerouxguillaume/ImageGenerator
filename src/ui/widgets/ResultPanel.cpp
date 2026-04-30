@@ -8,6 +8,46 @@
 
 using namespace Helpers;
 
+namespace {
+void drawContractOverlay(sf::RenderWindow& win, const ResultPanel& panel,
+                         const sf::FloatRect& imageRect, const Theme& theme) {
+    if (!panel.showContractOverlay) return;
+    const auto& spec = panel.activeSpec;
+    const float canvasW = spec.canvasWidth > 0 ? static_cast<float>(spec.canvasWidth) : imageRect.width;
+    const float canvasH = spec.canvasHeight > 0 ? static_cast<float>(spec.canvasHeight) : imageRect.height;
+    if (canvasW <= 0.f || canvasH <= 0.f) return;
+
+    const float sx = imageRect.width / canvasW;
+    const float sy = imageRect.height / canvasH;
+
+    if (spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0) {
+        const sf::FloatRect boundsRect{
+            imageRect.left + static_cast<float>(spec.expectedBounds.x) * sx,
+            imageRect.top + static_cast<float>(spec.expectedBounds.y) * sy,
+            static_cast<float>(spec.expectedBounds.w) * sx,
+            static_cast<float>(spec.expectedBounds.h) * sy
+        };
+        drawRect(win, boundsRect, sf::Color(0, 0, 0, 0), theme.colors().borderHi, 2.f);
+    }
+
+    if (spec.anchor.x != 0 || spec.anchor.y != 0) {
+        const float ax = imageRect.left + static_cast<float>(spec.anchor.x) * sx;
+        const float ay = imageRect.top + static_cast<float>(spec.anchor.y) * sy;
+        constexpr float cross = 8.f;
+        sf::Vertex horiz[] = {
+            sf::Vertex({ax - cross, ay}, theme.colors().goldLt),
+            sf::Vertex({ax + cross, ay}, theme.colors().goldLt)
+        };
+        sf::Vertex vert[] = {
+            sf::Vertex({ax, ay - cross}, theme.colors().goldLt),
+            sf::Vertex({ax, ay + cross}, theme.colors().goldLt)
+        };
+        win.draw(horiz, 2, sf::Lines);
+        win.draw(vert, 2, sf::Lines);
+    }
+}
+}
+
 void ResultPanel::setRect(const sf::FloatRect& rect) {
     rect_ = rect;
 }
@@ -178,6 +218,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         sprite.setScale(scale, scale);
         sprite.setPosition(imgX, imgY);
         win.draw(sprite);
+        drawContractOverlay(win, *this, {imgX, imgY, imgW, imgH}, theme);
 
         // ── Validation chips (below image frame, above gallery/action bar) ────
         if (!validationChips.empty()) {

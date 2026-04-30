@@ -120,14 +120,56 @@ Validation policies should allow per-asset configuration of:
 
 What is missing today is not another prompt enhancer. The missing pieces are the controls that turn image generation into asset production:
 
-1. formal asset specifications
-2. reference-driven generation
-3. shape and silhouette control
-4. transparent-background export workflow
-5. post-generation validation
-6. in-context preview against the target slot
+1. reference-driven generation for constrained asset classes
+2. stronger shape control during generation, not only after the fact
+3. raw-vs-processed review tools for debugging generation vs normalization failures
+4. in-context preview against the target slot
+5. consumer-facing export conventions beyond the current processed output
+
+Several earlier foundational items are now implemented:
+
+- formal asset specifications
+- locked asset-type prompt constraints
+- transparent background cleanup
+- deterministic post-processing/export normalization
+- post-generation validation
+- bounds/anchor overlay review
 
 These requirements drive the phases below.
+
+---
+
+# Current implementation snapshot
+
+The current project workflow is no longer just:
+
+`prompt -> image`
+
+It now behaves roughly like:
+
+`prompt -> raw image -> optional alpha cleanup -> normalized processed PNG -> metadata -> validation`
+
+Implemented today:
+
+- `AssetSpec` persisted on each asset type
+- `AssetExportSpec` persisted on each asset type
+- template-driven constrained asset defaults (including `wall_left`)
+- locked prompt compilation from orientation / shape / transparency / tileability
+- transparent background cleanup via `AlphaCutout`
+- deterministic post-processing via `AssetPostProcessor`
+- raw and processed outputs saved separately in project asset folders
+- metadata JSON per processed asset
+- processed outputs shown in the project gallery
+- validation for canvas, alpha, fill, bounds, and anchor
+- preview overlays for expected bounds and anchor
+
+The biggest remaining weakness is still generation-time structure drift for difficult assets such as:
+
+- left walls
+- right walls
+- doors
+- corner walls
+- stairs
 
 ---
 
@@ -329,18 +371,16 @@ In the project workspace, each asset type should expose a compact "Asset Spec" s
 ## What was built
 
 - `AssetSpec`, `ValidationPolicy`, `Orientation`, `ShapePolicy`, `AssetFitMode`, `Anchor`, `OccupiedBounds` added to `src/projects/Project.hpp`.
-- `AssetType` carries an `AssetSpec spec` field.
+- `AssetType` carries an `AssetSpec spec` field and now also an `AssetExportSpec exportSpec`.
 - Full JSON round-trip in `ProjectManager.cpp` with human-readable enum strings; old files load cleanly.
 - All 6 built-in templates ship with tuned spec defaults (orientation, shape policy, fill range, tileable).
-- `ProjectView` shows an "Asset spec" section per asset type: orientation radio (6 chips), Transparent/Tileable toggles, shape policy radio. Changes persist immediately.
-
-## Not yet wired
-
-- `AssetSpec` is not forwarded into `ResolvedProjectContext` — generation does not read it yet. That is Phase 3 work (locked prompt constraints) and Phase 5 (validation).
+- `ProjectView` shows an "Asset spec" section per asset type: orientation radio (6 chips), Transparent/Tileable toggles, shape policy radio, plus numeric slot-contract fields for bounds and anchor. Changes persist immediately.
+- `AssetSpec` is forwarded into `ResolvedProjectContext` and is now used by prompt locking, validation, preview overlays, and transparency handling.
+- `AssetExportSpec` now drives deterministic post-processing after generation.
 
 ---
 
-# Phase 2 — Reference and silhouette inputs
+# Phase 2 — Reference-driven constrained img2img (NEXT)
 
 ## Goal
 
@@ -352,46 +392,61 @@ Prompt-only generation is too loose for modular wall pieces, door inserts, tile-
 
 ## Work
 
-Add support for asset-reference inputs per asset type:
-- reference image input
-- optional rasterized source SVG input
-- optional silhouette mask
-- optional bounds mask
+Add support for per-asset structural references for constrained asset classes.
 
-Generation modes should include:
+Initial scope should stay narrow:
+- persisted `referenceImagePath`
+- persisted `referenceEnabled`
+- persisted `structureStrength`
+- deterministic reference normalization to the generation canvas
+- project-asset generation routed to the existing img2img path when reference mode is enabled
+
+Do not include yet:
+- SVG rasterization
+- user-authored masks
+- multi-reference inputs
+- silhouette metrics
+- ControlNet-like branches
+
+Generation modes for this phase:
 - text-only
 - img2img from reference asset
-- masked img2img
-
-The most important initial path is:
-1. rasterize existing SVG or source art
-2. use it as structure reference
-3. regenerate style/material/detail while preserving placement and silhouette
 
 ## UI work
 
-Add a "Reference Shape" block in the asset detail panel:
-- source asset picker
-- mask preview
+Add a compact "Reference Shape" block in the asset detail panel:
+- source asset path / picker
 - reference enable/disable
-- strength control specific to structure preservation
+- structure-strength control
+
+Recommended default asset classes for V1:
+- `wall_left` enabled
+- `wall_right` enabled
+- `door` enabled
+- `corner_wall` enabled
+- `stairs` enabled
+- `floor_tile` disabled
+- `prop` disabled
+- `character` disabled
 
 ## Files likely affected
 
 - `src/projects/Project.hpp`
 - `src/projects/ProjectManager.cpp`
+- `src/projects/AssetTypeTemplate.*`
+- `src/assets/ReferenceNormalizer.*`
 - `src/controllers/ImageGeneratorController.*`
 - `src/controllers/ProjectController.*`
 - `src/views/ProjectView.*`
-- `src/portraits/PortraitGeneratorAi.*`
 - pipeline docs under `docs/10_pipeline/`
 
 ## Acceptance criteria
 
-- The user can attach a source asset as a structural reference.
+- The user can attach or use a default reference image as a structural reference.
 - The generator can preserve left-wall vs right-wall composition instead of drifting into a new scene.
-- Existing SVG assets can be used as a starting point for replacement generation.
-- Asset types that do not need structural references can continue using a lighter prompt-first workflow.
+- Asset types that do not need references can continue using prompt-first txt2img.
+- The existing post-process/export path remains unchanged.
+- Raw and processed outputs remain inspectable.
 
 ---
 
@@ -590,8 +645,10 @@ Show a small validation summary on selected results:
 | **Canvas** | dims match `spec.canvasWidth/Height` | mismatch + `!enforceCanvasSize` | mismatch + `enforceCanvasSize` |
 | **Alpha** | any pixel `alpha < 255` (when `requiresTransparency`) | no transparent pixels + `!enforceTransparency` | no transparent pixels + `enforceTransparency` |
 | **Fill** | opaque pixel ratio within `[minFillRatio, maxFillRatio]` | above `maxFillRatio` | below `minFillRatio` |
+| **Bounds** | occupied bounds match expected slot within tolerance | drift for freeform / mild bounded drift | strong bounded drift |
+| **Anchor** | bottom-center content anchor is near target anchor | anchor drift + `!enforceAnchor` | anchor drift + `enforceAnchor` |
 
-Canvas check is skipped when both `canvasWidth` and `canvasHeight` are 0 (no canvas contract defined). Alpha check is skipped when `requiresTransparency` is false.
+Canvas check is skipped when both `canvasWidth` and `canvasHeight` are 0 (no canvas contract defined). Alpha check is skipped when `requiresTransparency` is false. Bounds and anchor checks operate on the selected displayed asset, which now means the processed project asset output when project mode is active.
 
 `Result::exportReady()` returns `true` only when no check has `status == 2` (fail).
 
@@ -747,8 +804,8 @@ The most useful rollout is foundation-first. Pipeline structure should land befo
 
 1. ✓ Asset specification model
 2. Reference normalization
-3. Metadata emission
-4. Post-processing pipeline stage
+3. ✓ Metadata emission
+4. ✓ Post-processing pipeline stage
 
 ## Phase B — Control
 
@@ -763,14 +820,16 @@ The most useful rollout is foundation-first. Pipeline structure should land befo
    - ✓ canvas
    - ✓ alpha
    - ✓ fill ratio
-3. Candidate export preview
+   - ✓ bounds
+   - ✓ anchor
+3. ✓ Candidate export preview via processed project outputs
 
 ## Phase D — Iteration
 
 1. Overlay preview:
    - source vs candidate
-   - bounds
-   - anchor
+   - ✓ bounds
+   - ✓ anchor
 2. Candidate-to-reference refinement loop
 3. Context preview adapters where needed
 
@@ -781,6 +840,27 @@ The most useful rollout is foundation-first. Pipeline structure should land befo
 3. Pack tracking and approval state
 
 That order gets the tool from "generate asset-like images" to "produce plausible replacement assets" with the least wasted work.
+
+## Immediate next milestone
+
+The next milestone should be:
+
+**Reference-driven constrained img2img V1**
+
+This is the smallest step that directly attacks the current weakness:
+
+`the model invents the wrong shape before post-processing`
+
+Implementation order:
+
+1. add reference fields to `AssetType`
+2. add default reference paths and enabled defaults in `AssetTypeTemplate.cpp`
+3. add `ReferenceNormalizer`
+4. route constrained project assets to the existing img2img path when reference mode is enabled
+5. preserve current normalization/export path unchanged
+6. add minimal UI toggle + structure-strength control
+7. add raw/processed preview toggle
+8. extend metadata with reference usage
 
 ---
 

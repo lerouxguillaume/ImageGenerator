@@ -10,6 +10,7 @@
 class ProjectView : public Screen {
 public:
     enum class ToolbarField { None, Steps, Cfg, Images, Seed };
+    enum class SpecField { None, BoundsX, BoundsY, BoundsW, BoundsH, AnchorX, AnchorY };
 
     std::vector<Project> projects;
     std::string          selectedProjectId;
@@ -85,6 +86,7 @@ public:
     std::array<sf::FloatRect, 2> assetSpecMiscToggles = {};
     // Asset spec: shape policy [0]=Freeform [1]=Bounded [2]=SilhouetteLocked
     std::array<sf::FloatRect, 3> assetSpecShapePolicyToggles = {};
+    std::array<sf::FloatRect, 6> assetSpecNumericFields = {};
 
     bool        themeDirty = false;
     bool        assetDirty = false;
@@ -93,6 +95,8 @@ public:
     sf::FloatRect assetListViewport;
     ToolbarField activeToolbarField = ToolbarField::None;
     std::string  toolbarInput;
+    SpecField    activeSpecField = SpecField::None;
+    std::string  specInput;
     bool         showModelDropdown = false;
     std::string loadedProjectId;
     std::string loadedAssetTypeId;

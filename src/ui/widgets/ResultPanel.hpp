@@ -5,6 +5,7 @@
 #include <vector>
 #include <SFML/Graphics.hpp>
 #include "../../enum/enums.hpp"
+#include "../../projects/Project.hpp"
 
 // Right panel: displays the generated image, Generate/Cancel buttons,
 // progress bar during generation, and error banner on failure.
@@ -58,6 +59,8 @@ public:
         std::string detail;
     };
     std::vector<ValidationChip> validationChips;
+    AssetSpec                   activeSpec;
+    bool                        showContractOverlay = false;
 
     // Action flag: set by handleEvent on Generate click; cleared by controller after launching
     bool generateRequested = false;

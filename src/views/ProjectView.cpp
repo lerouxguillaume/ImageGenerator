@@ -17,6 +17,53 @@ void drawToolbarValue(sf::RenderWindow& win, sf::Font& font,
     Helpers::drawTextC(win, font, value, colors.goldLt,
                        x + w / 2.f, y + metrics.toolbarLabelGap + 8.f, type.body, false);
 }
+
+AssetSpec resolveDisplaySpec(const Project& project, const AssetSpec& input) {
+    AssetSpec spec = input;
+    if (spec.canvasWidth <= 0)  spec.canvasWidth = project.width;
+    if (spec.canvasHeight <= 0) spec.canvasHeight = project.height;
+
+    const int w = std::max(1, spec.canvasWidth);
+    const int h = std::max(1, spec.canvasHeight);
+
+    if (spec.expectedBounds.w <= 0 || spec.expectedBounds.h <= 0) {
+        switch (spec.orientation) {
+            case Orientation::LeftWall:
+            case Orientation::RightWall:
+                spec.expectedBounds = {static_cast<int>(w * 0.18f), static_cast<int>(h * 0.12f),
+                                       static_cast<int>(w * 0.64f), static_cast<int>(h * 0.72f)};
+                break;
+            case Orientation::FloorTile:
+                spec.expectedBounds = {static_cast<int>(w * 0.10f), static_cast<int>(h * 0.54f),
+                                       static_cast<int>(w * 0.80f), static_cast<int>(h * 0.28f)};
+                break;
+            case Orientation::Character:
+                spec.expectedBounds = {static_cast<int>(w * 0.22f), static_cast<int>(h * 0.08f),
+                                       static_cast<int>(w * 0.56f), static_cast<int>(h * 0.82f)};
+                break;
+            case Orientation::Prop:
+                spec.expectedBounds = {static_cast<int>(w * 0.24f), static_cast<int>(h * 0.18f),
+                                       static_cast<int>(w * 0.52f), static_cast<int>(h * 0.64f)};
+                break;
+            case Orientation::Unset:
+                if (spec.isTileable) {
+                    spec.expectedBounds = {static_cast<int>(w * 0.14f), static_cast<int>(h * 0.18f),
+                                           static_cast<int>(w * 0.72f), static_cast<int>(h * 0.68f)};
+                } else {
+                    spec.expectedBounds = {static_cast<int>(w * 0.20f), static_cast<int>(h * 0.16f),
+                                           static_cast<int>(w * 0.60f), static_cast<int>(h * 0.66f)};
+                }
+                break;
+        }
+    }
+
+    if (spec.anchor.x == 0 && spec.anchor.y == 0 && spec.expectedBounds.w > 0 && spec.expectedBounds.h > 0) {
+        spec.anchor.x = spec.expectedBounds.x + spec.expectedBounds.w / 2;
+        spec.anchor.y = spec.expectedBounds.y + spec.expectedBounds.h;
+    }
+
+    return spec;
+}
 }
 
 void ProjectView::render(sf::RenderWindow& win) {
@@ -270,7 +317,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     }
 
     const float assetWorkspaceY = themeBox.top + themeBox.height + metrics.spaceLg;
-    const float assetWorkspaceH = 440.f;
+    const float assetWorkspaceH = 492.f;
     const float listW = 134.f;
     const float detailX = sectionX + listW + metrics.spaceXl;
     const float detailW = railW - listW - metrics.spaceXl;
@@ -359,6 +406,7 @@ void ProjectView::render(sf::RenderWindow& win) {
         assetSpecOrientationToggles = {};
         assetSpecMiscToggles = {};
         assetSpecShapePolicyToggles = {};
+        assetSpecNumericFields = {};
     } else {
         const AssetType* selectedAsset = nullptr;
         for (const auto& at : proj->assetTypes) {
@@ -418,13 +466,13 @@ void ProjectView::render(sf::RenderWindow& win) {
 
         // Asset spec section
         {
+            const AssetSpec spec = resolveDisplaySpec(*proj, selectedAsset->spec);
             const float specLabelY = assetWorkspaceY + 302.f;
             const float chipH      = 22.f;
             const float chipAreaW  = detailW - metrics.spaceMd * 2.f;
             const float chipX0     = detailX + metrics.spaceMd;
             const float chip3W     = (chipAreaW - metrics.spaceSm * 2.f) / 3.f;
             const float chip2W     = (chipAreaW - metrics.spaceSm) / 2.f;
-            const auto& spec       = selectedAsset->spec;
 
             Helpers::drawText(win, font, "Asset spec", colors.muted,
                               chipX0, specLabelY, type.compact, false);
@@ -477,6 +525,33 @@ void ProjectView::render(sf::RenderWindow& win) {
                            active ? colors.goldLt : colors.muted,
                            false, type.compact, font);
                 assetSpecShapePolicyToggles[static_cast<size_t>(i)] = chip;
+            }
+
+            const float numericLabelY = shapeY + chipH + metrics.spaceXs + 8.f;
+            Helpers::drawText(win, font, "Slot contract", colors.muted,
+                              chipX0, numericLabelY, type.compact, false);
+            const float fieldY0 = numericLabelY + 16.f;
+            const char* labels[6] = {"Bx", "By", "Bw", "Bh", "Ax", "Ay"};
+            const int values[6] = {
+                spec.expectedBounds.x, spec.expectedBounds.y, spec.expectedBounds.w,
+                spec.expectedBounds.h, spec.anchor.x, spec.anchor.y
+            };
+            const ProjectView::SpecField fields[6] = {
+                SpecField::BoundsX, SpecField::BoundsY, SpecField::BoundsW,
+                SpecField::BoundsH, SpecField::AnchorX, SpecField::AnchorY
+            };
+            for (int i = 0; i < 6; ++i) {
+                const float cx = chipX0 + static_cast<float>(i % 3) * (chip3W + metrics.spaceSm);
+                const float cy = fieldY0 + static_cast<float>(i / 3) * (metrics.toolbarFieldHeight + metrics.spaceXs + 12.f);
+                const sf::FloatRect fieldRect{cx, cy + 12.f, chip3W, metrics.toolbarFieldHeight};
+                assetSpecNumericFields[static_cast<size_t>(i)] = fieldRect;
+                Helpers::drawText(win, font, labels[i], colors.muted, cx, cy, type.compact, false);
+                Helpers::drawRect(win, fieldRect, colors.panel,
+                                  activeSpecField == fields[i] ? colors.goldLt : colors.border, metrics.borderWidth);
+                Helpers::drawTextC(win, font,
+                                   activeSpecField == fields[i] ? specInput + "|" : std::to_string(values[i]),
+                                   colors.goldLt,
+                                   fieldRect.left + fieldRect.width / 2.f, fieldRect.top + 8.f, type.body, false);
             }
         }
     }

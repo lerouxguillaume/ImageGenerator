@@ -25,68 +25,113 @@ AssetSpec makeSpec(Orientation orient,
     s.targetFillRatio     = targetFill;
     s.minFillRatio        = minFill;
     s.maxFillRatio        = maxFill;
+    s.validation.enforceAnchor = false;
+    return s;
+}
+
+AssetSpec makeWallLeftSpec() {
+    AssetSpec s = makeSpec(Orientation::LeftWall, /*tileable=*/true,
+                           ShapePolicy::Bounded, 0.80f, 0.75f, 0.85f);
+    s.canvasWidth  = 512;
+    s.canvasHeight = 768;
+    s.expectedBounds = {82, 92, 348, 590};
+    s.anchor = {256, 682};
+    s.validation.enforceAnchor = true;
+    return s;
+}
+
+AssetExportSpec makeObjectFitExport(int exportW, int exportH, int maxW, int maxH, int paddingPx = 8) {
+    AssetExportSpec s;
+    s.exportWidth = exportW;
+    s.exportHeight = exportH;
+    s.maxObjectWidth = maxW;
+    s.maxObjectHeight = maxH;
+    s.paddingPx = paddingPx;
+    s.fitMode = AssetFitMode::ObjectFit;
+    s.requireAlpha = true;
+    return s;
+}
+
+AssetExportSpec makeTileExport(int exportW, int exportH) {
+    AssetExportSpec s;
+    s.exportWidth = exportW;
+    s.exportHeight = exportH;
+    s.maxObjectWidth = exportW;
+    s.maxObjectHeight = exportH;
+    s.paddingPx = 0;
+    s.fitMode = AssetFitMode::TileExact;
+    s.requireAlpha = true;
     return s;
 }
 
 const std::vector<AssetTypeTemplate> kTemplates = {
     {
-        "wall", "Wall", "Wall",
+        "wall_left", "Wall Left", "Wall Left",
         makePrompt(
-            {"isometric wall segment", "flat wall panel", "single architectural surface", "clean edges", "minimal detail"},
-            {"characters", "background scene", "text", "watermark", "ornate", "complex", "multiple objects", "top view"}
+            {"isometric view", "3/4 angle", "left wall segment", "flat vertical wall panel",
+             "single object", "centered composition", "full object visible", "no perspective distortion",
+             "clean silhouette", "modular game asset", "tile-safe edges"},
+            {"characters", "background scene", "room interior", "text", "watermark", "ornate", "complex",
+             "multiple objects", "top view", "cinematic lighting", "wide shot", "full building", "floor scene"}
         ),
         AssetConstraints{false, false, true, false},
-        makeSpec(Orientation::LeftWall, /*tileable=*/true, ShapePolicy::Bounded, 0.7f, 0.5f, 0.9f),
-        {"modular", "tileable", "vertical"}
+        makeWallLeftSpec(),
+        makeObjectFitExport(128, 192, 112, 176, 8),
+        {"modular", "tileable", "vertical", "left_wall"}
     },
     {
         "floor_tile", "Floor Tile", "Floor Tile",
         makePrompt(
-            {"isometric floor tile", "top-down readable surface", "modular tile", "clean edges"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric floor tile", "single modular ground tile", "top-down readable surface", "seamless tile edges", "flat gameplay readability"},
+            {"characters", "background scene", "room interior", "text", "watermark", "perspective camera", "floating object"}
         ),
         AssetConstraints{true, false, true, true},
         makeSpec(Orientation::FloorTile, /*tileable=*/true, ShapePolicy::Bounded, 0.85f, 0.6f, 0.95f),
+        makeTileExport(128, 128),
         {"floor", "tileable", "ground"}
     },
     {
         "corner_wall", "Corner Wall", "Corner Wall",
         makePrompt(
-            {"isometric corner wall", "modular corner piece", "clean silhouette", "readable stone forms"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric corner wall", "single modular corner piece", "clean silhouette", "readable wall planes", "game asset framing"},
+            {"characters", "background scene", "room interior", "text", "watermark", "top view", "distant shot"}
         ),
         AssetConstraints{false, false, false, true},
         makeSpec(Orientation::Unset, /*tileable=*/false, ShapePolicy::Bounded, 0.65f, 0.4f, 0.85f),
+        makeObjectFitExport(160, 192, 144, 176, 8),
         {"corner", "wall", "modular"}
     },
     {
         "door", "Door", "Door",
         makePrompt(
-            {"isometric door asset", "front-facing door piece", "game-ready prop", "clean frame"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric left wall door", "single doorway insert", "clean frame", "modular wall attachment", "game asset"},
+            {"characters", "background scene", "room interior", "text", "watermark", "top view", "full building", "staircase"}
         ),
         AssetConstraints{false, false, false, true},
-        makeSpec(Orientation::LeftWall, /*tileable=*/false, ShapePolicy::Freeform, 0.6f, 0.4f, 0.8f),
+        makeSpec(Orientation::LeftWall, /*tileable=*/false, ShapePolicy::Bounded, 0.62f, 0.45f, 0.8f),
+        makeObjectFitExport(128, 192, 112, 176, 8),
         {"entry", "prop"}
     },
     {
         "stairs", "Stairs", "Stairs",
         makePrompt(
-            {"isometric stairs", "modular stair segment", "clean readable steps", "game asset"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric stairs", "single modular stair segment", "clean readable steps", "game asset framing", "clear top surfaces"},
+            {"characters", "background scene", "room interior", "text", "watermark", "top view", "multiple objects"}
         ),
         AssetConstraints{true, false, false, true},
         makeSpec(Orientation::Unset, /*tileable=*/false, ShapePolicy::Bounded, 0.65f, 0.45f, 0.85f),
+        makeObjectFitExport(160, 192, 144, 176, 8),
         {"elevation", "transition"}
     },
     {
         "prop", "Prop", "Prop",
         makePrompt(
-            {"isometric prop", "single object game asset", "centered composition", "clean silhouette"},
-            {"characters", "background scene", "text", "watermark"}
+            {"isometric prop", "single isolated object", "game asset framing", "clean silhouette", "readable materials"},
+            {"characters", "background scene", "room interior", "text", "watermark", "multiple objects", "cropped object", "cinematic shot"}
         ),
         AssetConstraints{false, false, false, false},
-        makeSpec(Orientation::Prop, /*tileable=*/false, ShapePolicy::Freeform, 0.55f, 0.3f, 0.8f),
+        makeSpec(Orientation::Prop, /*tileable=*/false, ShapePolicy::Bounded, 0.58f, 0.38f, 0.78f),
+        makeObjectFitExport(128, 128, 112, 112, 8),
         {"object", "generic"}
     }
 };

@@ -72,6 +72,30 @@ static AssetFitMode strToFitMode(const std::string& s) {
     return AssetFitMode::ObjectFit;
 }
 
+static nlohmann::json exportSpecToJson(const AssetExportSpec& s) {
+    return {
+        {"exportWidth", s.exportWidth},
+        {"exportHeight", s.exportHeight},
+        {"maxObjectWidth", s.maxObjectWidth},
+        {"maxObjectHeight", s.maxObjectHeight},
+        {"paddingPx", s.paddingPx},
+        {"fitMode", fitModeToStr(s.fitMode)},
+        {"requireAlpha", s.requireAlpha}
+    };
+}
+
+static AssetExportSpec exportSpecFromJson(const nlohmann::json& j) {
+    AssetExportSpec s;
+    s.exportWidth = j.value("exportWidth", 128);
+    s.exportHeight = j.value("exportHeight", 128);
+    s.maxObjectWidth = j.value("maxObjectWidth", 112);
+    s.maxObjectHeight = j.value("maxObjectHeight", 112);
+    s.paddingPx = j.value("paddingPx", 8);
+    s.fitMode = strToFitMode(j.value("fitMode", std::string{"object_fit"}));
+    s.requireAlpha = j.value("requireAlpha", true);
+    return s;
+}
+
 static nlohmann::json specToJson(const AssetSpec& s) {
     return {
         {"canvasWidth",          s.canvasWidth},
@@ -143,6 +167,7 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
         {"topSurfaceVisible",  a.constraints.topSurfaceVisible}
     };
     j["spec"] = specToJson(a.spec);
+    j["exportSpec"] = exportSpecToJson(a.exportSpec);
     return j;
 }
 
@@ -161,6 +186,8 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
     }
     if (j.contains("spec") && j["spec"].is_object())
         a.spec = specFromJson(j["spec"]);
+    if (j.contains("exportSpec") && j["exportSpec"].is_object())
+        a.exportSpec = exportSpecFromJson(j["exportSpec"]);
     return a;
 }
 
@@ -315,7 +342,8 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        const std::string& name,
                                        const Prompt&      promptTokens,
                                        const AssetConstraints& constraints,
-                                       const AssetSpec& spec) {
+                                       const AssetSpec& spec,
+                                       const AssetExportSpec& exportSpec) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -327,6 +355,7 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.promptTokens = promptTokens;
     a.constraints  = constraints;
     a.spec         = spec;
+    a.exportSpec   = exportSpec;
     p->assetTypes.push_back(a);
     save();
     return a;

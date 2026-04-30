@@ -11,6 +11,7 @@ struct AssetTypeTemplate {
     Prompt           promptTokens;
     AssetConstraints constraints;
     AssetSpec        spec;
+    AssetExportSpec  exportSpec;
     std::vector<std::string> tags;
 };
 

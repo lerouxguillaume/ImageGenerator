@@ -1,4 +1,6 @@
 #include "ImageGeneratorController.hpp"
+#include "../assets/AssetMetadata.hpp"
+#include "../assets/AssetPostProcessor.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../postprocess/AlphaCutout.hpp"
 #include "../postprocess/AssetValidator.hpp"
@@ -18,6 +20,9 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <nlohmann/json.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <string>
 #include <thread>
 
@@ -155,6 +160,20 @@ static bool isGalleryImageFile(const std::filesystem::path& path) {
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp";
+}
+
+static std::string metadataPathFor(const std::string& imagePath) {
+    const auto dot = imagePath.rfind('.');
+    if (dot == std::string::npos) return imagePath + ".json";
+    return imagePath.substr(0, dot) + ".json";
+}
+
+static std::filesystem::path rawOutputDir(const std::filesystem::path& baseDir) {
+    return baseDir / "raw";
+}
+
+static std::filesystem::path processedOutputDir(const std::filesystem::path& baseDir) {
+    return baseDir / "processed";
 }
 
 static sf::Image resizeImage(const sf::Image& src, unsigned dstW, unsigned dstH) {
@@ -305,12 +324,20 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     }
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    std::string outDir = config.outputDir;
+    std::filesystem::path outDir = config.outputDir;
     if (!projectContext_.outputSubpath.empty()) {
-        outDir = config.outputDir + "/" + projectContext_.outputSubpath;
-        std::filesystem::create_directories(outDir);
+        outDir /= projectContext_.outputSubpath;
     }
-    rp.lastImagePath = outDir + "/img_" + std::to_string(now) + ".png";
+    const bool assetModeEnabled = !projectContext_.empty();
+    const std::filesystem::path rawDir = assetModeEnabled ? rawOutputDir(outDir) : outDir;
+    const std::filesystem::path processedDir = assetModeEnabled ? processedOutputDir(outDir) : outDir;
+    std::filesystem::create_directories(rawDir);
+    if (assetModeEnabled)
+        std::filesystem::create_directories(processedDir);
+
+    const std::string filename = "img_" + std::to_string(now) + ".png";
+    const std::string rawOutPath = (rawDir / filename).string();
+    rp.lastImagePath = (assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string();
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -347,7 +374,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
 
     const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
-    const std::string outPath   = rp.lastImagePath;
+    const std::string outPath   = rawOutPath;
     GenerationParams params = sp.generationParams;
     if (!sp.seedInput.empty()) {
         try { params.seed = std::stoll(sp.seedInput); }
@@ -367,33 +394,53 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::atomic<bool>* failed   = &rp.generationFailed;
     std::string*       errorMsg = &rp.generationErrorMsg;
     const bool requiresTransparency = projectContext_.spec.requiresTransparency;
+    const AssetExportSpec exportSpec = projectContext_.exportSpec;
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
         [prompt, negPrompt, outPath, params, modelDir,
          done, step, idPtr, imgNum, myId, failed, errorMsg,
-         requiresTransparency]
+         requiresTransparency, assetModeEnabled, processedDir, exportSpec]
         (std::stop_token st) {
             try {
                 PortraitGeneratorAi::generateFromPrompt(
                     prompt, negPrompt, outPath, params, modelDir, step, imgNum, std::move(st));
 
-                if (requiresTransparency) {
-                    // Apply alpha cutout to every generated image in the batch.
-                    auto applyAlpha = [](const std::string& path) {
-                        sf::Image raw;
-                        if (!raw.loadFromFile(path)) return;
-                        AlphaCutout::removeBackground(raw).saveToFile(transparentPath(path));
-                    };
-                    applyAlpha(outPath);
-                    for (int i = 2; i <= params.numImages; ++i) {
-                        const auto dot = outPath.rfind('.');
-                        const std::string nthPath = (dot == std::string::npos)
-                            ? outPath + "_" + std::to_string(i)
-                            : outPath.substr(0, dot) + "_" + std::to_string(i) + outPath.substr(dot);
-                        applyAlpha(nthPath);
+                auto processOutput = [&](const std::string& rawPath) {
+                    sf::Image sfRaw;
+                    if (!sfRaw.loadFromFile(rawPath)) return;
+                    if (requiresTransparency)
+                        sfRaw = AlphaCutout::removeBackground(sfRaw);
+
+                    if (!assetModeEnabled) {
+                        if (requiresTransparency)
+                            sfRaw.saveToFile(transparentPath(rawPath));
+                        return;
                     }
+
+                    std::vector<sf::Uint8> pixels(sfRaw.getPixelsPtr(),
+                                                  sfRaw.getPixelsPtr() + sfRaw.getSize().x * sfRaw.getSize().y * 4);
+                    cv::Mat rgba(static_cast<int>(sfRaw.getSize().y), static_cast<int>(sfRaw.getSize().x),
+                                 CV_8UC4, pixels.data());
+                    cv::Mat bgra;
+                    cv::cvtColor(rgba, bgra, cv::COLOR_RGBA2BGRA);
+
+                    const AssetProcessResult result = AssetPostProcessor::process(bgra, exportSpec);
+                    const std::filesystem::path processedPath = processedDir / std::filesystem::path(rawPath).filename();
+                    cv::imwrite(processedPath.string(), result.image);
+
+                    std::ofstream meta(metadataPathFor(processedPath.string()));
+                    meta << toJson(result, exportSpec).dump(4);
+                };
+
+                processOutput(outPath);
+                for (int i = 2; i <= params.numImages; ++i) {
+                    const auto dot = outPath.rfind('.');
+                    const std::string nthPath = (dot == std::string::npos)
+                        ? outPath + "_" + std::to_string(i)
+                        : outPath.substr(0, dot) + "_" + std::to_string(i) + outPath.substr(dot);
+                    processOutput(nthPath);
                 }
             } catch (const std::exception& e) {
                 Logger::error("Generation failed: " + std::string(e.what()));
@@ -499,10 +546,11 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
 
     std::vector<ImageEntry> entries;
     std::error_code ec;
+    std::filesystem::path galleryBaseDir = config.outputDir;
+    if (!projectContext_.outputSubpath.empty())
+        galleryBaseDir /= projectContext_.outputSubpath;
     const std::filesystem::path galleryDir =
-        projectContext_.outputSubpath.empty()
-            ? std::filesystem::path(config.outputDir)
-            : std::filesystem::path(config.outputDir) / projectContext_.outputSubpath;
+        projectContext_.empty() ? galleryBaseDir : processedOutputDir(galleryBaseDir);
     if (std::filesystem::exists(galleryDir, ec)) {
         for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
             if (!entry.is_regular_file()) continue;
