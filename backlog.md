@@ -49,6 +49,13 @@
   parallelogram for `RightWall`, an isometric diamond for `FloorTile`, and a tall ellipse for
   `Character`. `Unset` and `Prop` retain the rectangular fallback.
 
+- Introduce the first typed `GenerationJob` / `GenerationService` boundary.
+  Added `GenerationService` with typed generation, reference, post-process, and result structs.
+  The plain single-image/multi-image generation path now builds a `GenerationJob` in
+  `ImageGeneratorController` and delegates execution, reference normalization, model invocation,
+  and generated asset post-processing to the service. Candidate runs and broader UI orchestration
+  still need to move onto the service boundary.
+
 ## High Priority
 
 - Split cached model state from per-run mutable state in the SD pipeline.
@@ -77,12 +84,12 @@
   ownership with an interface or callback so failures are easier to isolate and the UI layer
   stays thin as features grow.
 
-- Introduce a typed `GenerationJob` / `GenerationService` boundary.
-  `ImageGeneratorController` currently owns model browsing, LLM futures, thumbnail futures,
-  generation threads, cancellation, progress, gallery refresh, and project context state. Add a
-  service-level API that accepts a typed generation request and emits typed progress/result/error
-  events. This should become the shared orchestration boundary for standalone generation, edit
-  mode, and project candidate runs.
+- Extend the typed `GenerationJob` / `GenerationService` boundary across generation workflows.
+  The plain generation path now delegates model execution and post-processing to
+  `GenerationService`, but `ImageGeneratorController` still owns model browsing, LLM futures,
+  thumbnail futures, generation threads, cancellation, progress, gallery refresh, and project
+  context state. Extend the service-level API to emit typed progress/result/error events and move
+  candidate runs plus broader orchestration onto the same boundary.
 
 ## Medium Priority
 

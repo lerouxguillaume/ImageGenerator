@@ -2,9 +2,6 @@
 #include "CandidateRunPipeline.hpp"
 #include "../assets/AssetArtifactStore.hpp"
 #include "../assets/CandidateScorer.hpp"
-#include "../assets/GeneratedAssetProcessor.hpp"
-#include "../assets/ReferenceNormalizer.hpp"
-#include "../portraits/PortraitGeneratorAi.hpp"
 #include "../postprocess/AssetValidator.hpp"
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
@@ -23,8 +20,6 @@
 #include <fstream>
 #include <future>
 #include <nlohmann/json.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 #include <string>
 #include <thread>
 #include <utility>
@@ -33,7 +28,9 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <shlobj.h>
 
@@ -578,71 +575,34 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     std::atomic<int>*  imgNum   = &rp.generationImageNum;
     std::atomic<bool>* failed   = &rp.generationFailed;
     std::string*       errorMsg = &rp.generationErrorMsg;
-    const bool requiresTransparency = projectContext_.spec.requiresTransparency;
-    const AssetExportSpec exportSpec = projectContext_.exportSpec;
-    const bool referenceEnabled = projectContext_.referenceEnabled;
-    const std::string referenceImagePath = projectContext_.referenceImagePath;
-    const float structureStrength = projectContext_.structureStrength;
-    const int generationWidth = std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
-    const int generationHeight = std::max(1, params.height > 0 ? params.height : projectContext_.spec.canvasHeight);
-    const std::filesystem::path processedDir = artifacts.processedDir();
-    const std::filesystem::path refCacheDir = artifacts.referenceCacheDir();
+    GenerationJob job;
+    job.prompt = prompt;
+    job.negativePrompt = negPrompt;
+    job.outputPath = outPath;
+    job.params = params;
+    job.modelDir = modelDir;
+    job.postProcess.assetMode = assetModeEnabled;
+    job.postProcess.requiresTransparency = projectContext_.spec.requiresTransparency;
+    job.postProcess.processedDir = artifacts.processedDir();
+    job.postProcess.exportSpec = projectContext_.exportSpec;
+    job.postProcess.reference.enabled = projectContext_.referenceEnabled;
+    job.postProcess.reference.imagePath = projectContext_.referenceImagePath;
+    job.postProcess.reference.structureStrength = projectContext_.structureStrength;
+    job.postProcess.reference.canvasWidth =
+        std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
+    job.postProcess.reference.canvasHeight =
+        std::max(1, params.height > 0 ? params.height : projectContext_.spec.canvasHeight);
+    job.postProcess.reference.cacheDir = artifacts.referenceCacheDir();
+    GenerationService* generationService = &generationService_;
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
-        [prompt, negPrompt, outPath, params, modelDir,
-         done, step, idPtr, imgNum, myId, failed, errorMsg,
-         requiresTransparency, assetModeEnabled, processedDir, exportSpec,
-         referenceEnabled, referenceImagePath, structureStrength,
-         generationWidth, generationHeight, refCacheDir]
+        [job = std::move(job), generationService,
+         done, step, idPtr, imgNum, myId, failed, errorMsg]
         (std::stop_token st) {
             try {
-                GenerationParams effectiveParams = params;
-                bool usedReference = false;
-                if (assetModeEnabled
-                    && referenceEnabled
-                    && effectiveParams.initImagePath.empty()
-                    && !referenceImagePath.empty()
-                    && std::filesystem::exists(referenceImagePath)) {
-                    const cv::Mat normalizedRef =
-                        ReferenceNormalizer::normalizeToCanvas(referenceImagePath, generationWidth, generationHeight);
-                    const std::filesystem::path refPath = refCacheDir / "normalized_reference.png";
-                    cv::Mat bgraRef;
-                    cv::cvtColor(normalizedRef, bgraRef, cv::COLOR_RGBA2BGRA);
-                    cv::imwrite(refPath.string(), bgraRef);
-                    effectiveParams.initImagePath = refPath.string();
-                    effectiveParams.strength = structureStrength;
-                    usedReference = true;
-                    Logger::info("project asset reference img2img enabled: " + referenceImagePath);
-                } else if (assetModeEnabled && referenceEnabled && !referenceImagePath.empty()) {
-                    Logger::info("project asset reference requested but unavailable, falling back to txt2img: " + referenceImagePath);
-                }
-
-                PortraitGeneratorAi::generateFromPrompt(
-                    prompt, negPrompt, outPath, effectiveParams, modelDir, step, imgNum, std::move(st));
-
-                auto processOutput = [&](const std::string& rawPath) {
-                    GeneratedAssetProcessor::Request req;
-                    req.rawPath = rawPath;
-                    req.processedDir = processedDir;
-                    req.exportSpec = exportSpec;
-                    req.assetMode = assetModeEnabled;
-                    req.requiresTransparency = requiresTransparency;
-                    req.metadata.referenceUsed = usedReference;
-                    req.metadata.referenceImage = referenceImagePath;
-                    req.metadata.structureStrength = usedReference ? structureStrength : 0.0f;
-                    GeneratedAssetProcessor::process(req);
-                };
-
-                processOutput(outPath);
-                for (int i = 2; i <= effectiveParams.numImages; ++i) {
-                    const auto dot = outPath.rfind('.');
-                    const std::string nthPath = (dot == std::string::npos)
-                        ? outPath + "_" + std::to_string(i)
-                        : outPath.substr(0, dot) + "_" + std::to_string(i) + outPath.substr(dot);
-                    processOutput(nthPath);
-                }
+                generationService->run(job, step, imgNum, std::move(st));
             } catch (const std::exception& e) {
                 Logger::error("Generation failed: " + std::string(e.what()));
                 *errorMsg = e.what();

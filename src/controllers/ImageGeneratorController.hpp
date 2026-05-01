@@ -10,6 +10,7 @@
 #include "../presets/PresetManager.hpp"
 #include "../projects/Project.hpp"
 #include "../views/ImageGeneratorView.hpp"
+#include "GenerationService.hpp"
 #include "MenuController.hpp"
 
 class ImageGeneratorController {
@@ -62,6 +63,7 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
     AppConfig&                       config;
     PresetManager                    presetManager;
+    GenerationService                generationService_;
     WorkflowMode                     mode_;
     AppScreen                        backScreen_ = AppScreen::MENU;
     std::shared_ptr<IPromptEnhancer> enhancer;
