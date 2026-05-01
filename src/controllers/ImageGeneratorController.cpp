@@ -1,10 +1,10 @@
 #include "ImageGeneratorController.hpp"
 #include "CandidateRunPipeline.hpp"
-#include "../assets/AssetMetadata.hpp"
-#include "../assets/AssetPostProcessor.hpp"
+#include "../assets/AssetArtifactStore.hpp"
+#include "../assets/CandidateScorer.hpp"
+#include "../assets/GeneratedAssetProcessor.hpp"
 #include "../assets/ReferenceNormalizer.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
-#include "../postprocess/AlphaCutout.hpp"
 #include "../postprocess/AssetValidator.hpp"
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
@@ -16,7 +16,6 @@
 #include <SFML/Window/Clipboard.hpp>
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -146,78 +145,6 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     return gs;
 }
 
-// Returns the transparent-version path for a raw generated image.
-// "output/img_123.png" → "output/img_123_t.png"
-static std::string transparentPath(const std::string& rawPath) {
-    const auto dot = rawPath.rfind('.');
-    if (dot == std::string::npos) return rawPath + "_t";
-    return rawPath.substr(0, dot) + "_t" + rawPath.substr(dot);
-}
-
-static bool isTransparentDerivative(const std::filesystem::path& path) {
-    const std::string stem = path.stem().string();
-    return stem.size() >= 2 && stem.substr(stem.size() - 2) == "_t";
-}
-
-static bool isGalleryImageFile(const std::filesystem::path& path) {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp";
-}
-
-static std::string metadataPathFor(const std::string& imagePath) {
-    const auto dot = imagePath.rfind('.');
-    if (dot == std::string::npos) return imagePath + ".json";
-    return imagePath.substr(0, dot) + ".json";
-}
-
-static std::filesystem::path rawOutputDir(const std::filesystem::path& baseDir) {
-    return baseDir / "raw";
-}
-
-static std::filesystem::path processedOutputDir(const std::filesystem::path& baseDir) {
-    return baseDir / "processed";
-}
-
-static std::filesystem::path processedPathForRaw(const std::filesystem::path& rawPath) {
-    const auto rawDir = rawPath.parent_path().filename().string();
-    if (rawDir == "raw")
-        return rawPath.parent_path().parent_path() / "processed" / rawPath.filename();
-    return rawPath;
-}
-
-static std::filesystem::path rawPathForProcessed(const std::filesystem::path& processedPath) {
-    const auto processedDir = processedPath.parent_path().filename().string();
-    if (processedDir == "processed")
-        return processedPath.parent_path().parent_path() / "raw" / processedPath.filename();
-    return processedPath;
-}
-
-static std::filesystem::path runsDir(const std::filesystem::path& base) {
-    return base / "runs";
-}
-static std::filesystem::path latestCandidateRunDir(const std::filesystem::path& base) {
-    const auto dir = runsDir(base);
-    std::error_code ec;
-    if (!std::filesystem::exists(dir, ec)) return {};
-    std::filesystem::path latest;
-    std::filesystem::file_time_type latestTime{};
-    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (!entry.is_directory()) continue;
-        const auto t = entry.last_write_time(ec);
-        if (latest.empty() || t > latestTime) {
-            latest = entry.path();
-            latestTime = t;
-        }
-    }
-    return latest;
-}
-
-static std::filesystem::path referenceTempDir(const std::filesystem::path& baseDir) {
-    return baseDir / ".reference_cache";
-}
-
 struct SelectedImageMetadata {
     bool        referenceUsed = false;
     std::string referenceImage;
@@ -227,7 +154,7 @@ struct SelectedImageMetadata {
 
 static SelectedImageMetadata loadSelectedImageMetadata(const std::filesystem::path& imagePath) {
     SelectedImageMetadata metadata;
-    std::ifstream metaFile(metadataPathFor(imagePath.string()));
+    std::ifstream metaFile(AssetArtifactStore::metadataPathFor(imagePath));
     if (!metaFile.is_open())
         return metadata;
     nlohmann::json metaJson;
@@ -275,6 +202,168 @@ static sf::Image resizeImage(const sf::Image& src, unsigned dstW, unsigned dstH)
         }
     }
     return dst;
+}
+
+struct GalleryImageEntry {
+    std::string path;
+    std::string filename;
+    std::filesystem::file_time_type modified;
+    float score = -1.f;
+    bool scoreValid = false;
+};
+
+struct GalleryDisplayPath {
+    std::filesystem::path basePath;
+    std::filesystem::path displayPath;
+};
+
+struct GalleryImageData {
+    sf::Image img;
+    std::filesystem::path displayPath;
+    SelectedImageMetadata metadata;
+    std::vector<ResultPanel::ValidationChip> validationChips;
+    bool loaded = false;
+};
+
+static std::vector<GalleryImageEntry> loadGalleryEntries(
+    const AssetArtifactStore& artifacts, GenerationWorkflow workflow) {
+    std::vector<GalleryImageEntry> entries;
+    for (const auto& entry : artifacts.listGalleryImages(workflow)) {
+        entries.push_back({
+            entry.path.string(),
+            entry.filename,
+            entry.modified,
+            -1.f,
+            false
+        });
+    }
+    return entries;
+}
+
+static void scoreGalleryEntries(std::vector<GalleryImageEntry>& entries,
+                                const AssetSpec& spec,
+                                const AlphaCutoutSpec& cutoutSpec) {
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        auto& entry = entries[static_cast<size_t>(i)];
+        const auto score = CandidateScorer::scoreCandidate(entry.path, spec, i, cutoutSpec);
+        entry.score = score.score;
+        entry.scoreValid = score.valid;
+    }
+}
+
+static void sortGalleryEntries(std::vector<GalleryImageEntry>& entries, bool candidateWorkflow) {
+    if (candidateWorkflow) {
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            if (a.scoreValid != b.scoreValid) return a.scoreValid;
+            if (a.scoreValid && b.scoreValid && a.score != b.score) return a.score < b.score;
+            return a.modified > b.modified;
+        });
+        return;
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        return a.modified > b.modified;
+    });
+}
+
+static std::vector<ResultPanel::GalleryItem> buildGalleryItems(
+    const std::vector<GalleryImageEntry>& entries,
+    bool candidateWorkflow,
+    float scoreThreshold) {
+    std::vector<ResultPanel::GalleryItem> gallery;
+    gallery.reserve(entries.size());
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        const auto& entry = entries[static_cast<size_t>(i)];
+        const bool usable = candidateWorkflow && entry.scoreValid && entry.score <= scoreThreshold;
+        gallery.push_back({
+            entry.path,
+            entry.filename,
+            nullptr,
+            entry.scoreValid ? entry.score : -1.f,
+            candidateWorkflow && i == 0 && entry.scoreValid,
+            usable,
+            candidateWorkflow && entry.scoreValid && !usable
+        });
+    }
+    return gallery;
+}
+
+static std::future<sf::Image> scheduleThumbnailLoad(const std::string& path) {
+    return std::async(std::launch::async, [path]() -> sf::Image {
+        sf::Image img;
+        if (!img.loadFromFile(path)) return {};
+        const unsigned w = img.getSize().x;
+        const unsigned h = img.getSize().y;
+        if (w == 0 || h == 0) return {};
+        constexpr unsigned kThumbSz = 92;
+        const float scale = std::min(static_cast<float>(kThumbSz) / w,
+                                     static_cast<float>(kThumbSz) / h);
+        return resizeImage(img,
+            static_cast<unsigned>(w * scale),
+            static_cast<unsigned>(h * scale));
+    });
+}
+
+static int findGallerySelection(const std::vector<ResultPanel::GalleryItem>& gallery,
+                                const std::string& target) {
+    for (int i = 0; i < static_cast<int>(gallery.size()); ++i)
+        if (gallery[static_cast<size_t>(i)].path == target)
+            return i;
+    return gallery.empty() ? -1 : 0;
+}
+
+static GalleryDisplayPath resolveGalleryDisplayPath(const ResultPanel::GalleryItem& item,
+                                                    bool showProcessedOutput,
+                                                    const AssetSpec& spec) {
+    GalleryDisplayPath resolved;
+    resolved.basePath = showProcessedOutput
+        ? std::filesystem::path(item.path)
+        : AssetArtifactStore::rawPathForProcessed(item.path);
+    resolved.displayPath = resolved.basePath;
+    if (showProcessedOutput && spec.requiresTransparency) {
+        const std::filesystem::path transparentPath =
+            AssetArtifactStore::transparentPathFor(resolved.basePath);
+        if (std::filesystem::exists(transparentPath))
+            resolved.displayPath = transparentPath;
+    }
+    return resolved;
+}
+
+static std::vector<ResultPanel::ValidationChip> buildValidationChips(const sf::Image& img,
+                                                                     const AssetSpec& spec,
+                                                                     bool enabled) {
+    std::vector<ResultPanel::ValidationChip> chips;
+    if (!enabled) return chips;
+
+    const auto result = AssetValidator::validate(img, spec);
+    chips.reserve(result.checks.size());
+    for (const auto& c : result.checks)
+        chips.push_back({c.name, c.status, c.detail});
+    return chips;
+}
+
+static GalleryImageData loadGalleryImageData(const GalleryDisplayPath& paths,
+                                             const AssetSpec& spec,
+                                             bool validationEnabled) {
+    GalleryImageData data;
+    data.displayPath = paths.displayPath;
+    data.loaded = data.img.loadFromFile(paths.displayPath.string())
+               || data.img.loadFromFile(paths.basePath.string());
+    if (!data.loaded) return data;
+
+    data.metadata = loadSelectedImageMetadata(
+        AssetArtifactStore::processedPathForRaw(paths.basePath));
+    data.validationChips = buildValidationChips(data.img, spec, validationEnabled);
+    return data;
+}
+
+static void clearSelectedGalleryImage(ResultPanel& rp) {
+    rp.resultLoaded = false;
+    rp.displayedImagePath.clear();
+    rp.validationChips.clear();
+    rp.selectedReferenceUsed = false;
+    rp.selectedReferenceImage.clear();
+    rp.selectedStructureStrength = 0.0f;
 }
 
 // ── Model defaults ────────────────────────────────────────────────────────────
@@ -437,25 +526,14 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     }
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    std::filesystem::path outDir = config.outputDir;
-    if (!projectContext_.outputSubpath.empty()) {
-        outDir /= projectContext_.outputSubpath;
-    }
-    const bool assetModeEnabled = !projectContext_.empty();
-
-    std::filesystem::path rawDir, processedDir;
-    rawDir       = assetModeEnabled ? rawOutputDir(outDir) : outDir;
-    processedDir = assetModeEnabled ? processedOutputDir(outDir) : outDir;
-    std::filesystem::create_directories(rawDir);
-    if (assetModeEnabled)
-        std::filesystem::create_directories(processedDir);
-    const std::filesystem::path refCacheDir = referenceTempDir(outDir);
-    if (assetModeEnabled)
-        std::filesystem::create_directories(refCacheDir);
+    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
+    const bool assetModeEnabled = artifacts.assetMode();
+    artifacts.ensureStandardDirs();
 
     const std::string filename = "img_" + std::to_string(now) + ".png";
-    const std::string rawOutPath = (rawDir / filename).string();
-    rp.lastImagePath = (assetModeEnabled ? (processedDir / filename) : (rawDir / filename)).string();
+    const std::filesystem::path rawOutPath = artifacts.rawImagePath(filename);
+    const std::filesystem::path processedOutPath = artifacts.processedImagePath(filename);
+    rp.lastImagePath = (assetModeEnabled ? processedOutPath : rawOutPath).string();
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -481,7 +559,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
 
     const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
-    const std::string outPath   = rawOutPath;
+    const std::string outPath   = rawOutPath.string();
     GenerationParams params = sp.generationParams;
     if (!sp.seedInput.empty()) {
         try { params.seed = std::stoll(sp.seedInput); }
@@ -507,6 +585,8 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     const float structureStrength = projectContext_.structureStrength;
     const int generationWidth = std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
     const int generationHeight = std::max(1, params.height > 0 ? params.height : projectContext_.spec.canvasHeight);
+    const std::filesystem::path processedDir = artifacts.processedDir();
+    const std::filesystem::path refCacheDir = artifacts.referenceCacheDir();
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
@@ -543,37 +623,16 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
                     prompt, negPrompt, outPath, effectiveParams, modelDir, step, imgNum, std::move(st));
 
                 auto processOutput = [&](const std::string& rawPath) {
-                    sf::Image sfRaw;
-                    if (!sfRaw.loadFromFile(rawPath)) return;
-                    if (requiresTransparency)
-                        sfRaw = AlphaCutout::removeBackground(sfRaw);
-
-                    if (!assetModeEnabled) {
-                        if (requiresTransparency)
-                            sfRaw.saveToFile(transparentPath(rawPath));
-                        return;
-                    }
-
-                    std::vector<sf::Uint8> pixels(sfRaw.getPixelsPtr(),
-                                                  sfRaw.getPixelsPtr() + sfRaw.getSize().x * sfRaw.getSize().y * 4);
-                    cv::Mat rgba(static_cast<int>(sfRaw.getSize().y), static_cast<int>(sfRaw.getSize().x),
-                                 CV_8UC4, pixels.data());
-                    cv::Mat bgra;
-                    cv::cvtColor(rgba, bgra, cv::COLOR_RGBA2BGRA);
-
-                    const AssetProcessResult result = AssetPostProcessor::process(bgra, exportSpec);
-                    const std::filesystem::path processedPath = processedDir / std::filesystem::path(rawPath).filename();
-                    cv::imwrite(processedPath.string(), result.image);
-
-                    nlohmann::json metaJson = toJson(result, exportSpec);
-                    metaJson["referenceUsed"] = usedReference;
-                    metaJson["referenceImage"] = usedReference ? referenceImagePath : std::string{};
-                    metaJson["structureStrength"] = usedReference ? structureStrength : 0.0f;
-                    metaJson["refinementUsed"] = false;
-                    metaJson["refinementSource"] = std::string{};
-                    metaJson["refinementStrength"] = 0.0f;
-                    std::ofstream meta(metadataPathFor(processedPath.string()));
-                    meta << metaJson.dump(4);
+                    GeneratedAssetProcessor::Request req;
+                    req.rawPath = rawPath;
+                    req.processedDir = processedDir;
+                    req.exportSpec = exportSpec;
+                    req.assetMode = assetModeEnabled;
+                    req.requiresTransparency = requiresTransparency;
+                    req.metadata.referenceUsed = usedReference;
+                    req.metadata.referenceImage = referenceImagePath;
+                    req.metadata.structureStrength = usedReference ? structureStrength : 0.0f;
+                    GeneratedAssetProcessor::process(req);
                 };
 
                 processOutput(outPath);
@@ -609,33 +668,24 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
     const std::string runId = "run_" + std::to_string(now);
-    std::filesystem::path outDir = config.outputDir;
-    if (!projectContext_.outputSubpath.empty())
-        outDir /= projectContext_.outputSubpath;
+    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
+    const auto layout = artifacts.candidateRunLayout(runId);
+    artifacts.ensureCandidateRunDirs(layout);
 
-    const auto runPath = runsDir(outDir) / runId;
-    const auto exploreRawDir = runPath / "explore" / "raw";
-    const auto exploreProcessedDir = runPath / "explore" / "processed";
-    const auto refineRawDir = runPath / "refine" / "raw";
-    const auto refineProcessedDir = runPath / "refine" / "processed";
-    std::filesystem::create_directories(exploreRawDir);
-    std::filesystem::create_directories(exploreProcessedDir);
-    std::filesystem::create_directories(refineRawDir);
-    std::filesystem::create_directories(refineProcessedDir);
-
-    const std::filesystem::path patronFile = outDir / "patron.png";
-    std::filesystem::create_directories(outDir);
+    const std::filesystem::path patronFile = artifacts.patronPath();
+    std::filesystem::create_directories(artifacts.baseDir());
     const std::string patronPath = std::filesystem::exists(patronFile)
         ? patronFile.string()
         : PatronGenerator::generate(projectContext_.spec, patronFile);
     if (patronPath.empty())
         Logger::error("PatronGenerator: failed to write patron — exploration will run as txt2img");
 
-    const int exploreCount = std::max(candidateRun_.minExploreImages, sp.generationParams.numImages);
-    const int candidateCount = candidateRun_.candidateCount;
-    const int refineVariants = candidateRun_.refineVariants;
+    const CandidateRunSettings candidateRun = projectContext_.candidateRun;
+    const int exploreCount = std::max(candidateRun.minExploreImages, sp.generationParams.numImages);
+    const int candidateCount = candidateRun.candidateCount;
+    const int refineVariants = candidateRun.refineVariants;
     const int expectedTotalImages = exploreCount + candidateCount * refineVariants;
-    const float explorationStrength = candidateRun_.explorationStrength;
+    const float explorationStrength = candidateRun.explorationStrength;
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -646,7 +696,7 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     rp.generationFailed.store(false);
     rp.generationErrorMsg.clear();
     rp.generationTotalImages.store(expectedTotalImages);
-    rp.lastImagePath = (refineProcessedDir / "ref_1.png").string();
+    rp.lastImagePath = (layout.refineProcessedDir / "ref_1.png").string();
 
     const int myId = ++rp.generationId;
 
@@ -686,11 +736,11 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     pipeline.baseParams           = baseParams;
     pipeline.runId                = runId;
     pipeline.patronPath           = patronPath;
-    pipeline.runPath              = runPath;
-    pipeline.exploreRawDir        = exploreRawDir;
-    pipeline.exploreProcessedDir  = exploreProcessedDir;
-    pipeline.refineRawDir         = refineRawDir;
-    pipeline.refineProcessedDir   = refineProcessedDir;
+    pipeline.runPath              = layout.runPath;
+    pipeline.exploreRawDir        = layout.exploreRawDir;
+    pipeline.exploreProcessedDir  = layout.exploreProcessedDir;
+    pipeline.refineRawDir         = layout.refineRawDir;
+    pipeline.refineProcessedDir   = layout.refineProcessedDir;
     pipeline.exploreCount         = exploreCount;
     pipeline.candidateCount       = candidateCount;
     pipeline.refineVariants       = refineVariants;
@@ -699,8 +749,8 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     pipeline.spec                 = spec;
     pipeline.assetTypeId          = projectContext_.assetTypeId;
     pipeline.explorationStrength  = explorationStrength;
-    pipeline.refinementStrength   = candidateRun_.refinementStrength;
-    pipeline.scoreThreshold       = candidateRun_.scoreThreshold;
+    pipeline.refinementStrength   = candidateRun.refinementStrength;
+    pipeline.scoreThreshold       = candidateRun.scoreThreshold;
     pipeline.step                 = &rp.generationStep;
     pipeline.imgNum               = &rp.generationImageNum;
 
@@ -770,190 +820,68 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
     auto& rp = view.resultPanel;
     if (index < 0 || index >= static_cast<int>(rp.gallery.size())) {
         rp.selectedIndex = -1;
-        rp.resultLoaded = false;
-        rp.displayedImagePath.clear();
-        rp.validationChips.clear();
-        rp.selectedReferenceUsed = false;
-        rp.selectedReferenceImage.clear();
-        rp.selectedStructureStrength = 0.0f;
+        clearSelectedGalleryImage(rp);
         return;
     }
 
     rp.selectedIndex = index;
     const auto& item = rp.gallery[static_cast<size_t>(index)];
-    const std::filesystem::path basePath = rp.showProcessedOutput
-        ? std::filesystem::path(item.path)
-        : rawPathForProcessed(item.path);
-    std::string displayPath = basePath.string();
-    if (rp.showProcessedOutput && projectContext_.spec.requiresTransparency) {
-        const std::string tp = transparentPath(basePath.string());
-        if (std::filesystem::exists(tp))
-            displayPath = tp;
+    const GalleryDisplayPath paths =
+        resolveGalleryDisplayPath(item, rp.showProcessedOutput, projectContext_.spec);
+    const bool validationEnabled = !projectContext_.empty() && rp.showProcessedOutput;
+    const GalleryImageData data =
+        loadGalleryImageData(paths, projectContext_.spec, validationEnabled);
+
+    if (!data.loaded) {
+        clearSelectedGalleryImage(rp);
+        return;
     }
 
-    // Load as sf::Image so we can run validation before creating the texture.
-    sf::Image img;
-    const bool loaded = img.loadFromFile(displayPath)
-                     || img.loadFromFile(basePath.string());
-    if (loaded) {
-        rp.resultTexture.loadFromImage(img);
-        rp.resultLoaded = true;
-        rp.displayedImagePath = displayPath;
-        const SelectedImageMetadata metadata = loadSelectedImageMetadata(processedPathForRaw(basePath));
-        rp.selectedReferenceUsed = metadata.referenceUsed;
-        rp.selectedReferenceImage = metadata.referenceImage;
-        rp.selectedStructureStrength = metadata.structureStrength;
-
-        if (!projectContext_.empty() && rp.showProcessedOutput) {
-            auto vr = AssetValidator::validate(img, projectContext_.spec);
-            rp.validationChips.clear();
-            for (const auto& c : vr.checks)
-                rp.validationChips.push_back({c.name, c.status, c.detail});
-        } else {
-            rp.validationChips.clear();
-        }
-    } else {
-        rp.resultLoaded = false;
-        rp.displayedImagePath.clear();
-        rp.validationChips.clear();
-        rp.selectedReferenceUsed = false;
-        rp.selectedReferenceImage.clear();
-        rp.selectedStructureStrength = 0.0f;
-    }
+    rp.resultTexture.loadFromImage(data.img);
+    rp.resultLoaded = true;
+    rp.displayedImagePath = data.displayPath.string();
+    rp.selectedReferenceUsed = data.metadata.referenceUsed;
+    rp.selectedReferenceImage = data.metadata.referenceImage;
+    rp.selectedStructureStrength = data.metadata.structureStrength;
+    rp.validationChips = data.validationChips;
 }
 
 void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection) {
     auto& rp = view.resultPanel;
-    struct ImageEntry {
-        std::string path;
-        std::string filename;
-        std::filesystem::file_time_type modified;
-        float score = -1.f;
-        bool scoreValid = false;
-    };
-
-    std::vector<ImageEntry> entries;
-    std::error_code ec;
-    std::filesystem::path galleryBaseDir = config.outputDir;
-    if (!projectContext_.outputSubpath.empty())
-        galleryBaseDir /= projectContext_.outputSubpath;
+    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
     const bool isCandidateWorkflow = !projectContext_.empty()
         && projectContext_.workflow == GenerationWorkflow::CandidateRun;
-    const std::filesystem::path latestRunDir = isCandidateWorkflow
-        ? latestCandidateRunDir(galleryBaseDir) : std::filesystem::path{};
-    const bool hasCandidateRun = !latestRunDir.empty();
+    const GenerationWorkflow galleryWorkflow = isCandidateWorkflow
+        ? GenerationWorkflow::CandidateRun : GenerationWorkflow::Standard;
 
-    // Determine which directory to scan for gallery images
-    std::filesystem::path galleryDir;
-    if (isCandidateWorkflow && hasCandidateRun) {
-        galleryDir = latestRunDir / "refine" / "processed";
-        bool hasRefined = false;
-        if (std::filesystem::exists(galleryDir, ec)) {
-            for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
-                if (entry.is_regular_file() && isGalleryImageFile(entry.path())
-                    && !isTransparentDerivative(entry.path())) {
-                    hasRefined = true;
-                    break;
-                }
-            }
-        }
-        if (!hasRefined)
-            galleryDir = latestRunDir / "explore" / "processed";
-    } else if (!projectContext_.empty()) {
-        galleryDir = processedOutputDir(galleryBaseDir);
-    } else {
-        galleryDir = galleryBaseDir;
-    }
-
-    if (std::filesystem::exists(galleryDir, ec)) {
-        for (const auto& entry : std::filesystem::directory_iterator(galleryDir, ec)) {
-            if (!entry.is_regular_file()) continue;
-            if (!isGalleryImageFile(entry.path())) continue;
-            if (isTransparentDerivative(entry.path())) continue;
-            entries.push_back({
-                entry.path().string(),
-                entry.path().filename().string(),
-                entry.last_write_time(ec),
-                -1.f,
-                false
-            });
-        }
-    }
-
-    if (isCandidateWorkflow) {
-        for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-            const auto score = CandidateRunPipeline::scoreCandidate(
-                entries[static_cast<size_t>(i)].path, projectContext_.spec, i);
-            entries[static_cast<size_t>(i)].score = score.score;
-            entries[static_cast<size_t>(i)].scoreValid = score.valid;
-        }
-        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-            if (a.scoreValid != b.scoreValid) return a.scoreValid;
-            if (a.scoreValid && b.scoreValid && a.score != b.score) return a.score < b.score;
-            return a.modified > b.modified;
-        });
-    } else {
-        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-            return a.modified > b.modified;
-        });
-    }
+    std::vector<GalleryImageEntry> entries = loadGalleryEntries(artifacts, galleryWorkflow);
+    if (isCandidateWorkflow)
+        scoreGalleryEntries(entries, projectContext_.spec, projectContext_.exportSpec.alphaCutout);
+    sortGalleryEntries(entries, isCandidateWorkflow);
 
     pendingThumbs_.clear();
-    std::vector<ResultPanel::GalleryItem> gallery;
-    gallery.reserve(entries.size());
-    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-        const auto& entry = entries[static_cast<size_t>(i)];
-        const bool usable = isCandidateWorkflow && entry.scoreValid
-            && entry.score <= candidateRun_.scoreThreshold;
-        gallery.push_back({
-            entry.path,
-            entry.filename,
-            nullptr,
-            entry.scoreValid ? entry.score : -1.f,
-            isCandidateWorkflow && i == 0 && entry.scoreValid,
-            usable,
-            isCandidateWorkflow && entry.scoreValid && !usable
-        });
+    rp.gallery = buildGalleryItems(
+        entries, isCandidateWorkflow, projectContext_.candidateRun.scoreThreshold);
+    for (const auto& item : rp.gallery) {
         pendingThumbs_.push_back({
-            entry.path,
-            std::async(std::launch::async, [path = entry.path]() -> sf::Image {
-                sf::Image img;
-                if (!img.loadFromFile(path)) return {};
-                const unsigned w = img.getSize().x;
-                const unsigned h = img.getSize().y;
-                if (w == 0 || h == 0) return {};
-                constexpr unsigned kThumbSz = 92;
-                const float scale = std::min(static_cast<float>(kThumbSz) / w,
-                                             static_cast<float>(kThumbSz) / h);
-                return resizeImage(img,
-                    static_cast<unsigned>(w * scale),
-                    static_cast<unsigned>(h * scale));
-            })
+            item.path,
+            scheduleThumbnailLoad(item.path)
         });
     }
-    rp.gallery = std::move(gallery);
 
     std::string target;
     if (!isCandidateWorkflow)
-        target = preferredSelection.empty() ? processedPathForRaw(rp.displayedImagePath).string()
-                                            : processedPathForRaw(preferredSelection).string();
-    int selected = -1;
-    for (int i = 0; i < static_cast<int>(rp.gallery.size()); ++i) {
-        if (rp.gallery[static_cast<size_t>(i)].path == target) {
-            selected = i;
-            break;
-        }
-    }
-    if (selected < 0 && !rp.gallery.empty())
-        selected = 0;
+        target = preferredSelection.empty()
+            ? AssetArtifactStore::processedPathForRaw(rp.displayedImagePath).string()
+            : AssetArtifactStore::processedPathForRaw(preferredSelection).string();
+    const int selected = findGallerySelection(rp.gallery, target);
 
     selectGalleryImage(view, selected);
 
-    if (isCandidateWorkflow && !rp.gallery.empty()) {
+    if (isCandidateWorkflow && !rp.gallery.empty())
         rp.bestWallCandidateScore = rp.gallery.front().score;
-    } else {
+    else
         rp.bestWallCandidateScore = -1.f;
-    }
 }
 
 void ImageGeneratorController::flushPendingThumbs(ImageGeneratorView& view) {

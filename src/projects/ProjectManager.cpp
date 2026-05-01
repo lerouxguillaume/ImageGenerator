@@ -78,6 +78,44 @@ static GenerationWorkflow strToWorkflow(const std::string& s) {
     return s == "candidate_run" ? GenerationWorkflow::CandidateRun : GenerationWorkflow::Standard;
 }
 
+static nlohmann::json alphaCutoutToJson(const AlphaCutoutSpec& s) {
+    return {
+        {"tolerance", s.tolerance},
+        {"featherRadius", s.featherRadius},
+        {"defringe", s.defringe}
+    };
+}
+
+static AlphaCutoutSpec alphaCutoutFromJson(const nlohmann::json& j) {
+    AlphaCutoutSpec s;
+    s.tolerance = j.value("tolerance", 30.f);
+    s.featherRadius = j.value("featherRadius", 3);
+    s.defringe = j.value("defringe", true);
+    return s;
+}
+
+static nlohmann::json candidateRunToJson(const CandidateRunSettings& s) {
+    return {
+        {"minExploreImages", s.minExploreImages},
+        {"candidateCount", s.candidateCount},
+        {"refineVariants", s.refineVariants},
+        {"scoreThreshold", s.scoreThreshold},
+        {"explorationStrength", s.explorationStrength},
+        {"refinementStrength", s.refinementStrength}
+    };
+}
+
+static CandidateRunSettings candidateRunFromJson(const nlohmann::json& j) {
+    CandidateRunSettings s;
+    s.minExploreImages = j.value("minExploreImages", 8);
+    s.candidateCount = j.value("candidateCount", 3);
+    s.refineVariants = j.value("refineVariants", 2);
+    s.scoreThreshold = j.value("scoreThreshold", 150.0f);
+    s.explorationStrength = j.value("explorationStrength", 0.70f);
+    s.refinementStrength = j.value("refinementStrength", 0.27f);
+    return s;
+}
+
 static nlohmann::json exportSpecToJson(const AssetExportSpec& s) {
     return {
         {"exportWidth", s.exportWidth},
@@ -86,7 +124,8 @@ static nlohmann::json exportSpecToJson(const AssetExportSpec& s) {
         {"maxObjectHeight", s.maxObjectHeight},
         {"paddingPx", s.paddingPx},
         {"fitMode", fitModeToStr(s.fitMode)},
-        {"requireAlpha", s.requireAlpha}
+        {"requireAlpha", s.requireAlpha},
+        {"alphaCutout", alphaCutoutToJson(s.alphaCutout)}
     };
 }
 
@@ -99,6 +138,8 @@ static AssetExportSpec exportSpecFromJson(const nlohmann::json& j) {
     s.paddingPx = j.value("paddingPx", 8);
     s.fitMode = strToFitMode(j.value("fitMode", std::string{"object_fit"}));
     s.requireAlpha = j.value("requireAlpha", true);
+    if (j.contains("alphaCutout") && j["alphaCutout"].is_object())
+        s.alphaCutout = alphaCutoutFromJson(j["alphaCutout"]);
     return s;
 }
 
@@ -178,6 +219,7 @@ static nlohmann::json assetTypeToJson(const AssetType& a) {
     j["referenceImagePath"] = a.referenceImagePath;
     j["structureStrength"] = a.structureStrength;
     j["workflow"] = workflowToStr(a.workflow);
+    j["candidateRun"] = candidateRunToJson(a.candidateRun);
     return j;
 }
 
@@ -202,6 +244,8 @@ static AssetType assetTypeFromJson(const nlohmann::json& j) {
     a.referenceImagePath = j.value("referenceImagePath", std::string{});
     a.structureStrength = j.value("structureStrength", 0.45f);
     a.workflow = strToWorkflow(j.value("workflow", std::string{"standard"}));
+    if (j.contains("candidateRun") && j["candidateRun"].is_object())
+        a.candidateRun = candidateRunFromJson(j["candidateRun"]);
     return a;
 }
 
@@ -361,7 +405,8 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
                                        bool referenceEnabled,
                                        const std::string& referenceImagePath,
                                        float structureStrength,
-                                       GenerationWorkflow workflow) {
+                                       GenerationWorkflow workflow,
+                                       const CandidateRunSettings& candidateRun) {
     Project* p = findProject(projectId);
     if (!p) {
         Logger::info("addAssetType: project '" + projectId + "' not found");
@@ -378,6 +423,7 @@ AssetType ProjectManager::addAssetType(const std::string& projectId,
     a.referenceImagePath = referenceImagePath;
     a.structureStrength = structureStrength;
     a.workflow = workflow;
+    a.candidateRun = candidateRun;
     p->assetTypes.push_back(a);
     save();
     return a;

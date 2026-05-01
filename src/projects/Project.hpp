@@ -38,6 +38,21 @@ enum class GenerationWorkflow { Standard, CandidateRun };
 struct Anchor        { int x = 0; int y = 0; };
 struct OccupiedBounds { int x = 0; int y = 0; int w = 0; int h = 0; };
 
+struct CandidateRunSettings {
+    int   minExploreImages    = 8;
+    int   candidateCount      = 3;
+    int   refineVariants      = 2;
+    float scoreThreshold      = 150.0f;
+    float explorationStrength = 0.70f;
+    float refinementStrength  = 0.27f;
+};
+
+struct AlphaCutoutSpec {
+    float tolerance = 30.f;
+    int featherRadius = 3;
+    bool defringe = true;
+};
+
 struct AssetExportSpec {
     int exportWidth = 128;
     int exportHeight = 128;
@@ -46,6 +61,7 @@ struct AssetExportSpec {
     int paddingPx = 8;
     AssetFitMode fitMode = AssetFitMode::ObjectFit;
     bool requireAlpha = true;
+    AlphaCutoutSpec alphaCutout;
 };
 
 struct ValidationPolicy {
@@ -88,6 +104,7 @@ struct AssetType {
     std::string        referenceImagePath;
     float              structureStrength  = 0.45f;
     GenerationWorkflow workflow           = GenerationWorkflow::Standard;
+    CandidateRunSettings candidateRun;
 };
 
 struct Project {
@@ -119,6 +136,7 @@ struct ResolvedProjectContext {
     std::string        referenceImagePath;
     float              structureStrength  = 0.45f;
     GenerationWorkflow workflow           = GenerationWorkflow::Standard;
+    CandidateRunSettings candidateRun;
     std::string            outputSubpath; // sanitised relative path, e.g. "Medieval Dungeon/Wall Tile"
     std::vector<AssetType> allAssetTypes; // all types in the project, used to populate gallery tabs
 

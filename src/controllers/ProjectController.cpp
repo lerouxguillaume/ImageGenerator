@@ -1,4 +1,5 @@
 #include "ProjectController.hpp"
+#include "../assets/AssetArtifactStore.hpp"
 #include "../managers/Logger.hpp"
 #include "../projects/PatronGenerator.hpp"
 #include "../prompt/PromptCompiler.hpp"
@@ -194,6 +195,15 @@ static std::string specSignature(const AssetSpec& spec) {
         + std::to_string(spec.validation.enforceTransparency ? 1 : 0) + "|"
         + std::to_string(spec.validation.enforceAnchor ? 1 : 0) + "|"
         + std::to_string(spec.validation.maxSilhouetteDeviation);
+}
+
+static std::string candidateRunSignature(const CandidateRunSettings& s) {
+    return std::to_string(s.minExploreImages) + "|"
+        + std::to_string(s.candidateCount) + "|"
+        + std::to_string(s.refineVariants) + "|"
+        + std::to_string(s.scoreThreshold) + "|"
+        + std::to_string(s.explorationStrength) + "|"
+        + std::to_string(s.refinementStrength);
 }
 
 static float structureStrengthFromTrack(const sf::Vector2f& pos, const sf::FloatRect& track) {
@@ -923,7 +933,8 @@ void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const Ass
         assetTemplate.referenceEnabled,
         assetTemplate.referenceImagePath,
         assetTemplate.structureStrength,
-        assetTemplate.workflow);
+        assetTemplate.workflow,
+        assetTemplate.candidateRun);
     if (assetType.id.empty())
         return;
     view.newAssetTypeInputActive = false;
@@ -999,7 +1010,8 @@ void ProjectController::syncGeneratorSession(ProjectView& view) {
         current.referenceEnabled == ctx.referenceEnabled
         && current.referenceImagePath == ctx.referenceImagePath
         && std::abs(current.structureStrength - ctx.structureStrength) < 0.0001f
-        && current.workflow == ctx.workflow;
+        && current.workflow == ctx.workflow
+        && candidateRunSignature(current.candidateRun) == candidateRunSignature(ctx.candidateRun);
     if (current.projectId == ctx.projectId
         && current.assetTypeId == ctx.assetTypeId
         && sameTheme
@@ -1047,9 +1059,9 @@ ResolvedProjectContext ProjectController::consumePendingGeneration() {
 
 void ProjectController::refreshPatron(const Project& proj, const AssetType& at) {
     if (at.workflow != GenerationWorkflow::CandidateRun) return;
-    const std::filesystem::path patronPath =
-        std::filesystem::path(config_.outputDir)
-        / sanitiseName(proj.name) / sanitiseName(at.name) / "patron.png";
+    const AssetArtifactStore artifacts(
+        config_.outputDir, sanitiseName(proj.name) + "/" + sanitiseName(at.name));
+    const std::filesystem::path patronPath = artifacts.patronPath();
     std::filesystem::create_directories(patronPath.parent_path());
     PatronGenerator::generate(resolveScratchSpecForProject(proj, at.spec), patronPath);
 }
@@ -1076,6 +1088,7 @@ ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView
         ctx.referenceImagePath = at.referenceImagePath;
         ctx.structureStrength = at.structureStrength;
         ctx.workflow         = at.workflow;
+        ctx.candidateRun     = at.candidateRun;
         ctx.outputSubpath    = sanitiseName(proj->name) + "/" + sanitiseName(at.name);
         ctx.allAssetTypes    = proj->assetTypes;
         return ctx;

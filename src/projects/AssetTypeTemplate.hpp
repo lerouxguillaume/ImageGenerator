@@ -16,6 +16,7 @@ struct AssetTypeTemplate {
     std::string        referenceImagePath;
     float              structureStrength  = 0.45f;
     GenerationWorkflow workflow           = GenerationWorkflow::Standard;
+    CandidateRunSettings candidateRun;
     std::vector<std::string> tags;
 };
 

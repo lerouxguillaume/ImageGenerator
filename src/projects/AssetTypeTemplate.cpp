@@ -74,6 +74,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         {},
         0.34f,
         GenerationWorkflow::CandidateRun,
+        CandidateRunSettings{},
         {"modular", "tileable", "vertical", "left_wall"}
     }
 };

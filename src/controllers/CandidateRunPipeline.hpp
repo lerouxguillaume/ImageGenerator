@@ -5,16 +5,9 @@
 #include <string>
 #include <vector>
 #include "../assets/AssetMetadata.hpp"
+#include "../assets/CandidateScorer.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../projects/Project.hpp"
-
-struct CandidateScore {
-    int         index = -1;
-    std::string processedPath;
-    std::string rawPath;
-    float       score = 0.0f;
-    bool        valid = false;
-};
 
 struct CandidateRunPipeline {
     std::string           prompt;
@@ -47,9 +40,6 @@ struct CandidateRunPipeline {
                                        std::stop_token st);
     void writeManifest(const std::vector<CandidateScore>& exploration,
                        const std::vector<CandidateScore>& refinement) const;
-
-    static CandidateScore scoreCandidate(const std::string& imagePath,
-                                         const AssetSpec& spec, int index);
 
 private:
     static std::string nthPath(const std::filesystem::path& firstPath, int index);

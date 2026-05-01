@@ -101,13 +101,4 @@ private:
     void flushPendingThumbs(ImageGeneratorView& view);
     std::string pendingEditNavigationPath_;
 
-    struct CandidateRunSettings {
-        int   minExploreImages    = 8;
-        int   candidateCount      = 3;
-        int   refineVariants      = 2;
-        float scoreThreshold      = 150.0f;
-        float explorationStrength = 0.70f;
-        float refinementStrength  = 0.27f;
-    };
-    CandidateRunSettings candidateRun_;
 };
