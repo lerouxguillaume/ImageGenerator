@@ -1,9 +1,11 @@
 #include "ProjectController.hpp"
 #include "../managers/Logger.hpp"
+#include "../projects/PatronGenerator.hpp"
 #include "../prompt/PromptCompiler.hpp"
 #include "../prompt/PromptMerge.hpp"
 #include "../prompt/PromptParser.hpp"
 #include <cmath>
+#include <filesystem>
 
 static Prompt buildConstraintTokens(const PackConstraints& pack,
                                     const AssetConstraints& asset,
@@ -254,6 +256,10 @@ void ProjectController::commitSpecField(ProjectView& view) {
         const int value = view.specInput.empty() ? 0 : std::max(0, std::stoi(view.specInput));
         for (auto& at : proj->assetTypes) {
             if (at.id != view.selectedAssetTypeId) continue;
+            const bool shapeChanged = (view.activeSpecField == ProjectView::SpecField::BoundsX
+                || view.activeSpecField == ProjectView::SpecField::BoundsY
+                || view.activeSpecField == ProjectView::SpecField::BoundsW
+                || view.activeSpecField == ProjectView::SpecField::BoundsH);
             switch (view.activeSpecField) {
                 case ProjectView::SpecField::BoundsX: at.spec.expectedBounds.x = value; break;
                 case ProjectView::SpecField::BoundsY: at.spec.expectedBounds.y = value; break;
@@ -264,6 +270,7 @@ void ProjectController::commitSpecField(ProjectView& view) {
                 case ProjectView::SpecField::None: break;
             }
             projectManager_.updateAssetType(proj->id, at);
+            if (shapeChanged) refreshPatron(*proj, at);
             break;
         }
     } catch (...) {
@@ -316,8 +323,14 @@ void ProjectController::update(ProjectView& view) {
     }
     populateEditors(view);
     syncGeneratorSession(view);
-    if (!view.selectedProjectId.empty())
+    if (!view.selectedProjectId.empty()) {
         generatorController_.update(view.generatorView);
+        const auto pendingId = generatorController_.consumePendingAssetTypeSwitch();
+        if (!pendingId.empty()) {
+            view.selectedAssetTypeId = pendingId;
+            syncGeneratorSession(view);
+        }
+    }
 }
 
 void ProjectController::handleEvent(const sf::Event& e, sf::RenderWindow& win,
@@ -711,6 +724,7 @@ void ProjectController::handleClick(sf::Vector2f pos, sf::RenderWindow& win, Pro
                     at.spec.orientation = (at.spec.orientation == kOrientations[i] && i != 0)
                         ? Orientation::Unset : kOrientations[i];
                     projectManager_.updateAssetType(proj->id, at);
+                    refreshPatron(*proj, at);
                     return;
                 }
                 return;
@@ -920,6 +934,7 @@ void ProjectController::createAssetTypeFromTemplate(ProjectView& view, const Ass
     view.assetDirty = false;
     Logger::info("ProjectController: added asset type from template '" + assetTemplate.id
                  + "' to project=" + view.selectedProjectId);
+    refreshPatron(*proj, assetType);
 }
 
 void ProjectController::populateEditors(ProjectView& view) const {
@@ -1028,6 +1043,15 @@ ResolvedProjectContext ProjectController::consumePendingGeneration() {
     ResolvedProjectContext ctx = pendingGeneration_;
     pendingGeneration_ = {};
     return ctx;
+}
+
+void ProjectController::refreshPatron(const Project& proj, const AssetType& at) {
+    if (at.workflow != GenerationWorkflow::CandidateRun) return;
+    const std::filesystem::path patronPath =
+        std::filesystem::path(config_.outputDir)
+        / sanitiseName(proj.name) / sanitiseName(at.name) / "patron.png";
+    std::filesystem::create_directories(patronPath.parent_path());
+    PatronGenerator::generate(resolveScratchSpecForProject(proj, at.spec), patronPath);
 }
 
 ResolvedProjectContext ProjectController::buildSelectedContext(const ProjectView& view) const {

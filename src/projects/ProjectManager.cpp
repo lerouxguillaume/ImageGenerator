@@ -72,10 +72,10 @@ static AssetFitMode strToFitMode(const std::string& s) {
     return AssetFitMode::ObjectFit;
 }
 static const char* workflowToStr(GenerationWorkflow w) {
-    return w == GenerationWorkflow::PhasedRefinement ? "phased_refinement" : "standard";
+    return w == GenerationWorkflow::CandidateRun ? "candidate_run" : "standard";
 }
 static GenerationWorkflow strToWorkflow(const std::string& s) {
-    return s == "phased_refinement" ? GenerationWorkflow::PhasedRefinement : GenerationWorkflow::Standard;
+    return s == "candidate_run" ? GenerationWorkflow::CandidateRun : GenerationWorkflow::Standard;
 }
 
 static nlohmann::json exportSpecToJson(const AssetExportSpec& s) {

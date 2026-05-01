@@ -22,7 +22,7 @@ Project
     ├── AssetConstraints — per-asset overrides and additions (see below)
     ├── AssetSpec     — formal production contract (see below)
     ├── AssetExportSpec — deterministic post-process/export contract (see below)
-    ├── workflow      — GenerationWorkflow (Standard or PhasedRefinement)
+    ├── workflow      — GenerationWorkflow (Standard or CandidateRun)
     └── reference state — optional reference-driven img2img settings (Standard only)
 ```
 
@@ -147,17 +147,39 @@ Defined on `AssetType`. Describes how raw generated output is normalized after g
 Each asset type has a `workflow` field that controls how generation is orchestrated:
 
 ```cpp
-enum class GenerationWorkflow { Standard, PhasedRefinement };
+enum class GenerationWorkflow { Standard, CandidateRun };
 ```
 
 | Value | Behaviour |
 |---|---|
-| `Standard` | Single-phase txt2img or reference-driven img2img. Output goes to `raw/` + `processed/`. |
-| `PhasedRefinement` | Candidate-run wall workflow: generate an exploration batch, score correctness, refine the top candidates, then rank proposed outputs. Reference-driven img2img is disabled. |
+| `Standard` | Single txt2img or reference-driven img2img run. Output goes to `raw/` + `processed/`. |
+| `CandidateRun` | Patron-seeded pipeline: generate a patron from the asset spec, run patron-anchored exploration, score, refine top candidates, rank proposals. Reference-driven img2img is disabled. |
 
-`workflow` is persisted in `projects.json` and carried in `ResolvedProjectContext`. Only `wall_left` uses `PhasedRefinement` by default. The enum name is historical; current wall generation uses the candidate-run pipeline in `docs/features/auto_generate.md`.
+`workflow` is persisted in `projects.json` and carried in `ResolvedProjectContext`. Only `wall_left` uses `CandidateRun` by default.
 
 Candidate runs write to `runs/<run_id>/explore/`, `runs/<run_id>/refine/`, and `runs/<run_id>/manifest.json`.
+
+See `docs/features/auto_generate.md` for the full pipeline description.
+
+---
+
+## Patron
+
+A **patron** is a shape-correct reference image derived from an asset type's `AssetSpec`. It is used as the img2img seed for the `CandidateRun` exploration phase, anchoring the SD model to the correct silhouette position and aspect ratio without prescribing texture.
+
+**Storage:** `output/<project>/<asset>/patron.png` — one file per asset type, shared across all runs.
+
+**Generation triggers:**
+- Asset type created from a template
+- User changes orientation in the asset detail panel
+- User changes any bound field (X, Y, W, H) in the asset detail panel
+- Lazily at run start if the file is missing
+
+**Source:** `src/projects/PatronGenerator.cpp`
+
+Invariants:
+- Never regenerate the patron inside the generation thread — it is produced on the UI thread before the thread is spawned
+- The patron path is checked for existence at run start; `launchCandidateRun` falls back to txt2img if the patron is absent and regeneration failed
 
 ---
 
@@ -173,9 +195,9 @@ Defined on `AssetType`. Only used when `workflow == Standard`.
 
 Generation only uses this path when `workflow == Standard`, in project asset mode, and only when the reference file exists.
 
-For `PhasedRefinement` assets, the `Ref Shape On/Off` toggle and `Structure strength` slider are hidden in the project UI.
+For `CandidateRun` assets, the `Ref Shape On/Off` toggle and `Structure strength` slider are hidden in the project UI.
 
-Standard workflow UI controls (hidden for PhasedRefinement):
+Standard workflow UI controls (hidden for CandidateRun):
 
 - `Ref Shape On/Off` toggle in the asset detail panel
 - `Structure strength` slider, clamped to `0.30 - 0.60`
@@ -189,7 +211,7 @@ Both workflows provide the result-panel `Processed` / `Raw` preview toggle.
 Built-in templates are defined in code in `src/projects/AssetTypeTemplate.cpp`.
 
 Current exposed template:
-- `Wall Left` (`wall_left`) — `LeftWall`, `Bounded`, tileable, fixed generation canvas `512×768`, `PhasedRefinement` workflow, reference disabled
+- `Wall Left` (`wall_left`) — `LeftWall`, `Bounded`, tileable, fixed generation canvas `512×768`, `CandidateRun` workflow, reference disabled
 
 Each template provides:
 - `id`, `label`, `defaultName`
@@ -223,7 +245,7 @@ Carries everything `ImageGeneratorController` needs for one generation session:
 | `assetTypeTokens` | `AssetType::promptTokens` |
 | `exportSpec` | `AssetType::exportSpec` — deterministic post-process/export contract |
 | `referenceEnabled`, `referenceImagePath`, `structureStrength` | reference-driven img2img state copied from the active asset type (Standard workflow only) |
-| `workflow` | `GenerationWorkflow` — `Standard` or `PhasedRefinement` |
+| `workflow` | `GenerationWorkflow` — `Standard` or `CandidateRun` |
 | `outputSubpath` | `sanitiseName(project) / sanitiseName(assetType)` |
 | `allAssetTypes` | all asset types in the project (used to populate gallery tabs) |
 | `spec` | `AssetType::spec` — production contract forwarded from the active asset type |

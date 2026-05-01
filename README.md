@@ -1,6 +1,6 @@
 # ImageGenerator
 
-Generate images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required. Includes a project workspace currently focused on phased isometric wall asset generation.
+Generate images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required. Includes a project workspace currently focused on candidate-run isometric wall asset generation.
 
 Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceleration via CUDA or DirectML.
 

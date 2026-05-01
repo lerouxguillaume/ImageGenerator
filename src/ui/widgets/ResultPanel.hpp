@@ -44,13 +44,6 @@ public:
     bool                    tabChanged     = false;
     std::string             generateButtonLabel = "Generate";
 
-    // ── Phase tabs (PhasedRefinement assets only) ─────────────────────────────
-    struct PhaseTab { int phase; std::string label; };
-    std::vector<PhaseTab> phaseTabs;
-    int                   activePhaseTabIndex = 0;
-    bool                  phaseTabChanged     = false;
-    bool                  showPhaseTabs       = false;
-
     // ── Generation state (shared with background thread via atomics) ──────────
     bool              generating          = false;
     std::atomic<bool> generationDone{false};
@@ -85,26 +78,7 @@ public:
     bool improveRequested  = false;
     bool deleteRequested   = false;
 
-    // Phased refinement actions
-    bool refineRequested    = false;  // controller checks refineUsesSelected for label
-    bool refineUsesSelected = false;  // true = refine from selected image; false = best scored
-    bool showRefineButton   = false;
-    bool refineEnabled      = true;
-
-    // Auto-refine toggle
-    bool autoRefineEnabled  = false;
-    bool autoRefineToggled  = false;  // set when user clicks toggle
-    bool showAutoRefineToggle = false;
-
-    // Phase replace confirm dialog
-    bool showPhaseReplaceConfirm = false;
-    int  phaseReplaceConfirmPhase = 0;
-    bool phaseReplaceConfirmed   = false;
-    bool phaseReplaceCancelled   = false;
-
-    // Phase indicator and best score display
-    int   phaseIndicatorCurrent = 0;
-    int   phaseIndicatorMax     = 0;
+    // Candidate-run score display
     float bestWallCandidateScore = -1.f; // < 0 = not computed
 
     // ── Interface ─────────────────────────────────────────────────────────────
@@ -123,10 +97,6 @@ private:
     sf::FloatRect btnCancelGenerate_;
     sf::FloatRect btnImprove_;
     sf::FloatRect btnDelete_;
-    sf::FloatRect btnRefine_;
-    sf::FloatRect btnAutoRefineToggle_;
-    sf::FloatRect btnPhaseReplaceYes_;
-    sf::FloatRect btnPhaseReplaceNo_;
     sf::FloatRect btnPrevImage_;
     sf::FloatRect btnNextImage_;
     sf::FloatRect btnPrevThumbs_;
@@ -134,7 +104,6 @@ private:
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
     std::vector<sf::FloatRect> tabRects_;
-    std::vector<sf::FloatRect> phaseTabRects_;
     sf::FloatRect processedToggleRect_;
     sf::FloatRect rawToggleRect_;
     int thumbnailScrollOffset_ = 0;
@@ -142,8 +111,6 @@ private:
 
     void renderTabBar(sf::RenderWindow& win, sf::Font& font,
                       float barX, float barY, float barW);
-    void renderPhaseTabBar(sf::RenderWindow& win, sf::Font& font,
-                           float barX, float barY, float barW);
     void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
                                float stripX, float stripY, float stripW);
     void ensureSelectedThumbnailVisible(int visibleCount);

@@ -394,7 +394,7 @@ void ProjectView::render(sf::RenderWindow& win) {
     }
 
     Helpers::drawRect(win, {detailX, assetWorkspaceY + 4.f, detailW, assetWorkspaceH - 8.f}, colors.panel, colors.border, metrics.borderWidth);
-    bool wallRefinementEligible = false;
+    bool candidateRunEligible = false;
     if (selectedAssetTypeId.empty()) {
         Helpers::drawTextC(win, font, "Select an asset type", colors.muted,
                            detailX + detailW / 2.f, assetWorkspaceY + assetWorkspaceH / 2.f - 10.f, 14, false);
@@ -420,8 +420,8 @@ void ProjectView::render(sf::RenderWindow& win) {
             }
         }
         if (!selectedAsset) return;
-        wallRefinementEligible =
-            selectedAsset->workflow == GenerationWorkflow::PhasedRefinement;
+        candidateRunEligible =
+            selectedAsset->workflow == GenerationWorkflow::CandidateRun;
 
         Helpers::drawText(win, font, selectedAsset->name, colors.goldLt, detailX + metrics.spaceMd, assetWorkspaceY + 14.f, type.subsectionTitle, true);
         Helpers::drawText(win, font, "Asset prompt", colors.muted, detailX + metrics.spaceMd, assetWorkspaceY + 36.f, type.compact, false);
@@ -561,7 +561,7 @@ void ProjectView::render(sf::RenderWindow& win) {
                                    fieldRect.left + fieldRect.width / 2.f, fieldRect.top + 8.f, type.body, false);
             }
 
-            if (selectedAsset->workflow != GenerationWorkflow::PhasedRefinement) {
+            if (selectedAsset->workflow != GenerationWorkflow::CandidateRun) {
                 const float wallToolsLabelY = fieldY0 + 2.f * (metrics.toolbarFieldHeight + metrics.spaceXs + 12.f) + 8.f;
                 Helpers::drawText(win, font, "Wall reference", colors.muted,
                                   chipX0, wallToolsLabelY, type.compact, false);
@@ -598,10 +598,8 @@ void ProjectView::render(sf::RenderWindow& win) {
 
     generatorView.resultPanel.showImproveButton = false;
     generatorView.resultPanel.showTabs = false;
-    generatorView.resultPanel.generateButtonLabel = wallRefinementEligible ? "Generate Candidates" : "Generate";
+    generatorView.resultPanel.generateButtonLabel = candidateRunEligible ? "Generate Candidates" : "Generate";
     generatorView.resultPanel.showOutputModeToggle = true;
-    generatorView.resultPanel.showRefineButton      = wallRefinementEligible;
-    generatorView.resultPanel.showAutoRefineToggle  = false;
 
     Helpers::drawRect(win, {resultX, railY, resultW, railH}, colors.panel2, colors.border, metrics.borderWidth);
     Helpers::drawText(win, font, "Results", colors.gold, resultX + metrics.spaceMd, railY + metrics.spaceMd, type.sectionTitle, true);

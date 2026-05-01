@@ -31,7 +31,7 @@ AssetSpec makeSpec(Orientation orient,
 
 AssetSpec makeWallLeftSpec() {
     AssetSpec s = makeSpec(Orientation::LeftWall, /*tileable=*/true,
-                           ShapePolicy::Bounded, 0.80f, 0.75f, 0.85f);
+                           ShapePolicy::Bounded, 0.52f, 0.35f, 0.68f);
     s.canvasWidth  = 512;
     s.canvasHeight = 768;
     s.expectedBounds = {82, 92, 348, 590};
@@ -56,12 +56,16 @@ const std::vector<AssetTypeTemplate> kTemplates = {
     {
         "wall_left", "Wall Left", "Wall Left",
         makePrompt(
-            {"isometric view", "3/4 angle", "left wall segment", "flat vertical wall panel",
-             "single object", "centered composition", "full object visible", "no perspective distortion",
-             "clean silhouette", "isolated wall plane", "modular game asset", "tile-safe edges"},
-            {"characters", "background scene", "room interior", "text", "watermark", "ornate", "complex",
-             "multiple objects", "top view", "cinematic lighting", "wide shot", "full building",
-             "floor scene", "floor plane", "ground plane", "ceiling"}
+            {"isometric dungeon wall tile", "tall stone wall slab", "flat vertical wall surface",
+             "left-facing wall panel, parallelogram shape", "stone masonry, rough stone blocks",
+             "flat architectural surface, no attached objects", "game tileset asset, RPG dungeon tile",
+             "seamless tiling edges", "isolated object, transparent background",
+             "centered composition", "clean hard edges, clear silhouette"},
+            {"characters", "props", "furniture", "background scene", "room interior", "landscape",
+             "text", "watermark", "multiple objects", "top view", "wide shot", "full building",
+             "floor scene", "floor plane", "ground plane", "ceiling", "doorway scene", "interior scene",
+             "mechanical parts", "electronic components", "machinery", "robot", "machine",
+             "gadget", "device", "pipes", "cables", "circuit board", "industrial equipment", "wires"}
         ),
         AssetConstraints{false, false, true, false},
         makeWallLeftSpec(),
@@ -69,7 +73,7 @@ const std::vector<AssetTypeTemplate> kTemplates = {
         false,
         {},
         0.34f,
-        GenerationWorkflow::PhasedRefinement,
+        GenerationWorkflow::CandidateRun,
         {"modular", "tileable", "vertical", "left_wall"}
     }
 };

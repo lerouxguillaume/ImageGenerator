@@ -39,6 +39,7 @@ public:
     // Resets the gallery to the project/asset-type subfolder.
     void setProjectContext(const ResolvedProjectContext& ctx);
     void clearProjectContext();
+    std::string consumePendingAssetTypeSwitch();
 
 private:
     // ── Settings helpers ──────────────────────────────────────────────────────
@@ -54,7 +55,6 @@ private:
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
     void launchCandidateRun(ImageGeneratorView& view);
-    void launchPhaseRefinement(ImageGeneratorView& view, bool useSelected);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});
     void selectGalleryImage(ImageGeneratorView& view, int index);
@@ -90,6 +90,7 @@ private:
 
     // Active project context (empty = no project active)
     ResolvedProjectContext projectContext_;
+    std::string            pendingAssetTypeSwitch_;
 
     // Async thumbnail loading (load+resize on background thread, create texture on main thread)
     struct PendingThumb {
@@ -100,18 +101,13 @@ private:
     void flushPendingThumbs(ImageGeneratorView& view);
     std::string pendingEditNavigationPath_;
 
-    struct WallPhaseSession {
-        int         currentPhase       = 0;   // last completed phase (0 = none yet)
-        int         maxPhases          = 3;
-        bool        autoRefine         = false;
-        float       scoreThreshold     = 150.0f;
-        float       refinementStrength = 0.27f;
-        // Pending next-phase info (set before confirm dialog or directly before generation)
-        std::string sourcePath;               // raw 512×768 image to use as init
-        int         targetPhase        = 0;   // phase we are about to write
-        bool        awaitingConfirm    = false;
-        // Batch tracking for auto-refine scoring
-        std::vector<std::string> lastBatchRawPaths;
+    struct CandidateRunSettings {
+        int   minExploreImages    = 8;
+        int   candidateCount      = 3;
+        int   refineVariants      = 2;
+        float scoreThreshold      = 150.0f;
+        float explorationStrength = 0.70f;
+        float refinementStrength  = 0.27f;
     };
-    WallPhaseSession phaseSession_;
+    CandidateRunSettings candidateRun_;
 };

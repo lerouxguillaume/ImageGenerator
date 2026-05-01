@@ -33,7 +33,7 @@ enum class ShapePolicy { Freeform, Bounded, SilhouetteLocked };
 enum class AssetFitMode { ObjectFit, TileExact, NoResize };
 
 // Generation strategy for an asset type.
-enum class GenerationWorkflow { Standard, PhasedRefinement };
+enum class GenerationWorkflow { Standard, CandidateRun };
 
 struct Anchor        { int x = 0; int y = 0; };
 struct OccupiedBounds { int x = 0; int y = 0; int w = 0; int h = 0; };

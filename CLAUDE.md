@@ -85,9 +85,11 @@ Key facts:
 - `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
 - Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
 - Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content
-- Current `wall_left` generation uses the candidate-run workflow under the existing `GenerationWorkflow::PhasedRefinement` enum
+- Current `wall_left` generation uses `GenerationWorkflow::CandidateRun`
 - Candidate runs write to `runs/<run_id>/explore/` and `runs/<run_id>/refine/`, plus `manifest.json`
 - Wall scoring loads the raw image after alpha cutout — `AssetSpec` coordinates are in 512×768 canvas space
+- Each `CandidateRun` asset type has a patron at `output/<project>/<asset>/patron.png` — generated from `AssetSpec`, used as img2img seed for exploration; regenerated on orientation or bounds change
+- Never regenerate the patron inside the generation thread — `launchCandidateRun` reads it; `ProjectController::refreshPatron` writes it
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
 → docs/85_prompt/prompt_dsl.md

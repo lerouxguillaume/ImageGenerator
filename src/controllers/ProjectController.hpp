@@ -31,6 +31,7 @@ private:
     void syncGeneratorSession(ProjectView& view);
     void saveTheme(ProjectView& view, bool clearDirty = true);
     void saveAssetType(ProjectView& view, bool clearDirty = true);
+    void refreshPatron(const Project& proj, const AssetType& at);
     ResolvedProjectContext buildSelectedContext(const ProjectView& view) const;
 
     AppConfig&             config_;
