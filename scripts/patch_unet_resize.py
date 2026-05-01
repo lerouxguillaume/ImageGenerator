@@ -2,8 +2,8 @@
 Retrofit tool: patch Resize fp16 inputs in an already-exported model directory.
 
 Use this when you have models exported before fix_resize_fp16 was added to the
-export pipeline.  New exports from sdxl_export_onnx_models.py already apply
-the fix automatically via SDXLExportPolicy.should_fix_resize_fp16().
+export pipeline.  New SD 1.5 and SDXL exports already apply the fix to fp16
+UNet/VAE components automatically.
 
 Only the .onnx proto is rewritten.  The .onnx.data weight sidecar is never
 touched, so this is fast regardless of model size.  Safe to run multiple times.

@@ -9,9 +9,9 @@ Converts Stable Diffusion models to ONNX for use with ONNX Runtime.
 | Script | Purpose |
 |---|---|
 | `scripts/import_model.py` | **Unified in-app entry point** — auto-detects arch and delegates to the scripts below; emits `PROGRESS:` protocol for the C++ import pipeline |
-| `scripts/export_onnx_models.py` | Full SD 1.5 export (text encoder + UNet + VAE decoder) |
-| `scripts/sdxl_export_onnx_models.py` | Full SDXL export (2× text encoders + UNet + VAE decoder) |
-| `scripts/export_vae_encoder.py` | Retrofit: add `vae_encoder.onnx` to an existing model directory |
+| `scripts/export_onnx_models.py` | Full SD 1.5 export (text encoder + UNet + VAE decoder + VAE encoder) |
+| `scripts/sdxl_export_onnx_models.py` | Full SDXL export (2× text encoders + UNet + VAE decoder + VAE encoder) |
+| `scripts/export_vae_encoder.py` | Retrofit: add or replace `vae_encoder.onnx` in an older existing model directory |
 | `scripts/patch_unet_resize.py` | Retrofit: fix fp16 Resize nodes in an already-exported directory |
 
 `import_model.py` is the only script the application calls directly. The per-architecture scripts are invoked through it and should not be called directly when using the in-app import flow.
@@ -25,16 +25,13 @@ Each full export produces per component:
 - `.onnx.data` — weight tensor sidecar (single consolidated file)
 - `_weights.safetensors` — LoRA base weights (text encoder + UNet only)
 
-The VAE encoder export (`export_vae_encoder.py`) adds:
-- `vae_encoder.onnx`
-- `vae_encoder.onnx.data`
-- updates `model.json` with the checkpoint VAE scaling factor used by img2img
+Full exports include `vae_encoder.onnx` and `vae_encoder.onnx.data` by default so img2img is available immediately. `export_vae_encoder.py` remains only as a retrofit tool for older model directories.
 
 ---
 
 # Adding the VAE encoder to an existing model
 
-The full export scripts do not export the VAE encoder.  Use the retrofit script:
+Use the retrofit script only for model directories exported before the default pipeline included `vae_encoder.onnx`:
 
 ```bash
 # SD 1.5
@@ -53,6 +50,7 @@ The script auto-detects SD1.5 vs SDXL from `model.json`.  All other files in the
 
 # Rules
 
-- Do NOT remove `dynamic_axes` from the SD 1.5 VAE export — required for non-512 resolutions; VAE always runs on CPU so DML reshape constraints don't apply
 - VAE encoder uses the same static-shape policy as the VAE decoder (no dynamic axes)
-- SDXL VAE encoder requires the same `fix_fp32_constants` and `fix_resize_fp16` passes as the decoder
+- SD 1.5 VAE decoder/encoder use static 512×512 shapes; SDXL VAE decoder/encoder use static 1024×1024 shapes
+- fp16 Resize patching is applied by default to fp16 UNet/VAE components; `patch_unet_resize.py` is only for older exports
+- SDXL VAE decoder/encoder require the same `fix_fp32_constants` and `fix_resize_fp16` passes

@@ -58,7 +58,7 @@ Controlled by two fields in `GenerationParams`:
 
 **Latent init**: the input image is loaded and encoded **once before the per-image loop** via `sd::encodeImage()` with `sample=false` (posterior mean — deterministic). The same `initLatent` is reused for every image in the batch; per-image variety comes from the noise added at `sigmas[startStep]`, not from re-encoding. Noise is added at `sigmas[startStep]` rather than `sigmas[0]`.
 
-**Requires**: `vae_encoder.onnx` in the model directory. If absent, `runPipeline()` logs a warning and falls back to txt2img. Use `scripts/export_vae_encoder.py` to add it to an existing model.
+**Requires**: `vae_encoder.onnx` in the model directory. New full exports include it by default. If absent, `runPipeline()` logs a warning and falls back to txt2img; use `scripts/export_vae_encoder.py` only for older model directories.
 
 ---
 

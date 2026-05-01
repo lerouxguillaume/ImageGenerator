@@ -28,13 +28,12 @@ import time
 import torch
 
 from export_common import (
-    ExportComponentSpec,
-    VAEEncoderWrapper,
     assert_no_meta_tensors,
     check_dependencies,
     check_model_file,
     export_component_to_dir,
     load_single_file_pipeline,
+    make_vae_encoder_spec,
     patch_clip_text_model_compat,
     patch_fp32_upcasts_for_tracing,
 )
@@ -63,8 +62,7 @@ def _update_model_json(model_dir: str, *, model_type: str, vae_scaling_factor: f
 
 def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) -> None:
     check_dependencies(
-        required=["torch", "diffusers", "transformers", "onnx"],
-        optional=["onnxsim"],
+        required=["torch", "diffusers", "transformers", "onnx", "onnxscript"],
     )
     check_model_file(model_file)
 
@@ -116,24 +114,16 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
     img_h = latent_h * 8
     img_w = latent_w * 8
 
-    vae_enc = VAEEncoderWrapper(vae).eval()
     dummy_image = torch.randn(1, 3, img_h, img_w, dtype=torch.float16)
-
-    spec = ExportComponentSpec(
+    spec = make_vae_encoder_spec(
         step_name="VAE encoder",
-        component_name="vae_encoder",
-        filename="vae_encoder.onnx",
-        model=vae_enc,
-        dummy_inputs=(dummy_image,),
-        input_names=["image"],
-        output_names=["moments"],
-        dynamic_axes=None,       # static shape — same policy as VAE decoder
         exporter="dynamo",
+        vae=vae,
+        dummy_image=dummy_image,
         fix_fp32_constants=fix_fp32,
         fix_resize_fp16=fix_resize,
-        export_lora_weights=False,
         skip_if_complete=False,
-        release_after=(vae_enc, vae),
+        release_after=(vae,),
     )
     export_component_to_dir(model_dir, spec)
     _update_model_json(model_dir, model_type=model_type, vae_scaling_factor=vae_scaling_factor)

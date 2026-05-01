@@ -186,13 +186,14 @@ After export completes, `import_model.py` extends `model.json` with:
   "vae_scaling_factor": 0.13025,
   "capabilities": {
     "dynamic_shapes": true,
-    "vae_encoder_available": false,
+    "vae_encoder_available": true,
     "lora_compatible": true,
     "components": {
       "text_encoder":   { "dtype": "fp32" },
       "text_encoder_2": { "dtype": "fp32" },
       "unet":           { "dtype": "fp16" },
-      "vae_decoder":    { "dtype": "fp16" }
+      "vae_decoder":    { "dtype": "fp16" },
+      "vae_encoder":    { "dtype": "fp16" }
     }
   }
 }
@@ -211,6 +212,7 @@ models/
       text_encoder_2.onnx[.data]   (SDXL only)
       unet.onnx[.data]
       vae_decoder.onnx[.data]
+      vae_encoder.onnx[.data]
       model.json                   (includes capabilities block)
 ```
 
@@ -232,6 +234,7 @@ torch>=2.0.0
 diffusers>=0.27.0,<0.35.0
 transformers>=4.30.0,<4.47.0
 onnx>=1.14.0
+onnxscript>=0.1.0
 onnxruntime>=1.16.0
 safetensors>=0.3.0
 accelerate>=0.21.0

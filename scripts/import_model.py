@@ -45,14 +45,26 @@ def detect_arch(model_file: str) -> str:
 
 # ── Output validation ─────────────────────────────────────────────────────────
 
-SD15_REQUIRED = ["text_encoder.onnx", "unet.onnx", "vae_decoder.onnx", "model.json"]
-SDXL_REQUIRED = ["text_encoder.onnx", "text_encoder_2.onnx", "unet.onnx", "vae_decoder.onnx", "model.json"]
+SD15_REQUIRED = ["text_encoder.onnx", "unet.onnx", "vae_decoder.onnx", "vae_encoder.onnx", "model.json"]
+SDXL_REQUIRED = ["text_encoder.onnx", "text_encoder_2.onnx", "unet.onnx", "vae_decoder.onnx", "vae_encoder.onnx", "model.json"]
 
 def validate_output(output_dir: str, arch: str) -> None:
     required = SDXL_REQUIRED if arch == "sdxl" else SD15_REQUIRED
     missing = [f for f in required if not os.path.exists(os.path.join(output_dir, f))]
+    missing += [
+        f"{f}.data"
+        for f in required
+        if f.endswith(".onnx") and not os.path.exists(os.path.join(output_dir, f"{f}.data"))
+    ]
+    lora_weight_files = ["text_encoder_weights.safetensors", "unet_weights.safetensors"]
+    if arch == "sdxl":
+        lora_weight_files.append("text_encoder_2_weights.safetensors")
+    missing += [
+        f for f in lora_weight_files
+        if not os.path.exists(os.path.join(output_dir, f))
+    ]
     if missing:
-        raise RuntimeError(f"Export incomplete — missing files: {', '.join(missing)}")
+        raise RuntimeError(f"Export incomplete - missing files: {', '.join(missing)}")
 
 
 # ── Capabilities block ────────────────────────────────────────────────────────
@@ -69,9 +81,10 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     components: dict = {}
     if arch == "sd15":
         components = {
-            "text_encoder": {"dtype": "fp32"},
+            "text_encoder": {"dtype": "fp16"},
             "unet":         {"dtype": "fp16"},
             "vae_decoder":  {"dtype": "fp16"},
+            "vae_encoder":  {"dtype": "fp16"},
         }
     else:
         components = {
@@ -79,11 +92,12 @@ def write_capabilities(output_dir: str, arch: str) -> None:
             "text_encoder_2": {"dtype": "fp32"},
             "unet":           {"dtype": "fp16"},
             "vae_decoder":    {"dtype": "fp16"},
+            "vae_encoder":    {"dtype": "fp16"},
         }
 
     data["capabilities"] = {
         "dynamic_shapes":       True,
-        "vae_encoder_available": os.path.exists(os.path.join(output_dir, "vae_encoder.onnx")),
+        "vae_encoder_available": True,
         "lora_compatible":      True,
         "components":           components,
     }

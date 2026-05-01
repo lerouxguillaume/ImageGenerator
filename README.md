@@ -45,6 +45,7 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 │       ├── text_encoder.onnx
 │       ├── unet.onnx
 │       ├── vae_decoder.onnx
+│       ├── vae_encoder.onnx
 │       ├── text_encoder_2.onnx  # SDXL only
 │       └── model.json           # {"type": "sdxl"} or absent → SD 1.5
 ├── assets/
@@ -122,12 +123,12 @@ Models must be exported to ONNX before use. Export scripts live in `scripts/`.
 ### SD 1.5
 
 ```bash
-pip install torch diffusers transformers accelerate onnx onnxsim
+pip install torch diffusers transformers accelerate onnx onnxscript
 
 # Place your .safetensors file next to the script, then:
 cd scripts
 python export_onnx_models.py
-# Writes models/<model_name>/{text_encoder,unet,vae_decoder}.onnx
+# Writes models/<model_name>/{text_encoder,unet,vae_decoder,vae_encoder}.onnx
 ```
 
 The SD 1.5 script exports the UNet and VAE as **float16** for best GPU performance.
@@ -137,7 +138,7 @@ The SD 1.5 script exports the UNet and VAE as **float16** for best GPU performan
 ```bash
 cd scripts
 python sdxl_export_onnx_models.py
-# Writes models/<model_name>/{text_encoder,text_encoder_2,unet,vae_decoder}.onnx + model.json
+# Writes models/<model_name>/{text_encoder,text_encoder_2,unet,vae_decoder,vae_encoder}.onnx + model.json
 ```
 
 The SDXL script exports UNet and VAE as **float16**. Text encoders stay float32 for accuracy.
@@ -188,6 +189,7 @@ Prompt text
                         └─ denoised latent
                              └─ vae_decoder.onnx
                                   └─ PNG image
+                        └─ vae_encoder.onnx for img2img input images
 ```
 
 **Scheduler:** DPM++ 2M Karras with configurable step count (default 20).  

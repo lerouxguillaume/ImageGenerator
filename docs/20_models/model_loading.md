@@ -32,13 +32,14 @@ Models imported via the in-app pipeline also carry a `capabilities` block (writt
   "vae_scaling_factor": 0.13025,
   "capabilities": {
     "dynamic_shapes": true,
-    "vae_encoder_available": false,
+    "vae_encoder_available": true,
     "lora_compatible": true,
     "components": {
       "text_encoder":   { "dtype": "fp32" },
       "text_encoder_2": { "dtype": "fp32" },
       "unet":           { "dtype": "fp16" },
-      "vae_decoder":    { "dtype": "fp16" }
+      "vae_decoder":    { "dtype": "fp16" },
+      "vae_encoder":    { "dtype": "fp16" }
     }
   }
 }
@@ -51,7 +52,7 @@ The `type` field drives:
 - Number of CLIP text encoders (1 for SD1.5, 2 for SDXL)
 - UNet input shape (latent channels and conditioning dimensions)
 
-The `vae_scaling_factor` field sets the latent scaling constant used by `encodeImage()` and stored in `ctx.vaeScalingFactor`. Defaults: `0.18215` for SD1.5, `0.13025` for SDXL. Written automatically by `export_vae_encoder.py`; only needs to be set manually for non-standard VAEs.
+The `vae_scaling_factor` field sets the latent scaling constant used by `encodeImage()` and stored in `ctx.vaeScalingFactor`. Defaults: `0.18215` for SD1.5, `0.13025` for SDXL. Written automatically by the export pipeline; only needs to be set manually for non-standard VAEs.
 
 ---
 

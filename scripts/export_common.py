@@ -262,6 +262,21 @@ class ExportComponentSpec:
     release_after: tuple[Any, ...] = ()
 
 
+@dataclass(frozen=True)
+class ExportedComponent:
+    component_name: str
+    filename: str
+    export_lora_weights: bool = False
+
+
+def exported_component(spec: ExportComponentSpec) -> ExportedComponent:
+    return ExportedComponent(
+        component_name=spec.component_name,
+        filename=spec.filename,
+        export_lora_weights=spec.export_lora_weights,
+    )
+
+
 class ExportPolicy:
     """Shared export policy surface with model-specific overrides."""
 
@@ -325,6 +340,9 @@ class SD15ExportPolicy(ExportPolicy):
         # inline-protobuf consolidation round-trip that legacy requires.
         return "dynamo"
 
+    def should_fix_resize_fp16(self, component_name: str) -> bool:
+        return component_name in {"unet", "vae_decoder", "vae_encoder"}
+
 
 class SDXLExportPolicy(ExportPolicy):
     model_type = "sdxl"
@@ -346,7 +364,7 @@ class SDXLExportPolicy(ExportPolicy):
         return "dynamo"
 
     def should_fix_fp32_constants(self, component_name: str) -> bool:
-        return component_name in {"unet", "vae_decoder"}
+        return component_name in {"unet", "vae_decoder", "vae_encoder"}
 
     def should_fix_attention_sqrt_cast(self, component_name: str) -> bool:
         return component_name == "unet"
@@ -823,7 +841,7 @@ def simplify_with_onnxsim(path: str) -> None:
 
 
 def write_model_json(output_dir: str, model_type: str,
-                     specs: list[ExportComponentSpec] | None = None,
+                     specs: list[ExportedComponent] | None = None,
                      vae_scaling_factor: float | None = None) -> None:
     """Write model.json consumed by the C++ runtime."""
     data: dict = {"type": model_type}
@@ -1126,7 +1144,7 @@ def validate_with_ort(
           f"({len(outputs)} output(s))")
 
 
-def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
+def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> ExportedComponent:
     with export_step(spec.step_name):
         path = os.path.join(output_dir, spec.filename)
 
@@ -1135,7 +1153,7 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
             print("  Already complete - skipping")
             if spec.release_after:
                 free(*spec.release_after)
-            return
+            return exported_component(spec)
 
         cleanup_stale_component_files(path)
 
@@ -1169,8 +1187,8 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
             fix_resize_fp16_input(path)
 
         # 4. Optional simplify (LAST)
-        # if spec.simplify:
-        #     simplify_with_onnxsim(path)
+        if spec.simplify:
+            simplify_with_onnxsim(path)
 
         cleanup_stale_component_files(path)
 
@@ -1194,6 +1212,8 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
 
         if spec.release_after:
             free(*spec.release_after)
+
+        return exported_component(spec)
 
 
 def free(*objs) -> None:
@@ -1230,3 +1250,33 @@ class VAEEncoderWrapper(torch.nn.Module):
         # image: [1, 3, H, W] normalised to [-1, 1]
         h = self.vae.encoder(image)
         return self.vae.quant_conv(h)
+
+
+def make_vae_encoder_spec(
+    *,
+    step_name: str,
+    vae,
+    dummy_image: torch.Tensor,
+    exporter: str,
+    fix_fp32_constants: bool = False,
+    fix_resize_fp16: bool = False,
+    skip_if_complete: bool = False,
+    validate: bool = False,
+    release_after: tuple[Any, ...] = (),
+) -> ExportComponentSpec:
+    return ExportComponentSpec(
+        step_name=step_name,
+        component_name="vae_encoder",
+        filename="vae_encoder.onnx",
+        model=VAEEncoderWrapper(vae).eval(),
+        dummy_inputs=(dummy_image,),
+        input_names=["image"],
+        output_names=["moments"],
+        dynamic_axes=None,
+        exporter=exporter,
+        fix_fp32_constants=fix_fp32_constants,
+        fix_resize_fp16=fix_resize_fp16,
+        skip_if_complete=skip_if_complete,
+        validate=validate,
+        release_after=release_after,
+    )
