@@ -4,6 +4,7 @@ Image generator is structured around a strict separation of:
 
 - UI layer (SFML)
 - Control layer (controllers)
+- Asset layer (artifact paths, post-processing, scoring)
 - Prompt DSL layer (parse / compile / merge)
 - Inference layer (ONNX runtime pipeline)
 - Preset layer (file-backed configuration persistence)
@@ -37,6 +38,12 @@ Project workflow:
 - `ProjectController` owns project CRUD, theme/asset authoring, and the embedded project workspace layout
 - `ProjectController` embeds and reuses `ImageGeneratorController` for generation orchestration, settings modal handling, and gallery behavior
 - `ResolvedProjectContext` remains the carrier between project-authored data and generation execution
+
+Asset workflow:
+- `AssetArtifactStore` owns generated asset path conventions, candidate-run layouts, metadata sidecar paths, transparent derivative paths, and gallery discovery
+- `GeneratedAssetProcessor` owns shared raw-output normalization: alpha cutout, standalone transparent derivatives when applicable, post-processing, processed PNG output, and metadata sidecars
+- `CandidateScorer` owns deterministic geometric scoring for candidate-run proposals and gallery ranking
+- `PatronGenerator` creates orientation-specific shape references for candidate-run exploration
 
 UI theme system:
 - `Theme` centralizes `UiColors`, `UiMetrics`, and `UiTypography`

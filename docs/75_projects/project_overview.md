@@ -23,6 +23,7 @@ Project
     ├── AssetSpec     — formal production contract (see below)
     ├── AssetExportSpec — deterministic post-process/export contract (see below)
     ├── workflow      — GenerationWorkflow (Standard or CandidateRun)
+    ├── candidateRun  — per-asset CandidateRunSettings
     └── reference state — optional reference-driven img2img settings (Standard only)
 ```
 
@@ -31,6 +32,9 @@ Key files:
 - `src/projects/ProjectManager.cpp` — JSON persistence (`projects.json`)
 - `src/projects/AssetTypeTemplate.*` — built-in asset template registry
 - `src/controllers/ProjectController.cpp` — resolution and UI handling
+- `src/assets/AssetArtifactStore.*` — output paths, run layouts, metadata paths, gallery discovery
+- `src/assets/GeneratedAssetProcessor.*` — raw image normalization, alpha cutout, processed output, metadata sidecars
+- `src/assets/CandidateScorer.*` — deterministic candidate correctness scoring
 
 ---
 
@@ -134,11 +138,21 @@ Defined on `AssetType`. Describes how raw generated output is normalized after g
 | `paddingPx` | `int` | `8` | Minimum padding target for `ObjectFit` |
 | `fitMode` | `AssetFitMode` | `ObjectFit` | Post-process mode |
 | `requireAlpha` | `bool` | `true` | Export should preserve transparency |
+| `alphaCutout` | `AlphaCutoutSpec` | see below | Background-removal controls used before scoring and export |
 
-`AssetExportSpec` is persisted in `projects.json` under each asset type and is used by `AssetPostProcessor` after generation.
+`AssetExportSpec` is persisted in `projects.json` under each asset type and is used by `GeneratedAssetProcessor` after generation.
 
 ### AssetFitMode values
 `ObjectFit`, `TileExact`, `NoResize`
+
+### AlphaCutoutSpec
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `tolerance` | `float` | `30.0` | Background color tolerance for alpha cutout |
+| `featherRadius` | `int` | `3` | Edge feathering radius |
+| `defringe` | `bool` | `true` | Whether to remove background color bleed from cutout edges |
+
+`GeneratedAssetProcessor` and `CandidateScorer` both convert this spec to `AlphaCutout::Options` at their processing boundary.
 
 ---
 
@@ -163,6 +177,23 @@ See `docs/features/auto_generate.md` for the full pipeline description.
 
 ---
 
+## CandidateRunSettings
+
+Defined on `AssetType`. Only used when `workflow == CandidateRun`.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `minExploreImages` | `8` | Number of patron-seeded exploration images |
+| `candidateCount` | `3` | Top exploration candidates selected for refinement |
+| `refineVariants` | `2` | Refinement images generated per selected candidate |
+| `scoreThreshold` | `150.0` | Score above which a proposal is labelled `rejected` |
+| `explorationStrength` | `0.70` | Img2img denoise strength from the patron |
+| `refinementStrength` | `0.27` | Img2img denoise strength from selected candidates |
+
+These settings are persisted in `projects.json`, copied into `ResolvedProjectContext`, and read by `ImageGeneratorController::launchCandidateRun()`.
+
+---
+
 ## Patron
 
 A **patron** is a shape-correct reference image derived from an asset type's `AssetSpec`. It is used as the img2img seed for the `CandidateRun` exploration phase, anchoring the SD model to the correct silhouette position and aspect ratio without prescribing texture.
@@ -176,6 +207,16 @@ A **patron** is a shape-correct reference image derived from an asset type's `As
 - Lazily at run start if the file is missing
 
 **Source:** `src/projects/PatronGenerator.cpp`
+
+Geometry by orientation:
+
+| Orientation | Patron shape |
+|---|---|
+| `LeftWall` | Isometric parallelogram rising toward the right |
+| `RightWall` | Mirrored isometric parallelogram falling toward the right |
+| `FloorTile` | Isometric diamond inside `expectedBounds` |
+| `Character` | Tall centered ellipse inside `expectedBounds` |
+| `Unset`, `Prop` | Rectangular fallback |
 
 Invariants:
 - Never regenerate the patron inside the generation thread — it is produced on the UI thread before the thread is spawned
@@ -220,6 +261,7 @@ Each template provides:
 - starter `AssetSpec` (orientation, shape policy, fill range, tileable flag)
 - starter `AssetExportSpec`
 - optional reference defaults
+- optional `CandidateRunSettings`
 - tags for future UI use
 
 Templates are **not** persisted directly. Only the created `AssetType` result is written to `projects.json`.
@@ -246,6 +288,7 @@ Carries everything `ImageGeneratorController` needs for one generation session:
 | `exportSpec` | `AssetType::exportSpec` — deterministic post-process/export contract |
 | `referenceEnabled`, `referenceImagePath`, `structureStrength` | reference-driven img2img state copied from the active asset type (Standard workflow only) |
 | `workflow` | `GenerationWorkflow` — `Standard` or `CandidateRun` |
+| `candidateRun` | `AssetType::candidateRun` — per-asset candidate-run counts, strengths, and threshold |
 | `outputSubpath` | `sanitiseName(project) / sanitiseName(assetType)` |
 | `allAssetTypes` | all asset types in the project (used to populate gallery tabs) |
 | `spec` | `AssetType::spec` — production contract forwarded from the active asset type |
@@ -290,6 +333,19 @@ If the user switches the result panel to `Raw`, validation chips are hidden and 
 
 ## Post-processing output layout
 
+`AssetArtifactStore` owns all path construction for standard outputs, candidate-run layouts, metadata sidecars, transparent derivatives, patron files, and gallery discovery. Controllers should use it instead of rebuilding `raw/`, `processed/`, `.reference_cache/`, `runs/`, or `patron.png` paths locally.
+
+`GeneratedAssetProcessor` owns the common generated-image processing flow:
+
+```text
+raw PNG
+    -> optional AlphaCutout using AssetExportSpec::alphaCutout
+    -> standalone transparent derivative when not in project asset mode
+    -> AssetPostProcessor normalization
+    -> processed PNG
+    -> JSON metadata sidecar
+```
+
 ### Standard workflow
 
 ```text
@@ -321,6 +377,8 @@ output/<project>/<asset>/
 The gallery scans the latest run's `refine/processed/` directory first, falling back to `explore/processed/` if no refined proposals were produced.
 
 The `processed/` variant is the normalized export candidate produced by `AssetPostProcessor`. Review, overlays, and validation are always aligned with the processed output.
+
+Candidate-run gallery ranking calls `CandidateScorer::scoreCandidate()` on processed entries. Lower scores are better.
 
 ---
 

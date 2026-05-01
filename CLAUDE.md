@@ -87,8 +87,13 @@ Key facts:
 - Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content
 - Current `wall_left` generation uses `GenerationWorkflow::CandidateRun`
 - Candidate runs write to `runs/<run_id>/explore/` and `runs/<run_id>/refine/`, plus `manifest.json`
-- Wall scoring loads the raw image after alpha cutout — `AssetSpec` coordinates are in 512×768 canvas space
+- Candidate scoring lives in `src/assets/CandidateScorer.*`; it applies `AssetExportSpec::alphaCutout` before geometric scoring
+- Generated asset processing lives in `src/assets/GeneratedAssetProcessor.*`; standard and candidate-run flows share this for alpha cutout, processed output, standalone transparent derivatives when applicable, and metadata sidecars
+- Asset output paths and gallery discovery live in `src/assets/AssetArtifactStore.*`; do not rebuild `raw/`, `processed/`, `runs/`, `.reference_cache/`, or `patron.png` paths in controllers
+- Candidate-run counts, strengths, and score threshold are persisted on `AssetType::candidateRun` and copied through `ResolvedProjectContext`
+- Scoring coordinates are in the asset generation canvas space, e.g. the `wall_left` template uses 512×768
 - Each `CandidateRun` asset type has a patron at `output/<project>/<asset>/patron.png` — generated from `AssetSpec`, used as img2img seed for exploration; regenerated on orientation or bounds change
+- `PatronGenerator` draws orientation-specific patrons for `LeftWall`, `RightWall`, `FloorTile`, and `Character`; `Unset` and `Prop` use the rectangle fallback
 - Never regenerate the patron inside the generation thread — `launchCandidateRun` reads it; `ProjectController::refreshPatron` writes it
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)

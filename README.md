@@ -27,6 +27,7 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 │   ├── portraits/          # SD pipeline: tokenizer, prompt builder, ONNX inference
 │   ├── controllers/        # Input handling (MVC controller layer)
 │   ├── views/              # SFML rendering (MVC view layer)
+│   ├── assets/             # Asset output paths, processing, metadata, scoring
 │   ├── projects/           # Project + AssetType data model and ProjectManager
 │   ├── presets/            # Preset data model and PresetManager
 │   ├── prompt/             # Prompt DSL (parse / compile / merge / JSON)
@@ -160,7 +161,7 @@ Generated images are saved to `assets/generated/`.
 
 The main menu offers three entry points:
 
-**Projects** — create named projects for wall asset generation. The supported built-in asset template is currently `Wall Left`. `Generate Candidates` runs an automatic candidate pipeline: explore a batch, score correctness, refine the top candidates, then show the best proposals first. Outputs are saved to `assets/generated/<project>/<asset_type>/`.
+**Projects** — create named projects for asset-pack generation. The supported built-in asset template is currently `Wall Left`. `Generate Candidates` runs an automatic candidate pipeline: create a shape patron, explore a batch, score correctness, refine the top candidates, then show the best proposals first. Outputs are saved to `assets/generated/<project>/<asset_type>/`.
 
 **Generate Images** — standalone prompt-first txt2img workflow with preset support and the shared dark tool UI.
 

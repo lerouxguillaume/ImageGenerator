@@ -14,11 +14,11 @@ The user provides:
 
 The system owns the production constraints:
 
-- left wall orientation
+- asset orientation and shape policy
 - single isolated object
 - transparent background
-- no floor plane
-- no room scene
+- no floor plane unless allowed by the asset type
+- no room scene unless allowed by the asset type
 - expected bounds, anchor, and fill ratio
 
 ---
@@ -52,7 +52,10 @@ Before any generation, the system produces a **patron** — a shape-correct refe
 | Orientation | Shape |
 |---|---|
 | `LeftWall` | Isometric parallelogram: skew = bounds.w / 4, top-right corner highest |
-| Other | Bounding box rectangle (fallback until orientation-specific shapes are added — see backlog M4) |
+| `RightWall` | Mirrored isometric parallelogram: skew = bounds.w / 4, top-left corner highest |
+| `FloorTile` | Isometric diamond inside `expectedBounds` |
+| `Character` | Tall centered ellipse inside `expectedBounds` |
+| `Unset`, `Prop` | Bounding box rectangle fallback |
 
 Fill: neutral mid-gray RGB(128, 128, 128) on a fully transparent canvas. The patron is intentionally flat and textureless — it anchors the SD model to the correct position and aspect ratio without prescribing surface detail.
 
@@ -62,10 +65,10 @@ Fill: neutral mid-gray RGB(128, 128, 128) on a fully transparent canvas. The pat
 
 ## Exploration Phase
 
-Generate a fixed batch (default: 8 images) seeded from the patron via img2img.
+Generate a fixed batch seeded from the patron via img2img.
 
 - `initImagePath` = `output/<project>/<asset>/patron.png`
-- `strength` = 0.70 (patron provides shape anchor; model has 70% freedom for texture/material)
+- `strength` = `CandidateRunSettings::explorationStrength` (default 0.70)
 - Falls back to txt2img if the patron file is missing or write failed
 
 Score each raw image for correctness:
@@ -79,7 +82,7 @@ Score each raw image for correctness:
 
 All generated images remain available in `explore/raw/` and `explore/processed/` for debugging.
 
-Top 3 candidates enter the refinement pool.
+The top `CandidateRunSettings::candidateCount` candidates enter the refinement pool.
 
 ---
 
@@ -113,10 +116,10 @@ For each top exploration candidate:
 
 - run img2img from the candidate's raw output
 - strength: `refinementStrength` (default 0.27)
-- generate 2 variants per candidate
+- generate `CandidateRunSettings::refineVariants` variants per candidate
 
 ```text
-3 candidates × 2 refinements = 6 refined images
+candidateCount × refineVariants = refined image count
 ```
 
 Re-score refined outputs for correctness.
@@ -161,6 +164,8 @@ output/<project>/<asset>/
 
 Correctness scoring is deterministic and geometric. Lower is better.
 
+**Source:** `src/assets/CandidateScorer.cpp`
+
 Current scoring fields:
 
 | Field | Penalty |
@@ -182,7 +187,7 @@ Later scoring improvements (see backlog C2):
 
 ## Generation Settings (CandidateRunSettings)
 
-Defaults hardcoded in `ImageGeneratorController::CandidateRunSettings`. Moving these to `AssetType` for per-asset configurability is tracked in backlog item M3.
+Candidate-run settings are defined on `AssetType`, persisted in `projects.json`, copied through `ResolvedProjectContext`, and read by `ImageGeneratorController::launchCandidateRun()`.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -192,6 +197,19 @@ Defaults hardcoded in `ImageGeneratorController::CandidateRunSettings`. Moving t
 | `explorationStrength` | 0.70 | Img2img denoise for exploration |
 | `refinementStrength` | 0.27 | Img2img denoise for refinement |
 | `scoreThreshold` | 150.0 | Score above which a proposal is `rejected` |
+
+The current project UI does not expose these controls yet; built-in templates provide the defaults when an asset type is created.
+
+---
+
+## Shared Asset Helpers
+
+Candidate runs and standard generation share two asset-layer helpers:
+
+| Helper | Responsibility |
+|---|---|
+| `AssetArtifactStore` | Owns output roots, `raw/`, `processed/`, `.reference_cache/`, `runs/`, `patron.png`, manifest paths, gallery discovery, metadata sidecar paths, and transparent derivative paths |
+| `GeneratedAssetProcessor` | Loads raw output, applies alpha cutout using `AssetExportSpec::alphaCutout`, writes standalone transparent derivatives when applicable, runs `AssetPostProcessor`, writes processed output, and writes metadata JSON |
 
 ---
 

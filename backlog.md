@@ -62,11 +62,11 @@
   LoRA combinations accumulate. Add explicit ownership plus LRU or size-based eviction so the
   app degrades gracefully instead of drifting toward OOM on long sessions.
 
-- Parameterise `scoreWallCandidate` as `scoreCandidate(spec, ScoringPolicy)`.
-  (`ImageGeneratorController.cpp:282–356`) Scoring is hardcoded for walls: fill ratio weights,
-  bounds error caps, and anchor penalties are all magic float constants. Adding a Character or
-  Prop asset type means duplicating the entire function. Introduce a `ScoringPolicy` struct and
-  store defaults per orientation in `AssetSpec` or `AssetTypeTemplate`.
+- Parameterise candidate scoring as `scoreCandidate(spec, ScoringPolicy)`.
+  (`src/assets/CandidateScorer.cpp`) Scoring is now isolated from run orchestration, but the
+  fill-ratio weights, bounds error caps, and anchor penalties are still wall-oriented magic
+  constants. Introduce a `ScoringPolicy` struct and store defaults per orientation in
+  `AssetSpec` or `AssetTypeTemplate`.
 
 - Decouple `ProjectController` from `ImageGeneratorController`.
   (`ProjectController.hpp:39`, `ProjectController.cpp:330–353, 531–541`) `ProjectController`
