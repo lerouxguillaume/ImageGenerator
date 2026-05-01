@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <future>
 #include <memory>
 #include <thread>
@@ -56,6 +57,9 @@ private:
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
     void launchCandidateRun(ImageGeneratorView& view);
+    void startGenerationTask(ImageGeneratorView& view,
+                             const std::string& failureLabel,
+                             std::function<void(std::stop_token)> task);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});
     void selectGalleryImage(ImageGeneratorView& view, int index);

@@ -1,5 +1,4 @@
 #include "ImageGeneratorController.hpp"
-#include "CandidateRunPipeline.hpp"
 #include "../assets/AssetArtifactStore.hpp"
 #include "../assets/CandidateScorer.hpp"
 #include "../postprocess/AssetValidator.hpp"
@@ -541,7 +540,6 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.generationFailed.store(false);
     rp.generationErrorMsg.clear();
 
-    const int myId = ++rp.generationId;
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
     const std::string modelDir  = sp.getSelectedModelDir();
@@ -569,12 +567,9 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
                                     i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
     }
 
-    std::atomic<bool>* done     = &rp.generationDone;
-    std::atomic<int>*  step     = &rp.generationStep;
-    std::atomic<int>*  idPtr    = &rp.generationId;
-    std::atomic<int>*  imgNum   = &rp.generationImageNum;
-    std::atomic<bool>* failed   = &rp.generationFailed;
-    std::string*       errorMsg = &rp.generationErrorMsg;
+    GenerationProgress progress;
+    progress.step = &rp.generationStep;
+    progress.currentImage = &rp.generationImageNum;
     GenerationJob job;
     job.prompt = prompt;
     job.negativePrompt = negPrompt;
@@ -595,24 +590,11 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.postProcess.reference.cacheDir = artifacts.referenceCacheDir();
     GenerationService* generationService = &generationService_;
 
-    // Assigning a new jthread implicitly request_stop() + join()s the previous one,
-    // ensuring only one pipeline runs at a time and no thread is ever abandoned.
-    generationThread_ = std::jthread(
-        [job = std::move(job), generationService,
-         done, step, idPtr, imgNum, myId, failed, errorMsg]
-        (std::stop_token st) {
-            try {
-                generationService->run(job, step, imgNum, std::move(st));
-            } catch (const std::exception& e) {
-                Logger::error("Generation failed: " + std::string(e.what()));
-                *errorMsg = e.what();
-                failed->store(true);
-            } catch (...) {
-                Logger::error("Generation failed: unknown error");
-                *errorMsg = "Unknown error during generation. See log for details.";
-                failed->store(true);
-            }
-            if (idPtr->load() == myId) done->store(true);
+    startGenerationTask(
+        view,
+        "Generation",
+        [job = std::move(job), generationService, progress](std::stop_token st) mutable {
+            generationService->run(job, progress, std::move(st));
         });
 }
 
@@ -658,8 +640,6 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     rp.generationTotalImages.store(expectedTotalImages);
     rp.lastImagePath = (layout.refineProcessedDir / "ref_1.png").string();
 
-    const int myId = ++rp.generationId;
-
     const std::string modelDir  = sp.getSelectedModelDir();
     Prompt userDsl = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
     Prompt dsl = buildAssetPrompt(projectContext_, userDsl);
@@ -689,51 +669,67 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
                                         i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
     }
 
-    CandidateRunPipeline pipeline;
-    pipeline.prompt               = prompt;
-    pipeline.negPrompt            = negPrompt;
-    pipeline.modelDir             = modelDir;
-    pipeline.baseParams           = baseParams;
-    pipeline.runId                = runId;
-    pipeline.patronPath           = patronPath;
-    pipeline.runPath              = layout.runPath;
-    pipeline.exploreRawDir        = layout.exploreRawDir;
-    pipeline.exploreProcessedDir  = layout.exploreProcessedDir;
-    pipeline.refineRawDir         = layout.refineRawDir;
-    pipeline.refineProcessedDir   = layout.refineProcessedDir;
-    pipeline.exploreCount         = exploreCount;
-    pipeline.candidateCount       = candidateCount;
-    pipeline.refineVariants       = refineVariants;
-    pipeline.requiresTransparency = spec.requiresTransparency;
-    pipeline.exportSpec           = projectContext_.exportSpec;
-    pipeline.spec                 = spec;
-    pipeline.assetTypeId          = projectContext_.assetTypeId;
-    pipeline.explorationStrength  = explorationStrength;
-    pipeline.refinementStrength   = candidateRun.refinementStrength;
-    pipeline.scoreThreshold       = candidateRun.scoreThreshold;
-    pipeline.step                 = &rp.generationStep;
-    pipeline.imgNum               = &rp.generationImageNum;
+    CandidateRunJob job;
+    job.prompt               = prompt;
+    job.negativePrompt       = negPrompt;
+    job.modelDir             = modelDir;
+    job.baseParams           = baseParams;
+    job.runId                = runId;
+    job.patronPath           = patronPath;
+    job.runPath              = layout.runPath;
+    job.exploreRawDir        = layout.exploreRawDir;
+    job.exploreProcessedDir  = layout.exploreProcessedDir;
+    job.refineRawDir         = layout.refineRawDir;
+    job.refineProcessedDir   = layout.refineProcessedDir;
+    job.exploreCount         = exploreCount;
+    job.candidateCount       = candidateCount;
+    job.refineVariants       = refineVariants;
+    job.requiresTransparency = spec.requiresTransparency;
+    job.exportSpec           = projectContext_.exportSpec;
+    job.spec                 = spec;
+    job.assetTypeId          = projectContext_.assetTypeId;
+    job.explorationStrength  = explorationStrength;
+    job.refinementStrength   = candidateRun.refinementStrength;
+    job.scoreThreshold       = candidateRun.scoreThreshold;
+    GenerationProgress progress;
+    progress.step = &rp.generationStep;
+    progress.currentImage = &rp.generationImageNum;
+
+    GenerationService* generationService = &generationService_;
+
+    startGenerationTask(
+        view,
+        "Candidate run",
+        [job = std::move(job), generationService, progress](std::stop_token st) mutable {
+            generationService->runCandidateRun(job, progress, std::move(st));
+        });
+}
+
+void ImageGeneratorController::startGenerationTask(ImageGeneratorView& view,
+                                                   const std::string& failureLabel,
+                                                   std::function<void(std::stop_token)> task) {
+    auto& rp = view.resultPanel;
 
     std::atomic<bool>* done     = &rp.generationDone;
     std::atomic<int>*  idPtr    = &rp.generationId;
     std::atomic<bool>* failed   = &rp.generationFailed;
     std::string*       errorMsg = &rp.generationErrorMsg;
+    const int myId = ++rp.generationId;
 
+    // Assigning a new jthread implicitly request_stop() + join()s the previous one,
+    // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
-        [pipeline = std::move(pipeline), done, idPtr, myId, failed, errorMsg]
+        [task = std::move(task), failureLabel, done, idPtr, myId, failed, errorMsg]
         (std::stop_token st) mutable {
             try {
-                auto candidates = pipeline.explore(st);
-                candidates = pipeline.selectCandidates(std::move(candidates));
-                const auto refined = pipeline.refine(candidates, st);
-                pipeline.writeManifest(candidates, refined);
+                task(std::move(st));
             } catch (const std::exception& e) {
-                Logger::error("Candidate run failed: " + std::string(e.what()));
+                Logger::error(failureLabel + " failed: " + std::string(e.what()));
                 *errorMsg = e.what();
                 failed->store(true);
             } catch (...) {
-                Logger::error("Candidate run failed: unknown error");
-                *errorMsg = "Unknown error during candidate run. See log for details.";
+                Logger::error(failureLabel + " failed: unknown error");
+                *errorMsg = "Unknown error during " + failureLabel + ". See log for details.";
                 failed->store(true);
             }
             if (idPtr->load() == myId) done->store(true);

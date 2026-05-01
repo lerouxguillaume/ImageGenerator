@@ -35,15 +35,54 @@ struct GenerationJob {
     GenerationPostProcessSpec postProcess;
 };
 
+struct GenerationProgress {
+    std::atomic<int>* step = nullptr;
+    std::atomic<int>* currentImage = nullptr;
+};
+
 struct GenerationResult {
     std::vector<std::string> rawPaths;
     bool referenceUsed = false;
 };
 
+struct CandidateRunJob {
+    std::string prompt;
+    std::string negativePrompt;
+    std::string modelDir;
+    GenerationParams baseParams;
+    std::string runId;
+    std::string patronPath;
+    std::filesystem::path runPath;
+    std::filesystem::path exploreRawDir;
+    std::filesystem::path exploreProcessedDir;
+    std::filesystem::path refineRawDir;
+    std::filesystem::path refineProcessedDir;
+    int exploreCount = 0;
+    int candidateCount = 0;
+    int refineVariants = 0;
+    bool requiresTransparency = false;
+    AssetExportSpec exportSpec;
+    AssetSpec spec;
+    std::string assetTypeId;
+    float explorationStrength = 0.70f;
+    float refinementStrength = 0.27f;
+    float scoreThreshold = 150.0f;
+};
+
+struct CandidateRunResult {
+    std::string runId;
+    int explorationCount = 0;
+    int selectedCount = 0;
+    int refinementCount = 0;
+};
+
 class GenerationService {
 public:
     GenerationResult run(const GenerationJob& job,
-                         std::atomic<int>* progressStep,
-                         std::atomic<int>* currentImage,
+                         GenerationProgress progress,
                          std::stop_token stopToken) const;
+
+    CandidateRunResult runCandidateRun(const CandidateRunJob& job,
+                                       GenerationProgress progress,
+                                       std::stop_token stopToken) const;
 };

@@ -3,6 +3,7 @@
 #include "../assets/GeneratedAssetProcessor.hpp"
 #include "../assets/ReferenceNormalizer.hpp"
 #include "../managers/Logger.hpp"
+#include "CandidateRunPipeline.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -61,8 +62,7 @@ void processGeneratedOutput(const std::string& rawPath,
 } // namespace
 
 GenerationResult GenerationService::run(const GenerationJob& job,
-                                        std::atomic<int>* progressStep,
-                                        std::atomic<int>* currentImage,
+                                        GenerationProgress progress,
                                         std::stop_token stopToken) const {
     GenerationParams effectiveParams = job.params;
     const bool referenceUsed = applyReferenceIfAvailable(effectiveParams, job.postProcess);
@@ -73,8 +73,8 @@ GenerationResult GenerationService::run(const GenerationJob& job,
         job.outputPath,
         effectiveParams,
         job.modelDir,
-        progressStep,
-        currentImage,
+        progress.step,
+        progress.currentImage,
         std::move(stopToken));
 
     GenerationResult result;
@@ -84,5 +84,46 @@ GenerationResult GenerationService::run(const GenerationJob& job,
         processGeneratedOutput(rawPath, job.postProcess, referenceUsed);
         result.rawPaths.push_back(rawPath);
     }
+    return result;
+}
+
+CandidateRunResult GenerationService::runCandidateRun(const CandidateRunJob& job,
+                                                       GenerationProgress progress,
+                                                       std::stop_token stopToken) const {
+    CandidateRunPipeline pipeline;
+    pipeline.prompt = job.prompt;
+    pipeline.negPrompt = job.negativePrompt;
+    pipeline.modelDir = job.modelDir;
+    pipeline.baseParams = job.baseParams;
+    pipeline.runId = job.runId;
+    pipeline.patronPath = job.patronPath;
+    pipeline.runPath = job.runPath;
+    pipeline.exploreRawDir = job.exploreRawDir;
+    pipeline.exploreProcessedDir = job.exploreProcessedDir;
+    pipeline.refineRawDir = job.refineRawDir;
+    pipeline.refineProcessedDir = job.refineProcessedDir;
+    pipeline.exploreCount = job.exploreCount;
+    pipeline.candidateCount = job.candidateCount;
+    pipeline.refineVariants = job.refineVariants;
+    pipeline.requiresTransparency = job.requiresTransparency;
+    pipeline.exportSpec = job.exportSpec;
+    pipeline.spec = job.spec;
+    pipeline.assetTypeId = job.assetTypeId;
+    pipeline.explorationStrength = job.explorationStrength;
+    pipeline.refinementStrength = job.refinementStrength;
+    pipeline.scoreThreshold = job.scoreThreshold;
+    pipeline.step = progress.step;
+    pipeline.imgNum = progress.currentImage;
+
+    auto exploration = pipeline.explore(stopToken);
+    auto selected = pipeline.selectCandidates(exploration);
+    const auto refinement = pipeline.refine(selected, stopToken);
+    pipeline.writeManifest(exploration, refinement);
+
+    CandidateRunResult result;
+    result.runId = job.runId;
+    result.explorationCount = static_cast<int>(exploration.size());
+    result.selectedCount = static_cast<int>(selected.size());
+    result.refinementCount = static_cast<int>(refinement.size());
     return result;
 }

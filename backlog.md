@@ -50,11 +50,15 @@
   `Character`. `Unset` and `Prop` retain the rectangular fallback.
 
 - Introduce the first typed `GenerationJob` / `GenerationService` boundary.
-  Added `GenerationService` with typed generation, reference, post-process, and result structs.
+  Added `GenerationService` with typed generation, candidate-run, reference, post-process,
+  progress, and result structs.
   The plain single-image/multi-image generation path now builds a `GenerationJob` in
   `ImageGeneratorController` and delegates execution, reference normalization, model invocation,
-  and generated asset post-processing to the service. Candidate runs and broader UI orchestration
-  still need to move onto the service boundary.
+  and generated asset post-processing to the service. Candidate-run execution now builds a
+  `CandidateRunJob` and delegates exploration, candidate selection, refinement, and manifest
+  writing through the same service boundary. The controller now uses one shared generation-task
+  launcher for completion and error propagation. Broader UI orchestration still needs to move out
+  of the controller.
 
 ## High Priority
 
@@ -86,10 +90,11 @@
 
 - Extend the typed `GenerationJob` / `GenerationService` boundary across generation workflows.
   The plain generation path now delegates model execution and post-processing to
-  `GenerationService`, but `ImageGeneratorController` still owns model browsing, LLM futures,
-  thumbnail futures, generation threads, cancellation, progress, gallery refresh, and project
-  context state. Extend the service-level API to emit typed progress/result/error events and move
-  candidate runs plus broader orchestration onto the same boundary.
+  `GenerationService`, and candidate runs now delegate execution through `CandidateRunJob`.
+  `ImageGeneratorController` still owns model browsing, LLM futures, thumbnail futures,
+  cancellation, gallery refresh, and project context state. Extend the
+  service-level API to emit typed progress/result/error events and move broader orchestration
+  onto the same boundary.
 
 ## Medium Priority
 
