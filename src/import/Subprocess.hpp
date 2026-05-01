@@ -33,7 +33,9 @@ public:
     // Block until the process exits. Returns the exit code (-1 on error).
     int wait();
 
-    bool isStarted() const noexcept { return started_; }
+    bool isStarted()  const noexcept { return started_; }
+    // On Windows: GetLastError() value from a failed start(). 0 on Linux or success.
+    int  lastError()  const noexcept { return lastError_; }
 
 private:
 #ifdef _WIN32
@@ -43,6 +45,7 @@ private:
     int pid_      = -1;
     int stdoutFd_ = -1;
 #endif
-    bool started_ = false;
+    bool started_   = false;
+    int  lastError_ = 0;
     std::string lineBuf_;
 };

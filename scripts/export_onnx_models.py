@@ -21,10 +21,13 @@ from export_common import (
     ExportComponentSpec,
     SD15ExportPolicy,
     VAEDecoderWrapper,
+    assert_no_meta_tensors,
     check_dependencies,
     check_model_file,
     export_component_to_dir,
+    load_single_file_pipeline,
     patch_clip_for_tracing,
+    patch_clip_text_model_compat,
     write_model_json,
 )
 
@@ -43,8 +46,9 @@ class CLIPTextEncoderClipSkip2(torch.nn.Module):
         out = self.text_encoder(input_ids, output_hidden_states=True)
         hidden = out.hidden_states[-2]
 
-        # Apply the final layer norm
-        hidden_norm = self.text_encoder.text_model.final_layer_norm(hidden)
+        # transformers >= 4.47 flattened CLIPTextModel; text_model may not exist
+        _tm = getattr(self.text_encoder, "text_model", self.text_encoder)
+        hidden_norm = _tm.final_layer_norm(hidden)
 
         # Return both: normalized output (for UNet) and latent (for LoRA)
         return hidden_norm, hidden
@@ -71,11 +75,19 @@ def export_sd15(model_file: str, output_dir: str, *,
     )
     check_model_file(model_file)
     os.makedirs(output_dir, exist_ok=True)
+    patch_clip_text_model_compat()
     patch_clip_for_tracing()
 
     t_total = time.time()
     print("Loading SD 1.5 pipeline ...")
-    pipe = StableDiffusionPipeline.from_single_file(model_file, torch_dtype=torch.float16)
+    pipe = load_single_file_pipeline(
+        StableDiffusionPipeline,
+        model_file,
+        torch_dtype=torch.float16,
+    )
+    assert_no_meta_tensors(pipe.text_encoder, "text_encoder")
+    assert_no_meta_tensors(pipe.unet, "unet")
+    assert_no_meta_tensors(pipe.vae, "vae")
     vae_scaling_factor = float(pipe.vae.config.scaling_factor)
 
     all_specs = []
@@ -152,7 +164,7 @@ def export_sd15(model_file: str, output_dir: str, *,
     export_component_to_dir(output_dir, vae_spec)
 
     write_model_json(output_dir, policy.model_type, all_specs, vae_scaling_factor)
-    print(f"\n✅ All models exported to {output_dir}  "
+    print(f"\nAll models exported to {output_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 
 
@@ -184,8 +196,8 @@ if __name__ == "__main__":
     try:
         export_sd15(args.model_file, out, resume=args.resume, validate=args.validate)
     except (FileNotFoundError, ImportError) as e:
-        print(f"\n❌ {e}", file=sys.stderr)
+        print(f"\n{e}", file=sys.stderr)
         sys.exit(1)
     except RuntimeError as e:
-        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        print(f"\nExport failed: {e}", file=sys.stderr)
         sys.exit(1)

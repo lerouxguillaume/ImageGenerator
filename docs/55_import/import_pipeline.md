@@ -37,14 +37,14 @@ LoRA adapters are rejected at the inspection stage — they do not go through th
 
 Manages a dedicated Python virtual environment. On first use it:
 
-1. Locates system Python (`python3` / `python` / `py` depending on platform)
-2. Resolves the full executable path via `where` / `which` and logs it
+1. Locates a supported system Python (`3.10` / `3.11` / `3.12`; `py -3.12/-3.11/-3.10` is tried on Windows)
+2. Resolves the executable path and logs the selected command
 3. Runs `python -m venv <venvDir>`
 4. Upgrades pip
 5. Installs `scripts/requirements_import.txt`
-6. Writes a `.setup_complete` sentinel
+6. Writes a `.setup_complete` sentinel containing the requirements signature
 
-Subsequent runs skip setup entirely (sentinel check only).
+Subsequent runs skip setup when the sentinel matches the current requirements file.
 
 ### Venv location (platform-specific)
 
@@ -220,7 +220,8 @@ models/
 
 Python is **not** required at runtime. It is only required when running the import pipeline.
 
-- **Minimum version**: Python 3.10
+- **Supported version**: Python 3.10, 3.11, or 3.12
+- **Unsupported**: Python 3.13+; newer dependency resolution can leave CLIP weights on the PyTorch `meta` device during export.
 - **Must be on system PATH** (`python` / `python3` / `py`)
 - The venv and all packages are managed automatically after Python is installed
 
@@ -228,8 +229,8 @@ Required packages (installed automatically into the managed venv):
 
 ```
 torch>=2.0.0
-diffusers>=0.21.0
-transformers>=4.30.0
+diffusers>=0.27.0,<0.35.0
+transformers>=4.30.0,<4.47.0
 onnx>=1.14.0
 onnxruntime>=1.16.0
 safetensors>=0.3.0

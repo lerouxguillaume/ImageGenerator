@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <sstream>
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -191,15 +192,45 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
     state_ = State::Exporting;
     setStatus("Exporting…");
 
-    const std::string pythonExe  = pyEnv.pythonPath().string();
-    const std::string scriptPath = (scriptsDir_ / "import_model.py").string();
+    const std::filesystem::path pythonPath = pyEnv.pythonPath();
+    const std::filesystem::path scriptPath = scriptsDir_ / "import_model.py";
+
+    if (!std::filesystem::exists(pythonPath)) {
+        setStatus("Venv Python not found — setup may have been incomplete.");
+        appendLog("Not found: " + pythonPath.string());
+        state_ = State::Failed;
+        return;
+    }
+    if (!std::filesystem::exists(scriptPath)) {
+        setStatus("import_model.py not found in scripts directory.");
+        appendLog("Not found: " + scriptPath.string());
+        appendLog("Scripts dir: " + scriptsDir_.string());
+        state_ = State::Failed;
+        return;
+    }
 
     const std::vector<std::string> args = {
-        pythonExe, scriptPath,
+        pythonPath.string(), scriptPath.string(),
         "--input",  path.string(),
         "--output", outDir.string(),
         "--arch",   archOverride,
     };
+
+    // Open a persistent log file so the full output survives past the modal's
+    // visible line limit. Written to the output directory so it stays with the model.
+    std::filesystem::create_directories(outDir);
+    const std::filesystem::path exportLogPath = outDir / "export.log";
+    std::ofstream exportLog(exportLogPath, std::ios::app);
+
+    // Log the full command
+    std::string cmdDisplay;
+    for (const auto& a : args) cmdDisplay += a + " ";
+    appendLog("$ " + cmdDisplay);
+    appendLog("Log: " + exportLogPath.string());
+    if (exportLog) {
+        exportLog << "$ " << cmdDisplay << "\n";
+        exportLog.flush();
+    }
 
     auto sub = std::make_shared<Subprocess>();
     {
@@ -208,7 +239,9 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
     }
 
     if (!sub->start(args, scriptsDir_)) {
-        setStatus("Failed to launch Python export script.");
+        const int err = sub->lastError();
+        setStatus("Failed to launch Python (error " + std::to_string(err) + ").");
+        appendLog("Launch failed — error " + std::to_string(err));
         state_ = State::Failed;
         return;
     }
@@ -222,7 +255,9 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
             return;
         }
 
-        // PROGRESS: protocol
+        if (exportLog) { exportLog << line << "\n"; exportLog.flush(); }
+
+        // PROGRESS: protocol — don't clutter the log display
         if (line.rfind("PROGRESS:", 0) == 0) {
             const std::string tag = line.substr(9);
             if (tag == "analyzing")
@@ -232,8 +267,6 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
             else if (tag == "validating") {
                 state_ = State::Validating;
                 setStatus("Validating output…");
-            } else if (tag == "done") {
-                // handled after loop
             }
             continue;
         }
@@ -241,8 +274,6 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
         // ERROR: protocol
         if (line.rfind("ERROR:", 0) == 0) {
             setStatus(line.substr(6));
-            appendLog(line);
-            continue;
         }
 
         appendLog(line);
@@ -255,8 +286,10 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
     }
 
     if (cancelRequested_ || exitCode != 0) {
-        if (!cancelRequested_)
-            setStatus("Export failed (exit " + std::to_string(exitCode) + "). See log.");
+        if (!cancelRequested_) {
+            setStatus("Export failed (exit " + std::to_string(exitCode) + ").");
+            appendLog("Full log: " + exportLogPath.string());
+        }
         state_ = State::Failed;
         return;
     }

@@ -7,12 +7,17 @@ import gc
 import importlib
 import json
 import os
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 import torch
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
 
 
 def check_dependencies(required: list[str], optional: list[str] | None = None) -> None:
@@ -41,6 +46,40 @@ def check_model_file(path: str) -> None:
     if ext not in (".safetensors", ".ckpt", ".pt"):
         print(f"  Warning: unexpected file extension '{ext}'")
     print(f"  Source: {path}  ({size_gb:.1f} GB)")
+
+
+def assert_no_meta_tensors(module: torch.nn.Module, component_name: str) -> None:
+    """Fail early if a loaded component still contains meta-device parameters."""
+    meta_names = [
+        name for name, param in module.named_parameters(recurse=True)
+        if getattr(param, "is_meta", False)
+    ]
+    if meta_names:
+        sample = ", ".join(meta_names[:5])
+        if len(meta_names) > 5:
+            sample += ", ..."
+        raise RuntimeError(
+            f"{component_name} has {len(meta_names)} meta tensor parameter(s): {sample}. "
+            "The checkpoint loader did not materialize real weights."
+        )
+
+
+def load_single_file_pipeline(pipeline_cls, model_file: str, *, torch_dtype):
+    """Load a diffusers single-file checkpoint without meta tensor placeholders."""
+    kwargs = {
+        "torch_dtype": torch_dtype,
+        "low_cpu_mem_usage": False,
+        "device_map": None,
+    }
+    try:
+        return pipeline_cls.from_single_file(model_file, **kwargs)
+    except TypeError as e:
+        # Older diffusers versions may not expose low_cpu_mem_usage/device_map on
+        # this path. Retry without those knobs rather than hiding unrelated errors.
+        msg = str(e)
+        if "low_cpu_mem_usage" not in msg and "device_map" not in msg:
+            raise
+        return pipeline_cls.from_single_file(model_file, torch_dtype=torch_dtype)
 
 
 @contextmanager
@@ -77,6 +116,32 @@ def patch_clip_for_tracing() -> None:
         return torch.triu(mask, diagonal=1)
 
     _clip_mod.create_causal_mask = _safe_causal_mask
+
+
+def patch_clip_text_model_compat() -> None:
+    """Restore the CLIPTextModel.text_model alias expected by diffusers loaders.
+
+    Some transformers builds expose CLIPTextModel as the text model directly
+    rather than as a wrapper with a nested .text_model module. diffusers'
+    single-file loader still probes .text_model while constructing SD1.x
+    checkpoints, so provide a compatibility property that returns the nested
+    module when present and the instance itself otherwise.
+    """
+    try:
+        import transformers.models.clip.modeling_clip as _clip_mod
+    except ImportError:
+        return
+
+    def _text_model(self):
+        return self._modules.get("text_model", self)
+
+    for cls_name in ("CLIPTextModel", "CLIPTextModelWithProjection"):
+        cls = getattr(_clip_mod, cls_name, None)
+        if cls is None:
+            continue
+        current = getattr(cls, "text_model", None)
+        if not isinstance(current, property):
+            cls.text_model = property(_text_model)
 
 
 def patch_fp32_upcasts_for_tracing() -> None:
@@ -582,7 +647,7 @@ def fix_attention_sqrt_cast_fp32(path: str) -> None:
         all_tensors_to_one_file=True,
         convert_attribute=False,
     )
-    print(f"  Fixed {changed} Cast(Sqrt→float32) → Cast(Sqrt→float16)")
+    print(f"  Fixed {changed} Cast(Sqrt->float32) -> Cast(Sqrt->float16)")
 
 
 def fix_resize_fp16_input(path: str) -> None:
@@ -693,9 +758,9 @@ def fix_resize_fp16_input(path: str) -> None:
         convert_attribute=False,
     )
     if data_to_patch:
-        print(f"  Wrapped {len(data_to_patch)} Resize data input(s) with Cast(fp16↔fp32) pairs")
+        print(f"  Wrapped {len(data_to_patch)} Resize data input(s) with Cast(fp16<->fp32) pairs")
     if scales_to_patch:
-        print(f"  Wrapped {len(scales_to_patch)} Resize scales input(s) with Cast(fp16→fp32)")
+        print(f"  Wrapped {len(scales_to_patch)} Resize scales input(s) with Cast(fp16->fp32)")
 
 
 def cleanup_stale_component_files(path: str) -> None:
@@ -924,7 +989,7 @@ def verify_export(
         raise RuntimeError(f"verify: {name} was not created")
     if not os.path.exists(data_path):
         raise RuntimeError(
-            f"verify: {name}.data was not created — external data consolidation failed"
+            f"verify: {name}.data was not created - external data consolidation failed"
         )
 
     # Load graph structure only (no tensor bytes) for all remaining checks
@@ -976,7 +1041,7 @@ def _export_lora_weights(model: torch.nn.Module, output_path: str) -> None:
     try:
         from safetensors.torch import save_file
     except ImportError:
-        print("  Warning: safetensors not installed — skipping LoRA base-weight export")
+        print("  Warning: safetensors not installed - skipping LoRA base-weight export")
         return
 
     weights = {
@@ -986,13 +1051,13 @@ def _export_lora_weights(model: torch.nn.Module, output_path: str) -> None:
     }
 
     if not weights:
-        print("  Warning: no 2-D parameters found — skipping LoRA base-weight export")
+        print("  Warning: no 2-D parameters found - skipping LoRA base-weight export")
         return
 
     save_file(weights, output_path)
     size_mb = sum(t.nbytes for t in weights.values()) / 1e6
     print(f"  Saved {len(weights)} LoRA base weights ({size_mb:.0f} MB)"
-          f" → {os.path.basename(output_path)}")
+          f" -> {os.path.basename(output_path)}")
 
 
 def _is_component_complete(path: str, spec: ExportComponentSpec) -> bool:
@@ -1026,7 +1091,7 @@ def validate_with_ort(
         import numpy as np
         import onnxruntime as ort
     except ImportError:
-        print("  Warning: onnxruntime Python package not installed — skipping ORT validation")
+        print("  Warning: onnxruntime Python package not installed - skipping ORT validation")
         return
 
     print("  ORT validation: creating session ...")
@@ -1040,7 +1105,7 @@ def validate_with_ort(
             providers=["CPUExecutionProvider"],
         )
     except Exception as e:
-        raise RuntimeError(f"ORT validation: session creation failed — {e}") from e
+        raise RuntimeError(f"ORT validation: session creation failed - {e}") from e
 
     inputs = _normalize_dummy_inputs(dummy_inputs)
     feed: dict[str, Any] = {}
@@ -1055,7 +1120,7 @@ def validate_with_ort(
     try:
         outputs = sess.run(None, feed)
     except Exception as e:
-        raise RuntimeError(f"ORT validation: forward pass failed — {e}") from e
+        raise RuntimeError(f"ORT validation: forward pass failed - {e}") from e
 
     print(f"  ORT validation passed in {time.time() - t0:.1f}s  "
           f"({len(outputs)} output(s))")
@@ -1067,7 +1132,7 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> None:
 
         # Resume: skip re-exporting components that are already complete on disk.
         if spec.skip_if_complete and _is_component_complete(path, spec):
-            print(f"  Already complete — skipping")
+            print("  Already complete - skipping")
             if spec.release_after:
                 free(*spec.release_after)
             return

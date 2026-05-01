@@ -50,5 +50,5 @@ private:
     // Arch selection: 0=Auto, 1=SD 1.5, 2=SDXL
     int archIndex_ = 0;
 
-    static constexpr int kVisibleLogLines = 8;
+    static constexpr int kVisibleLogLines = 14;
 };

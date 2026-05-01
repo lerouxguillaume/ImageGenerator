@@ -246,6 +246,9 @@ cmake -S . -B "$BUILD_DIR" \
 echo "Building..."
 cmake --build "$BUILD_DIR"
 
+echo "Syncing runtime scripts..."
+cmake -E copy_directory "$(pwd)/scripts" "$BUILD_DIR/scripts"
+
 ZIP_SUFFIX=""
 $USE_CUDA_BUILD  && ZIP_SUFFIX="${ZIP_SUFFIX}-cuda"
 $USE_GENAI_BUILD && ZIP_SUFFIX="${ZIP_SUFFIX}-genai"

@@ -86,8 +86,8 @@ void ImportModelModal::render(sf::RenderWindow& win) {
     win.draw(dim);
 
     // Modal box
-    const float mW = 680.f;
-    const float mH = 420.f;
+    const float mW = 720.f;
+    const float mH = 520.f;
     const float mX = cx - mW / 2.f;
     const float mY = cy - mH / 2.f;
     modalRect_ = {mX, mY, mW, mH};

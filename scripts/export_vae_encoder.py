@@ -30,9 +30,12 @@ import torch
 from export_common import (
     ExportComponentSpec,
     VAEEncoderWrapper,
+    assert_no_meta_tensors,
     check_dependencies,
     check_model_file,
     export_component_to_dir,
+    load_single_file_pipeline,
+    patch_clip_text_model_compat,
     patch_fp32_upcasts_for_tracing,
 )
 
@@ -67,7 +70,7 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
 
     out_path = os.path.join(model_dir, "vae_encoder.onnx")
     if os.path.exists(out_path) and os.path.exists(out_path + ".data") and not force:
-        print(f"vae_encoder.onnx already exists in {model_dir} — use --force to overwrite.")
+        print(f"vae_encoder.onnx already exists in {model_dir} - use --force to overwrite.")
         return
 
     model_type = _detect_model_type(model_dir)
@@ -76,13 +79,14 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
     print(f"Output dir : {model_dir}")
 
     t_total = time.time()
+    patch_clip_text_model_compat()
 
     if is_sdxl:
         patch_fp32_upcasts_for_tracing()
         from diffusers import StableDiffusionXLPipeline
         print("Loading SDXL pipeline (VAE only) ...")
-        pipe = StableDiffusionXLPipeline.from_single_file(
-            model_file, torch_dtype=torch.float32
+        pipe = load_single_file_pipeline(
+            StableDiffusionXLPipeline, model_file, torch_dtype=torch.float32
         )
         latent_h, latent_w = 128, 128
         fix_fp32 = True
@@ -90,13 +94,14 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
     else:
         from diffusers import StableDiffusionPipeline
         print("Loading SD 1.5 pipeline (VAE only) ...")
-        pipe = StableDiffusionPipeline.from_single_file(
-            model_file, torch_dtype=torch.float16
+        pipe = load_single_file_pipeline(
+            StableDiffusionPipeline, model_file, torch_dtype=torch.float16
         )
         latent_h, latent_w = 64, 64
         fix_fp32 = False
         fix_resize = False
 
+    assert_no_meta_tensors(pipe.vae, "vae")
     vae_scaling_factor = float(pipe.vae.config.scaling_factor)
 
     # Extract VAE and free the rest of the pipeline (UNet, text encoders, …)
@@ -133,7 +138,7 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
     export_component_to_dir(model_dir, spec)
     _update_model_json(model_dir, model_type=model_type, vae_scaling_factor=vae_scaling_factor)
 
-    print(f"\n✅ vae_encoder.onnx exported to {model_dir}  "
+    print(f"\nvae_encoder.onnx exported to {model_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 
 
@@ -154,8 +159,8 @@ if __name__ == "__main__":
     try:
         export_vae_encoder(args.model_dir, args.model_file, force=args.force)
     except (FileNotFoundError, ImportError) as e:
-        print(f"\n❌ {e}", file=sys.stderr)
+        print(f"\n{e}", file=sys.stderr)
         sys.exit(1)
     except RuntimeError as e:
-        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        print(f"\nExport failed: {e}", file=sys.stderr)
         sys.exit(1)

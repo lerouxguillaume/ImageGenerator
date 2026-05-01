@@ -36,27 +36,40 @@ bool Subprocess::start(const std::vector<std::string>& args,
 
     HANDLE hWrite = INVALID_HANDLE_VALUE;
     if (!CreatePipe(&hStdoutRead_, &hWrite, &sa, 0)) return false;
-    // Don't inherit the read end in the child
     SetHandleInformation(hStdoutRead_, HANDLE_FLAG_INHERIT, 0);
+
+    // Open NUL as stdin so child processes (including Python's own internal
+    // subprocesses, e.g. venv spawning pip) get a valid, inheritable stdin
+    // handle.  Passing INVALID_HANDLE_VALUE causes WinError 6 when Python 3.12+
+    // tries to duplicate the handle into its own child processes.
+    HANDLE hNullIn = CreateFileA("nul", GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
     STARTUPINFOA si{};
     si.cb         = sizeof(si);
     si.dwFlags    = STARTF_USESTDHANDLES;
     si.hStdOutput = hWrite;
     si.hStdError  = hWrite;
-    si.hStdInput  = INVALID_HANDLE_VALUE;
+    si.hStdInput  = (hNullIn != INVALID_HANDLE_VALUE) ? hNullIn : nullptr;
 
     std::string cmd = buildCommandLine(args);
 
+    // Keep wdStr alive for the duration of CreateProcessA — workDir.string()
+    // returns a temporary which would be destroyed before the call otherwise.
+    const std::string wdStr = workDir.empty() ? std::string{} : workDir.string();
+    const char* wd = wdStr.empty() ? nullptr : wdStr.c_str();
+
     PROCESS_INFORMATION pi{};
-    const char* wd = workDir.empty() ? nullptr : workDir.string().c_str();
     BOOL ok = CreateProcessA(
         nullptr, cmd.data(), nullptr, nullptr,
         TRUE, CREATE_NO_WINDOW, nullptr, wd, &si, &pi);
 
     CloseHandle(hWrite);
+    if (hNullIn != INVALID_HANDLE_VALUE) CloseHandle(hNullIn);
 
     if (!ok) {
+        lastError_ = static_cast<int>(GetLastError());
         CloseHandle(hStdoutRead_);
         hStdoutRead_ = INVALID_HANDLE_VALUE;
         return false;
@@ -74,8 +87,14 @@ bool Subprocess::readLine(std::string& line) {
     char c;
     DWORD bytesRead;
     while (true) {
-        if (!ReadFile(hStdoutRead_, &c, 1, &bytesRead, nullptr) || bytesRead == 0)
+        if (!ReadFile(hStdoutRead_, &c, 1, &bytesRead, nullptr) || bytesRead == 0) {
+            if (!lineBuf_.empty()) {
+                line = std::move(lineBuf_);
+                lineBuf_.clear();
+                return true;
+            }
             return false;
+        }
         if (c == '\r') continue;
         if (c == '\n') {
             line = std::move(lineBuf_);
@@ -161,7 +180,14 @@ bool Subprocess::readLine(std::string& line) {
     char c;
     while (true) {
         ssize_t n = ::read(stdoutFd_, &c, 1);
-        if (n <= 0) return false;
+        if (n <= 0) {
+            if (!lineBuf_.empty()) {
+                line = std::move(lineBuf_);
+                lineBuf_.clear();
+                return true;
+            }
+            return false;
+        }
         if (c == '\n') {
             line = std::move(lineBuf_);
             lineBuf_.clear();

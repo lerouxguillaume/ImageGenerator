@@ -36,11 +36,14 @@ from export_common import (
     ExportComponentSpec,
     SDXLExportPolicy,
     VAEDecoderWrapper,
+    assert_no_meta_tensors,
     check_dependencies,
     check_model_file,
     disable_attention_upcasting,
     export_component_to_dir,
+    load_single_file_pipeline,
     patch_clip_for_tracing,
+    patch_clip_text_model_compat,
     patch_fp32_upcasts_for_tracing,
     write_model_json,
 )
@@ -100,6 +103,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     )
     check_model_file(model_file)
     os.makedirs(output_dir, exist_ok=True)
+    patch_clip_text_model_compat()
     patch_clip_for_tracing()
 
     t_total = time.time()
@@ -107,7 +111,15 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     print("Loading SDXL pipeline (fp32) ...")
     # Load as fp32 — UNet and VAE are cast to fp16 individually before export
     # to avoid a 10 GB fp32 ONNX intermediate.
-    pipe = StableDiffusionXLPipeline.from_single_file(model_file, torch_dtype=torch.float32)
+    pipe = load_single_file_pipeline(
+        StableDiffusionXLPipeline,
+        model_file,
+        torch_dtype=torch.float32,
+    )
+    assert_no_meta_tensors(pipe.text_encoder, "text_encoder")
+    assert_no_meta_tensors(pipe.text_encoder_2, "text_encoder_2")
+    assert_no_meta_tensors(pipe.unet, "unet")
+    assert_no_meta_tensors(pipe.vae, "vae")
     vae_scaling_factor = float(pipe.vae.config.scaling_factor)
     if optimize_memory:
         print("  Memory-optimized mode enabled: attention slicing ON")
@@ -221,7 +233,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     export_component_to_dir(output_dir, vae_spec)
 
     write_model_json(output_dir, policy.model_type, all_specs, vae_scaling_factor)
-    print(f"\n✅ All models exported to {output_dir}  "
+    print(f"\nAll models exported to {output_dir}  "
           f"(total: {time.time() - t_total:.0f}s)")
 
 
@@ -270,8 +282,8 @@ if __name__ == "__main__":
             validate=args.validate,
         )
     except (FileNotFoundError, ImportError) as e:
-        print(f"\n❌ {e}", file=sys.stderr)
+        print(f"\n{e}", file=sys.stderr)
         sys.exit(1)
     except RuntimeError as e:
-        print(f"\n❌ Export failed: {e}", file=sys.stderr)
+        print(f"\nExport failed: {e}", file=sys.stderr)
         sys.exit(1)
