@@ -95,8 +95,10 @@ void App::run() {
             imageEditScreen.render(win);
         else if (screen == AppScreen::Projects)
             projectScreen.render(win);
-        else
+        else {
             menuScreen.render(win);
+            menuController.renderOverlay(win);
+        }
 
         win.display();
     }

@@ -14,7 +14,7 @@ Image generator is structured around a strict separation of:
 # Component structure
 
 Views:
-- `MenuView` — top-level launcher with `Projects`, `Generate Images`, and `Edit Image`
+- `MenuView` — top-level launcher with `Projects`, `Generate Images`, `Edit Image`, and `Import Model`
 - `ProjectView` — themed asset-pack workspace with embedded generation/results
 - `ImageGeneratorView(Generate)` — prompt-first txt2img composition root
 - `ImageGeneratorView(Edit)` — image-first img2img composition root
@@ -44,6 +44,12 @@ Asset workflow:
 - `GeneratedAssetProcessor` owns shared raw-output normalization: alpha cutout, standalone transparent derivatives when applicable, post-processing, processed PNG output, and metadata sidecars
 - `CandidateScorer` owns deterministic geometric scoring for candidate-run proposals and gallery ranking
 - `PatronGenerator` creates orientation-specific shape references for candidate-run exploration
+
+Import system:
+- `MenuController` owns `ModelImporter`, `ImportedModelRegistry`, and `ImportModelModal`
+- `ModelImporter` runs the full import flow on a background thread (inspect → venv setup → subprocess → validate → register)
+- `ImportModelModal` is an overlay modal; controller calls `renderOverlay()` each frame after `menuScreen.render()`
+- Venv is placed in `localDataDir()` (platform-appropriate local path) to avoid shared-drive limitations
 
 UI theme system:
 - `Theme` centralizes `UiColors`, `UiMetrics`, and `UiTypography`

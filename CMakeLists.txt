@@ -149,7 +149,8 @@ target_link_libraries(image_generator
 if(WIN32)
     # shell32: SHBrowseForFolder / SHGetPathFromIDList
     # ole32:   CoInitialize / CoUninitialize / CoTaskMemFree
-    target_link_libraries(image_generator shell32 ole32)
+    # comdlg32: GetOpenFileName (file picker for import modal)
+    target_link_libraries(image_generator shell32 ole32 comdlg32)
 endif()
 
 # Copy default config.json next to the binary only when none exists there yet,
@@ -165,6 +166,12 @@ add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/models"
     "$<TARGET_FILE_DIR:image_generator>/models")
+
+# Copy export scripts so the import pipeline can find them at runtime
+add_custom_command(TARGET image_generator POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/scripts"
+    "$<TARGET_FILE_DIR:image_generator>/scripts")
 
 # Create generated portraits directory next to the binary and drop a placeholder
 # so the empty directory survives zip packaging (zip tools drop empty dirs).

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**ImageGenerator** — C++20 / SFML application with embedded Stable Diffusion inference (ONNX Runtime, no Python).
+**ImageGenerator** — C++20 / SFML application with embedded Stable Diffusion inference (ONNX Runtime). Python is used only by the model import pipeline, never at runtime.
 
 This file is a **retrieval router** only. All implementation details live in `docs/`.
 
@@ -55,6 +55,18 @@ This file is a **retrieval router** only. All implementation details live in `do
 → docs/50_export/export_overview.md  
 → docs/50_export/export_validation.md  
 → docs/50_export/sdxl_fp16_fixes.md
+
+## Import pipeline — `src/import/` (`SafetensorsInspector`, `ModelImporter`, `PythonEnvManager`, `ImportedModelRegistry`)
+→ docs/55_import/import_pipeline.md
+
+Key facts:
+- Entry point: Menu → "Import Model" button → `ImportModelModal`
+- Python is required to import, not to run — managed venv is set up automatically on first use
+- Venv lives in `localDataDir()`, not next to the binary, to avoid shared-drive failures on Windows (`%LOCALAPPDATA%\ImageGenerator\python_env\`)
+- Full setup log at `<localDataDir>/python_env_setup.log` — check this when import fails
+- Imported models land in `models/imported/<id>/` with an extended `model.json` (`capabilities` block)
+- Registry at `models/imported/registry.json` — updated after each successful import
+- Never read `ModelImporter::getOutputDir()` / `getModelId()` before `State::Done`
 
 ## LLM prompt enhancement — `OrtLlmEnhancer` (optional)
 → docs/60_llm/llm_overview.md  

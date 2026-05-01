@@ -8,10 +8,13 @@ Converts Stable Diffusion models to ONNX for use with ONNX Runtime.
 
 | Script | Purpose |
 |---|---|
+| `scripts/import_model.py` | **Unified in-app entry point** — auto-detects arch and delegates to the scripts below; emits `PROGRESS:` protocol for the C++ import pipeline |
 | `scripts/export_onnx_models.py` | Full SD 1.5 export (text encoder + UNet + VAE decoder) |
 | `scripts/sdxl_export_onnx_models.py` | Full SDXL export (2× text encoders + UNet + VAE decoder) |
 | `scripts/export_vae_encoder.py` | Retrofit: add `vae_encoder.onnx` to an existing model directory |
 | `scripts/patch_unet_resize.py` | Retrofit: fix fp16 Resize nodes in an already-exported directory |
+
+`import_model.py` is the only script the application calls directly. The per-architecture scripts are invoked through it and should not be called directly when using the in-app import flow.
 
 ---
 

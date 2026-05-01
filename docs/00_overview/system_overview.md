@@ -1,6 +1,6 @@
 # System Overview
 
-Image generator is a C++20 / SFML application embedding a full Stable Diffusion inference stack using ONNX Runtime (no Python runtime dependency).
+Image generator is a C++20 / SFML application embedding a full Stable Diffusion inference stack using ONNX Runtime. **Python is not required at runtime.** It is used only during model import to convert `.safetensors` checkpoints to ONNX via a managed background pipeline.
 
 It supports:
 - Stable Diffusion 1.5
@@ -47,7 +47,7 @@ The system is fully synchronous per generation request:
 
 # Key design constraints
 
-- No Python dependency at runtime
+- No Python dependency at runtime — Python is only invoked by the import pipeline, never during inference
 - ONNX Runtime is the only inference backend
 - LoRA is injected at session creation (not runtime graph editing)
 - SDXL and SD1.5 share pipeline but diverge at encoding stage
@@ -67,6 +67,7 @@ The system is fully synchronous per generation request:
 - Prompt DSL → `src/prompt/` — parse, compile, merge, JSON serialisation
 - Preset system → `PresetManager`, DSL-backed reusable generation configs
 - Project system → `src/projects/` — asset-pack workspaces with `PackConstraints` / `AssetConstraints` that compile into prompt tokens automatically
+- Import pipeline → `src/import/` — converts `.safetensors` checkpoints to ONNX via a managed Python venv and background subprocess; triggered from the menu
 
 ---
 
