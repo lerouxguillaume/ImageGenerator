@@ -64,6 +64,50 @@ def assert_no_meta_tensors(module: torch.nn.Module, component_name: str) -> None
         )
 
 
+def _patch_hf_hub_symlink_fallback() -> None:
+    """Add copy-fallback for Windows systems where os.symlink requires Developer Mode.
+
+    Older huggingface_hub versions lack the shutil.copy2 fallback in _create_symlink
+    for the new_blob=True path. On Windows without Developer Mode, os.symlink raises
+    OSError: [WinError 1314] (privilege not held), crashing the SDXL config download.
+    This patch adds the missing fallback so the cache degrades gracefully to file copies.
+    """
+    import shutil
+    try:
+        import huggingface_hub.file_download as _fd
+    except ImportError:
+        return
+
+    original = getattr(_fd, "_create_symlink", None)
+    if original is None or getattr(original, "_patched_copy_fallback", False):
+        return
+
+    def _symlink_with_copy_fallback(src, dst, new_blob=False):
+        try:
+            original(src, dst, new_blob=new_blob)
+        except OSError:
+            if new_blob and os.path.isfile(src):
+                shutil.copy2(src, dst)
+            else:
+                raise
+
+    _symlink_with_copy_fallback._patched_copy_fallback = True
+    _fd._create_symlink = _symlink_with_copy_fallback
+
+
+def prepare_libraries_for_export(arch: str) -> None:
+    """Apply all pre-export library patches for the given architecture.
+
+    Replaces the scattered per-export-function patch calls with a single explicit
+    preparation step. Each patch is idempotent so this is safe to call multiple times.
+    """
+    _patch_hf_hub_symlink_fallback()   # Windows: symlink → copy fallback in HF hub cache
+    patch_clip_text_model_compat()     # transformers version compat for CLIPTextModel
+    patch_clip_for_tracing()           # tracing-safe create_causal_mask
+    if arch == "sdxl":
+        patch_fp32_upcasts_for_tracing()  # eliminate fp32 upcasts in timestep embedding + FP32SiLU
+
+
 def load_single_file_pipeline(pipeline_cls, model_file: str, *, torch_dtype):
     """Load a diffusers single-file checkpoint without meta tensor placeholders."""
     kwargs = {
@@ -551,26 +595,18 @@ def _convert_tensor_proto_fp16(tensor_proto) -> bool:
     return True
 
 
-def fix_fp32_constants(path: str) -> None:
-    """Convert embedded fp32 constants to fp16 without reloading external weights.
+def _fix_fp32_constants_inplace(model: Any) -> int:
+    """Convert embedded fp32 constants to fp16 in-place. Returns number of changes.
 
-    Handles three forms the ONNX tracer can emit for Constant nodes:
-    - attr.t (TensorProto)    — multi-element tensor constant
-    - value_float (scalar)    — e.g. attention scale 1/sqrt(d_k), traced as attr.f
-    - value_floats (list)     — fp32 list constant, traced as attr.floats
-
-    The scalar/list forms cannot be modified in-place because their proto field
-    type (FLOAT/FLOATS) differs from the replacement type (TENSOR).  They are
-    rebuilt as zero-dim / 1-D fp16 TensorProto "value" attributes and the old
-    attribute is removed from the node.
+    Handles three Constant node forms: attr.t (TensorProto), value_float (scalar
+    attr.f), and value_floats (list attr.floats). Scalar/list forms are rebuilt as
+    fp16 TensorProto "value" attributes since their proto field type differs.
     """
     import numpy as np
     import onnx
     from onnx import AttributeProto, numpy_helper
 
-    model = onnx.load_model(path, load_external_data=False)
     changed = 0
-
     for initializer in model.graph.initializer:
         if _convert_tensor_proto_fp16(initializer):
             changed += 1
@@ -578,69 +614,36 @@ def fix_fp32_constants(path: str) -> None:
     for node in model.graph.node:
         if node.op_type != "Constant":
             continue
-
-        replacements: dict[int, AttributeProto] = {}
+        replacements: dict[int, Any] = {}
         for i, attr in enumerate(node.attribute):
             if attr.HasField("t"):
                 if _convert_tensor_proto_fp16(attr.t):
                     changed += 1
             elif attr.type == AttributeProto.FLOAT:
-                # Scalar value_float → 0-d fp16 TensorProto stored as "value"
                 tp = numpy_helper.from_array(np.array(attr.f, dtype=np.float16))
                 replacements[i] = onnx.helper.make_attribute("value", tp)
                 changed += 1
             elif attr.type == AttributeProto.FLOATS:
-                # value_floats list → 1-D fp16 TensorProto stored as "value"
                 arr = np.array(list(attr.floats), dtype=np.float16)
                 tp = numpy_helper.from_array(arr)
                 replacements[i] = onnx.helper.make_attribute("value", tp)
                 changed += 1
-
         if replacements:
-            new_attrs = [
-                replacements[i] if i in replacements else attr
-                for i, attr in enumerate(node.attribute)
-            ]
+            new_attrs = [replacements.get(i, attr) for i, attr in enumerate(node.attribute)]
             del node.attribute[:]
             node.attribute.extend(new_attrs)
 
-    if changed == 0:
-        return
-
-    data_location = os.path.basename(path) + ".data"
-    onnx.save_model(
-        model,
-        path,
-        save_as_external_data=True,
-        location=data_location,
-        all_tensors_to_one_file=True,
-        convert_attribute=False,
-    )
-    print(f"  Fixed {changed} embedded fp32 constant(s) in-process")
+    return changed
 
 
-def fix_attention_sqrt_cast_fp32(path: str) -> None:
-    """Rewrite Cast(to=float32) nodes whose input is a Sqrt to Cast(to=float16).
+def _fix_attention_sqrt_cast_inplace(model: Any, out_to_node: dict) -> int:
+    """Rewrite Cast(Sqrt→float32) to Cast(Sqrt→float16) in-place. Returns change count.
 
-    Some diffusers attention implementations compute the attention scale as
-    `sqrt(head_dim).to(float32)`, producing a Sqrt → Cast(fp32) chain.  In an
-    fp16 UNet this causes ORT type errors (tensor(float16) vs tensor(float)) in
-    the downstream Div or Mul that consumes the scale.
-
-    The fix is very narrow: only Cast nodes whose *direct* input comes from a
-    Sqrt node are rewritten.  This pattern never appears in Resize scale paths
-    (which use literal Constant values, not computed Sqrt values), so it is safe
-    to rewrite unconditionally.
+    Targets only Cast nodes whose direct input is a Sqrt output — the attention
+    scale pattern `sqrt(head_dim).to(float32)` in diffusers. Never rewrites Resize
+    scale paths (those use Constant values, not Sqrt outputs).
     """
-    import onnx
     from onnx import TensorProto
-
-    model = onnx.load_model(path, load_external_data=False)
-
-    out_to_node: dict[str, onnx.NodeProto] = {}
-    for node in model.graph.node:
-        for out in node.output:
-            out_to_node[out] = node
 
     changed = 0
     for node in model.graph.node:
@@ -653,62 +656,29 @@ def fix_attention_sqrt_cast_fp32(path: str) -> None:
             if attr.name == "to" and attr.i == TensorProto.FLOAT:
                 attr.i = TensorProto.FLOAT16
                 changed += 1
-
-    if changed == 0:
-        return
-
-    data_location = os.path.basename(path) + ".data"
-    onnx.save_model(
-        model, path,
-        save_as_external_data=True,
-        location=data_location,
-        all_tensors_to_one_file=True,
-        convert_attribute=False,
-    )
-    print(f"  Fixed {changed} Cast(Sqrt->float32) -> Cast(Sqrt->float16)")
+    return changed
 
 
-def fix_resize_fp16_input(path: str) -> None:
-    """Fix fp16 inputs on Resize nodes so ORT accepts the model.
+def _fix_resize_fp16_inplace(model: Any, out_to_node: dict) -> tuple[int, int]:
+    """Wrap fp16 Resize inputs with Cast(fp16→fp32/fp32→fp16) pairs in-place.
 
-    ORT rejects fp16 for both:
-    - input[0] (data)  — wraps with Cast(fp16→fp32) before + Cast(fp32→fp16) after
-    - input[2] (scales) — wraps with Cast(fp16→fp32) only; scales must be fp32 and
-                          are not consumed downstream so no fp16 restore is needed.
-
-    In a fully-fp16 SDXL UNet, dynamic scale tensors computed via Concat/Shape ops
-    come out as fp16, triggering ORT's "Type 'tensor(float16)' of input parameter
-    … of operator (Resize) is invalid" error.
-
-    Already-patched nodes (producer is already Cast(to=FLOAT)) are skipped so the
-    function is safe to call multiple times.
+    ORT rejects fp16 for Resize data (input[0]) and scales (input[2]). Returns
+    (data_patches, scales_patches). Already-cast-fp32 inputs are skipped so this
+    is safe to call multiple times.
     """
-    import onnx
     from onnx import TensorProto, helper
 
-    model = onnx.load_model(path, load_external_data=False)
-
-    out_to_node: dict[str, onnx.NodeProto] = {}
-    for node in model.graph.node:
-        for out in node.output:
-            out_to_node[out] = node
-
-    def _already_cast_fp32(tensor_name: str) -> bool:
-        """Return True if tensor_name is already produced by a Cast(to=FLOAT)."""
-        producer = out_to_node.get(tensor_name)
-        if producer is None or producer.op_type != "Cast":
+    def _already_cast_fp32(name: str) -> bool:
+        prod = out_to_node.get(name)
+        if prod is None or prod.op_type != "Cast":
             return False
-        return any(a.name == "to" and a.i == TensorProto.FLOAT for a in producer.attribute)
+        return any(a.name == "to" and a.i == TensorProto.FLOAT for a in prod.attribute)
 
-    # Collect Resize nodes whose data input (input[0]) needs wrapping.
-    data_to_patch: list[onnx.NodeProto] = [
+    data_to_patch = [
         n for n in model.graph.node
         if n.op_type == "Resize" and n.input and not _already_cast_fp32(n.input[0])
     ]
-
-    # Collect Resize nodes whose scales input (input[2]) needs a fp16→fp32 cast.
-    # Only patch when input[2] is non-empty (scales mode) and not already fp32.
-    scales_to_patch: list[onnx.NodeProto] = [
+    scales_to_patch = [
         n for n in model.graph.node
         if n.op_type == "Resize"
         and len(n.input) > 2 and n.input[2]
@@ -716,14 +686,12 @@ def fix_resize_fp16_input(path: str) -> None:
     ]
 
     if not data_to_patch and not scales_to_patch:
-        return
+        return 0, 0
 
     data_ids   = {id(n) for n in data_to_patch}
     scales_ids = {id(n) for n in scales_to_patch}
-
-    final_nodes: list[onnx.NodeProto] = []
-    data_counter   = 0
-    scales_counter = 0
+    final_nodes = []
+    data_counter = scales_counter = 0
 
     for node in model.graph.node:
         need_data   = id(node) in data_ids
@@ -747,7 +715,7 @@ def fix_resize_fp16_input(path: str) -> None:
             node.output[0] = fp32_out
 
         if need_scales:
-            scales_in = node.input[2]
+            scales_in  = node.input[2]
             scales_f32 = scales_in + f"_scales{scales_counter}_f32"
             scales_counter += 1
             final_nodes.append(helper.make_node(
@@ -767,6 +735,60 @@ def fix_resize_fp16_input(path: str) -> None:
     del model.graph.node[:]
     model.graph.node.extend(final_nodes)
 
+    return len(data_to_patch), len(scales_to_patch)
+
+
+def fix_fp16_graph(
+    path: str,
+    *,
+    fix_constants: bool = False,
+    fix_attention_sqrt_cast: bool = False,
+    fix_resize: bool = False,
+) -> None:
+    """Apply fp16-compatibility fixes to an ONNX graph in a single load/save cycle.
+
+    Replaces the former three-pass approach (fix_fp32_constants,
+    fix_attention_sqrt_cast_fp32, fix_resize_fp16_input) so the .onnx proto is
+    loaded and written only once regardless of how many fixes are enabled.
+    The .onnx.data weight sidecar is never read or modified.
+    """
+    if not fix_constants and not fix_attention_sqrt_cast and not fix_resize:
+        return
+
+    import onnx
+    model = onnx.load_model(path, load_external_data=False)
+    any_changed = False
+
+    if fix_constants:
+        n = _fix_fp32_constants_inplace(model)
+        if n:
+            print(f"  Fixed {n} embedded fp32 constant(s)")
+            any_changed = True
+
+    if fix_attention_sqrt_cast or fix_resize:
+        out_to_node: dict[str, Any] = {}
+        for node in model.graph.node:
+            for out in node.output:
+                out_to_node[out] = node
+
+    if fix_attention_sqrt_cast:
+        n = _fix_attention_sqrt_cast_inplace(model, out_to_node)
+        if n:
+            print(f"  Fixed {n} Cast(Sqrt->float32) -> Cast(Sqrt->float16)")
+            any_changed = True
+
+    if fix_resize:
+        data_n, scales_n = _fix_resize_fp16_inplace(model, out_to_node)
+        if data_n:
+            print(f"  Wrapped {data_n} Resize data input(s) with Cast(fp16<->fp32) pairs")
+        if scales_n:
+            print(f"  Wrapped {scales_n} Resize scales input(s) with Cast(fp16->fp32)")
+        if data_n or scales_n:
+            any_changed = True
+
+    if not any_changed:
+        return
+
     data_location = os.path.basename(path) + ".data"
     onnx.save_model(
         model, path,
@@ -775,10 +797,6 @@ def fix_resize_fp16_input(path: str) -> None:
         all_tensors_to_one_file=True,
         convert_attribute=False,
     )
-    if data_to_patch:
-        print(f"  Wrapped {len(data_to_patch)} Resize data input(s) with Cast(fp16<->fp32) pairs")
-    if scales_to_patch:
-        print(f"  Wrapped {len(scales_to_patch)} Resize scales input(s) with Cast(fp16->fp32)")
 
 
 def cleanup_stale_component_files(path: str) -> None:
@@ -1174,17 +1192,15 @@ def export_component_to_dir(output_dir: str, spec: ExportComponentSpec) -> Expor
         #    models and for models small enough to have no external data.
         consolidate_external_data(path)
 
-        # 3. Optional graph fixes (ONLY if explicitly enabled).
-        #    Each pass loads with load_external_data=False and saves only the
-        #    graph structure, leaving the .onnx.data file untouched.
-        if spec.fix_fp32_constants:
-            fix_fp32_constants(path)
-
-        if spec.fix_attention_sqrt_cast:
-            fix_attention_sqrt_cast_fp32(path)
-
-        if spec.fix_resize_fp16:
-            fix_resize_fp16_input(path)
+        # 3. Optional graph fixes — single load/save cycle shared across all passes.
+        #    Loads with load_external_data=False and writes only the graph structure;
+        #    the .onnx.data weight sidecar is never read or modified.
+        fix_fp16_graph(
+            path,
+            fix_constants=spec.fix_fp32_constants,
+            fix_attention_sqrt_cast=spec.fix_attention_sqrt_cast,
+            fix_resize=spec.fix_resize_fp16,
+        )
 
         # 4. Optional simplify (LAST)
         if spec.simplify:

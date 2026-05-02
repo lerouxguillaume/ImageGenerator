@@ -185,7 +185,6 @@ After export completes, `import_model.py` extends `model.json` with:
   "type": "sdxl",
   "vae_scaling_factor": 0.13025,
   "capabilities": {
-    "dynamic_shapes": true,
     "vae_encoder_available": true,
     "lora_compatible": true,
     "components": {

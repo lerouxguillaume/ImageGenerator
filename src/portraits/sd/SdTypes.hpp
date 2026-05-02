@@ -20,6 +20,10 @@ struct ModelConfig {
     float     beta_start = 0.00085f;
     float     beta_end   = 0.012f;
     float     vae_scaling_factor = 0.18215f;
+    // Read from capabilities block written by the import pipeline.
+    // Default true preserves legacy behaviour for models without a capabilities block.
+    bool      vaeEncoderAvailable = true;
+    bool      loraCompatible      = true;
 };
 
 // ── Runtime inference context ─────────────────────────────────────────────────

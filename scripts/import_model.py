@@ -70,7 +70,13 @@ def validate_output(output_dir: str, arch: str) -> None:
 # ── Capabilities block ────────────────────────────────────────────────────────
 
 def write_capabilities(output_dir: str, arch: str) -> None:
-    """Extend model.json with a capabilities block after export."""
+    """Extend model.json with a capabilities block after a successful export.
+
+    This is the authoritative source of truth that the C++ pipeline reads to
+    know what the model supports — VAE encoder availability, LoRA compatibility,
+    and per-component dtypes. Written only after validate_output() confirms all
+    expected files exist.
+    """
     path = os.path.join(output_dir, "model.json")
     try:
         with open(path) as f:
@@ -78,7 +84,6 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     except (OSError, json.JSONDecodeError):
         data = {}
 
-    components: dict = {}
     if arch == "sd15":
         components = {
             "text_encoder": {"dtype": "fp16"},
@@ -96,10 +101,9 @@ def write_capabilities(output_dir: str, arch: str) -> None:
         }
 
     data["capabilities"] = {
-        "dynamic_shapes":       True,
         "vae_encoder_available": True,
-        "lora_compatible":      True,
-        "components":           components,
+        "lora_compatible":       True,
+        "components":            components,
     }
 
     with open(path, "w") as f:

@@ -53,4 +53,4 @@ The script auto-detects SD1.5 vs SDXL from `model.json`.  All other files in the
 - VAE encoder uses the same static-shape policy as the VAE decoder (no dynamic axes)
 - SD 1.5 VAE decoder/encoder use static 512×512 shapes; SDXL VAE decoder/encoder use static 1024×1024 shapes
 - fp16 Resize patching is applied by default to fp16 UNet/VAE components; `patch_unet_resize.py` is only for older exports
-- SDXL VAE decoder/encoder require the same `fix_fp32_constants` and `fix_resize_fp16` passes
+- SDXL VAE decoder/encoder require the same fp32-constant and fp16-Resize fixes as the UNet (all applied in a single `fix_fp16_graph` pass)

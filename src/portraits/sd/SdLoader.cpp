@@ -172,10 +172,17 @@ namespace sd {
                 cfg.vae_scaling_factor = 0.13025f;
             }
             cfg.vae_scaling_factor = j.value("vae_scaling_factor", cfg.vae_scaling_factor);
+            if (j.contains("capabilities")) {
+                const auto& caps = j.at("capabilities");
+                cfg.vaeEncoderAvailable = caps.value("vae_encoder_available", cfg.vaeEncoderAvailable);
+                cfg.loraCompatible      = caps.value("lora_compatible",        cfg.loraCompatible);
+            }
             Logger::info("model.json: type=" + type
                          + "  resolution=" + std::to_string(cfg.image_w)
                          + "x" + std::to_string(cfg.image_h)
-                         + "  vae_scaling_factor=" + std::to_string(cfg.vae_scaling_factor));
+                         + "  vae_scaling_factor=" + std::to_string(cfg.vae_scaling_factor)
+                         + "  vae_encoder=" + (cfg.vaeEncoderAvailable ? "yes" : "no")
+                         + "  lora=" + (cfg.loraCompatible ? "yes" : "no"));
         } catch (const std::exception& e) {
             Logger::info(std::string("model.json parse error, defaulting to SD 1.5: ") + e.what());
         }
@@ -238,7 +245,7 @@ namespace sd {
         auto teBundle   = resolveBundle(mdir / "text_encoder.onnx");
         auto unetBundle = resolveBundle(mdir / "unet.onnx");
         auto vaeBundle  = resolveBundle(mdir / "vae_decoder.onnx");
-        const bool hasVaeEncoder = fs::exists(mdir / "vae_encoder.onnx");
+        const bool hasVaeEncoder = cfg.vaeEncoderAvailable && fs::exists(mdir / "vae_encoder.onnx");
         for (const auto* p : {"models/vocab.json", "models/merges.txt"})
             Logger::info((fs::exists(p) ? "  [OK] " : "  [MISSING] ") + std::string(p));
         // text_encoder_2 (SDXL only) is resolved at the point of use below.

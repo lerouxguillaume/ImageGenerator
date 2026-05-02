@@ -19,7 +19,7 @@ import glob
 import os
 import sys
 
-from export_common import fix_resize_fp16_input
+from export_common import fix_fp16_graph
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
 
     for path in onnx_files:
         print(f"Patching {os.path.basename(path)} ...")
-        fix_resize_fp16_input(path)
+        fix_fp16_graph(path, fix_resize=True)
     print("Done.")
 
 

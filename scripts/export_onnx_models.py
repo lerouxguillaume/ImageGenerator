@@ -29,8 +29,7 @@ from export_common import (
     export_component_to_dir,
     load_single_file_pipeline,
     make_vae_encoder_spec,
-    patch_clip_for_tracing,
-    patch_clip_text_model_compat,
+    prepare_libraries_for_export,
     write_model_json,
 )
 
@@ -77,10 +76,8 @@ def export_sd15(model_file: str, output_dir: str, *,
     )
     check_model_file(model_file)
     os.makedirs(output_dir, exist_ok=True)
-    patch_clip_text_model_compat()
-    patch_clip_for_tracing()
-
     t_total = time.time()
+    prepare_libraries_for_export("sd15")
     print("Loading SD 1.5 pipeline ...")
     pipe = load_single_file_pipeline(
         StableDiffusionPipeline,

@@ -45,9 +45,7 @@ from export_common import (
     export_component_to_dir,
     load_single_file_pipeline,
     make_vae_encoder_spec,
-    patch_clip_for_tracing,
-    patch_clip_text_model_compat,
-    patch_fp32_upcasts_for_tracing,
+    prepare_libraries_for_export,
     write_model_json,
 )
 
@@ -108,11 +106,8 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     )
     check_model_file(model_file)
     os.makedirs(output_dir, exist_ok=True)
-    patch_clip_text_model_compat()
-    patch_clip_for_tracing()
-
     t_total = time.time()
-    patch_fp32_upcasts_for_tracing()
+    prepare_libraries_for_export("sdxl")
     print("Loading SDXL pipeline (fp32) ...")
     # Load as fp32 — UNet and VAE are cast to fp16 individually before export
     # to avoid a 10 GB fp32 ONNX intermediate.

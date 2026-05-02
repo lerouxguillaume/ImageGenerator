@@ -34,8 +34,7 @@ from export_common import (
     export_component_to_dir,
     load_single_file_pipeline,
     make_vae_encoder_spec,
-    patch_clip_text_model_compat,
-    patch_fp32_upcasts_for_tracing,
+    prepare_libraries_for_export,
 )
 
 
@@ -77,10 +76,9 @@ def export_vae_encoder(model_dir: str, model_file: str, *, force: bool = False) 
     print(f"Output dir : {model_dir}")
 
     t_total = time.time()
-    patch_clip_text_model_compat()
+    prepare_libraries_for_export("sdxl" if is_sdxl else "sd15")
 
     if is_sdxl:
-        patch_fp32_upcasts_for_tracing()
         from diffusers import StableDiffusionXLPipeline
         print("Loading SDXL pipeline (VAE only) ...")
         pipe = load_single_file_pipeline(

@@ -31,7 +31,6 @@ Models imported via the in-app pipeline also carry a `capabilities` block (writt
   "type": "sdxl",
   "vae_scaling_factor": 0.13025,
   "capabilities": {
-    "dynamic_shapes": true,
     "vae_encoder_available": true,
     "lora_compatible": true,
     "components": {
@@ -45,7 +44,7 @@ Models imported via the in-app pipeline also carry a `capabilities` block (writt
 }
 ```
 
-The `capabilities` block is informational; `SdLoader` does not read it yet. It exists as ground truth for future validation and is the authoritative record of what the export pipeline produced.
+`SdLoader` reads the `capabilities` block when present and stores the values in `ModelConfig` (`vaeEncoderAvailable`, `loraCompatible`). Both default to `true` so models without a capabilities block behave as before. The block is the authoritative record written by the import pipeline after all output files are validated.
 
 The `type` field drives:
 - Output resolution (512×512 for SD1.5, 1024×1024 for SDXL)
@@ -61,8 +60,8 @@ The `vae_scaling_factor` field sets the latent scaling constant used by `encodeI
 Each model produces:
 - UNet session
 - VAE decoder session
-- VAE encoder session (optional — loaded only when `vae_encoder.onnx` exists)
+- VAE encoder session (optional — loaded only when `capabilities.vae_encoder_available` is true **and** `vae_encoder.onnx` exists)
 - CLIP session(s)
 - optional SDXL encoder2 session
 
-`vaeEncoderAvailable` is set to `true` only when the encoder file is found and loaded successfully. Missing the file is not an error — it simply disables img2img for that model directory.
+`vaeEncoderAvailable` is set to `true` only when both conditions hold. For models without a capabilities block the file-existence check alone decides, preserving legacy behaviour.
