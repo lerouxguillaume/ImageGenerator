@@ -19,15 +19,21 @@ std::string nthImagePath(const std::string& firstPath, int index) {
 }
 
 bool applyReferenceIfAvailable(GenerationParams& params,
-                               const GenerationPostProcessSpec& postProcess) {
+                               const GenerationPostProcessSpec& postProcess,
+                               bool vaeEncoderAvailable) {
     const auto& ref = postProcess.reference;
     if (!postProcess.assetMode
         || !ref.enabled
         || !params.initImagePath.empty()
         || ref.imagePath.empty()
-        || !std::filesystem::exists(ref.imagePath)) {
-        if (postProcess.assetMode && ref.enabled && !ref.imagePath.empty())
-            Logger::info("project asset reference requested but unavailable, falling back to txt2img: " + ref.imagePath);
+        || !std::filesystem::exists(ref.imagePath)
+        || !vaeEncoderAvailable) {
+        if (postProcess.assetMode && ref.enabled && !ref.imagePath.empty()) {
+            if (!vaeEncoderAvailable)
+                Logger::info("project asset reference skipped: model has no VAE encoder, running txt2img");
+            else
+                Logger::info("project asset reference requested but unavailable, falling back to txt2img: " + ref.imagePath);
+        }
         return false;
     }
 
@@ -67,7 +73,12 @@ void GenerationService::run(const GenerationJob& job,
                             std::stop_token stopToken) const {
     try {
         GenerationParams effectiveParams = job.params;
-        const bool referenceUsed = applyReferenceIfAvailable(effectiveParams, job.postProcess);
+        if (!job.loraCompatible && !effectiveParams.loras.empty()) {
+            Logger::info("LoRA entries cleared: model does not support LoRA injection");
+            effectiveParams.loras.clear();
+        }
+        const bool referenceUsed = applyReferenceIfAvailable(effectiveParams, job.postProcess,
+                                                              job.vaeEncoderAvailable);
 
         PortraitGeneratorAi::generateFromPrompt(
             job.prompt,

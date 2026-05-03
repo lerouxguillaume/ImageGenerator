@@ -118,11 +118,17 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         drawButton(win, btnModelDropdown_, label, colors.panel,
                    showModelDropdown ? colors.goldLt : colors.text, false, type.body, font);
 
-        const int numSel = static_cast<int>(std::count(loraSelected.begin(), loraSelected.end(), true));
-        const std::string loraLabel = "LoRA (" + std::to_string(numSel) + ")";
-        btnLoraPanel_ = {x + pad + 324.f, y, 110.f, 22.f};
-        drawButton(win, btnLoraPanel_, loraLabel, colors.panel,
-                   showLoraPanel ? colors.goldLt : colors.text, false, type.body, font);
+        if (currentModelLoraCompatible()) {
+            const int numSel = static_cast<int>(std::count(loraSelected.begin(), loraSelected.end(), true));
+            const std::string loraLabel = "LoRA (" + std::to_string(numSel) + ")";
+            btnLoraPanel_ = {x + pad + 324.f, y, 110.f, 22.f};
+            drawButton(win, btnLoraPanel_, loraLabel, colors.panel,
+                       showLoraPanel ? colors.goldLt : colors.text, false, type.body, font);
+        } else {
+            btnLoraPanel_ = {};
+            showLoraPanel = false;
+            drawText(win, font, "No LoRA", colors.muted, x + pad + 336.f, y + 5.f, type.body);
+        }
     }
     y += 30.f;
 
@@ -290,27 +296,35 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             y += editFieldH + 6.f;
         }
 
-        drawText(win, font, "Strength presets:", Col::Muted, x + pad, y + 4.f, 11);
-        const sf::Color subtleCol = generationParams.strength <= 0.35f ? Col::GoldLt : Col::Text;
-        const sf::Color mediumCol = (generationParams.strength > 0.35f && generationParams.strength < 0.7f)
-            ? Col::GoldLt : Col::Text;
-        const sf::Color strongCol = generationParams.strength >= 0.7f ? Col::GoldLt : Col::Text;
-        btnStrengthSubtle_ = {x + pad + 110.f, y, 68.f, 22.f};
-        btnStrengthMedium_ = {x + pad + 184.f, y, 72.f, 22.f};
-        btnStrengthStrong_ = {x + pad + 262.f, y, 68.f, 22.f};
-        drawButton(win, btnStrengthSubtle_, "Subtle", Col::Panel2, subtleCol, false, 11, font);
-        drawButton(win, btnStrengthMedium_, "Medium", Col::Panel2, mediumCol, false, 11, font);
-        drawButton(win, btnStrengthStrong_, "Strong", Col::Panel2, strongCol, false, 11, font);
-        y += 28.f;
+        if (currentModelVaeEncoderAvailable()) {
+            drawText(win, font, "Strength presets:", Col::Muted, x + pad, y + 4.f, 11);
+            const sf::Color subtleCol = generationParams.strength <= 0.35f ? Col::GoldLt : Col::Text;
+            const sf::Color mediumCol = (generationParams.strength > 0.35f && generationParams.strength < 0.7f)
+                ? Col::GoldLt : Col::Text;
+            const sf::Color strongCol = generationParams.strength >= 0.7f ? Col::GoldLt : Col::Text;
+            btnStrengthSubtle_ = {x + pad + 110.f, y, 68.f, 22.f};
+            btnStrengthMedium_ = {x + pad + 184.f, y, 72.f, 22.f};
+            btnStrengthStrong_ = {x + pad + 262.f, y, 68.f, 22.f};
+            drawButton(win, btnStrengthSubtle_, "Subtle", Col::Panel2, subtleCol, false, 11, font);
+            drawButton(win, btnStrengthMedium_, "Medium", Col::Panel2, mediumCol, false, 11, font);
+            drawButton(win, btnStrengthStrong_, "Strong", Col::Panel2, strongCol, false, 11, font);
+            y += 28.f;
 
-        // Strength slider (range 0.05–1.0 step 0.05)
-        strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-        const float strengthNorm = (generationParams.strength - 0.05f) / 0.95f;
-        char strBuf[8];
-        std::snprintf(strBuf, sizeof(strBuf), "%.2f", generationParams.strength);
-        drawSlider(win, font, strengthSliderTrack_, std::clamp(strengthNorm, 0.f, 1.f),
-                   "Strength", strBuf);
-        y += 34.f;
+            strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
+            const float strengthNorm = (generationParams.strength - 0.05f) / 0.95f;
+            char strBuf[8];
+            std::snprintf(strBuf, sizeof(strBuf), "%.2f", generationParams.strength);
+            drawSlider(win, font, strengthSliderTrack_, std::clamp(strengthNorm, 0.f, 1.f),
+                       "Strength", strBuf);
+            y += 34.f;
+        } else {
+            btnStrengthSubtle_ = {};
+            btnStrengthMedium_ = {};
+            btnStrengthStrong_ = {};
+            strengthSliderTrack_ = {};
+            drawText(win, font, "img2img not supported by this model", Col::Muted, x + pad, y + 6.f, 11);
+            y += 24.f;
+        }
     } else {
         if (mode == WorkflowMode::Generate)
             editInstructionArea.setRect({});

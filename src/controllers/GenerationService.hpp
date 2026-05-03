@@ -35,6 +35,8 @@ struct GenerationJob {
     GenerationParams params;
     std::string modelDir;
     GenerationPostProcessSpec postProcess;
+    bool vaeEncoderAvailable = true;
+    bool loraCompatible      = true;
 };
 
 struct GenerationProgress {
@@ -58,6 +60,7 @@ struct CandidateRunJob {
     std::string negativePrompt;
     std::string modelDir;
     GenerationParams baseParams;
+    bool loraCompatible = true;
     std::string runId;
     std::string patronPath;
     std::filesystem::path runPath;

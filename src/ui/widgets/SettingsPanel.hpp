@@ -23,11 +23,22 @@ public:
     GenerationParams generationParams;
 
     // ── Model selection ───────────────────────────────────────────────────────
-    std::vector<std::string> availableModels;     // onnx paths, set by controller from registry
-    std::vector<std::string> availableModelNames; // display names, parallel to availableModels
+    std::vector<std::string> availableModels;           // onnx paths, set by controller from registry
+    std::vector<std::string> availableModelNames;       // display names, parallel to availableModels
+    std::vector<bool>        modelVaeEncoderAvailable;  // parallel to availableModels
+    std::vector<bool>        modelLoraCompatible;       // parallel to availableModels
     int  selectedModelIdx = 0;
     bool showModelDropdown = false;
     std::string activePresetId; // empty when no preset is active
+
+    bool currentModelVaeEncoderAvailable() const {
+        const auto idx = static_cast<size_t>(selectedModelIdx);
+        return idx >= modelVaeEncoderAvailable.size() || modelVaeEncoderAvailable[idx];
+    }
+    bool currentModelLoraCompatible() const {
+        const auto idx = static_cast<size_t>(selectedModelIdx);
+        return idx >= modelLoraCompatible.size() || modelLoraCompatible[idx];
+    }
 
     // ── LoRA selection ────────────────────────────────────────────────────────
     std::vector<std::string> availableLoras;

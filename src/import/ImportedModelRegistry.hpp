@@ -3,12 +3,18 @@
 #include <string>
 #include <vector>
 
+struct ModelCapabilities {
+    bool vaeEncoderAvailable = true; // false → img2img / reference not supported
+    bool loraCompatible      = true; // false → LoRA injection not supported
+};
+
 struct ImportedModel {
     std::string           id;
     std::string           name;
-    std::string           arch;       // "sd15" | "sdxl"
-    std::filesystem::path onnxPath;   // absolute path to the ONNX directory
-    std::string           importedAt; // ISO 8601 UTC
+    std::string           arch;         // "sd15" | "sdxl"
+    std::filesystem::path onnxPath;     // absolute path to the ONNX directory
+    std::string           importedAt;   // ISO 8601 UTC
+    ModelCapabilities     capabilities; // populated from model.json at load time
 };
 
 class ImportedModelRegistry {

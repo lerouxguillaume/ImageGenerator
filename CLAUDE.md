@@ -56,12 +56,14 @@ The binary expects `models/vocab.json` and `models/merges.txt` in the working di
 → `src/controllers/CandidateRunPipeline.cpp` (candidate-run execution)
 
 Key facts:
-- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, and post-process spec
-- `CandidateRunJob` carries the full candidate pipeline spec (patron path, run dirs, explore/refine counts, scoring spec)
+- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, post-process spec, and model capabilities (`vaeEncoderAvailable`, `loraCompatible`)
+- `CandidateRunJob` carries the full candidate pipeline spec (patron path, run dirs, explore/refine counts, scoring spec) plus `loraCompatible`
 - `GenerationService::run()` handles reference normalization, single/multi-image generation, and post-processing; both `run()` and `runCandidateRun()` return `void`
+- `GenerationService` uses `job.vaeEncoderAvailable` to skip reference normalization before the pipeline sees it; uses `job.loraCompatible` to clear any LoRA entries defensively — neither silently falls back
 - `GenerationProgress` holds three nullable atomic pointers: `step` (denoising step counter), `currentImage` (1-based image index), and `stage` (`atomic<GenerationStage>*`) — all owned by `ResultPanel`
 - `GenerationCallbacks` / `CandidateRunCallbacks` carry typed `onResult` / `onError` functors; the service catches all exceptions internally and routes them through `onError` — exceptions never reach the caller thread
 - `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone`; it has no exception handling or business logic
+- `cachedModelType_` is updated in `update()` on model change; `launchGeneration`, `launchCandidateRun`, and `launchEnhancement` all use it — `inferModelType()` is only called from `update()`
 - `GenerationStage` enum is in `src/enum/enums.hpp`; standard generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`; candidate runs: `Exploring → Scoring → Refining → WritingManifest → Done`
 - Candidate runs do NOT forward `stage` into inner `generateFromPrompt` calls — coarse outer stages own the label
 - `GenerationResult` returns raw output paths and a `referenceUsed` flag
@@ -110,6 +112,8 @@ Key facts:
 - Never read `ModelImporter::getOutputDir()` / `getModelId()` before `State::Done`
 - **Model discovery is registry-only** — `ImageGeneratorController` reads `ImportedModelRegistry` to populate the model list; there is no filesystem scan of a model base directory
 - The registry is watched by mtime in `ImageGeneratorController::update()` — newly imported models appear automatically when the user navigates to the generator screen
+- `ImportedModel` carries `ModelCapabilities` (`vaeEncoderAvailable`, `loraCompatible`) populated from `model.json` at registry load time; defaults to `true` for models without a capabilities block
+- `SettingsPanel` exposes `modelVaeEncoderAvailable` / `modelLoraCompatible` vectors (parallel to `availableModels`) and helpers `currentModelVaeEncoderAvailable()` / `currentModelLoraCompatible()`; the LoRA button is hidden and the strength slider is replaced with a note when the selected model lacks the capability
 
 ## LLM prompt enhancement — `OrtLlmEnhancer` (optional)
 → docs/60_llm/llm_overview.md  

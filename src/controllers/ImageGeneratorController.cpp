@@ -562,13 +562,12 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     Prompt            userDsl   = PromptParser::parse(sp.positiveArea.getText(),
                                                       sp.negativeArea.getText());
     Prompt dsl = buildAssetPrompt(projectContext_, userDsl);
-    const ModelType   modelType = inferModelType(modelDir);
 
     const std::string modelKey = std::filesystem::path(modelDir).filename().string();
     if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
         injectBoosters(dsl, it->second);
 
-    const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
+    const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, cachedModelType_), view);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rawOutPath.string();
     GenerationParams params = sp.generationParams;
@@ -577,10 +576,12 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         catch (const std::exception&) { params.seed = -1; }
     }
 
-    for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
-        if (i < sp.loraSelected.size() && sp.loraSelected[i])
-            params.loras.push_back({sp.availableLoras[i],
-                                    i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+    if (sp.currentModelLoraCompatible()) {
+        for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
+            if (i < sp.loraSelected.size() && sp.loraSelected[i])
+                params.loras.push_back({sp.availableLoras[i],
+                                        i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+        }
     }
 
     GenerationProgress progress;
@@ -593,6 +594,8 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.outputPath = outPath;
     job.params = params;
     job.modelDir = modelDir;
+    job.vaeEncoderAvailable = sp.currentModelVaeEncoderAvailable();
+    job.loraCompatible      = sp.currentModelLoraCompatible();
     job.postProcess.assetMode = assetModeEnabled;
     job.postProcess.requiresTransparency = projectContext_.spec.requiresTransparency;
     job.postProcess.processedDir = artifacts.processedDir();
@@ -670,12 +673,11 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     Prompt dsl = buildAssetPrompt(projectContext_, userDsl);
     injectWallCandidatePrompt(dsl);
 
-    const ModelType modelType = inferModelType(modelDir);
     const std::string modelKey = std::filesystem::path(modelDir).filename().string();
     if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
         injectBoosters(dsl, it->second);
 
-    const std::string prompt = buildEditPrompt(PromptCompiler::compile(dsl, modelType), view);
+    const std::string prompt = buildEditPrompt(PromptCompiler::compile(dsl, cachedModelType_), view);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
 
     const AssetSpec spec = projectContext_.spec;
@@ -688,16 +690,19 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
         try { baseParams.seed = std::stoll(sp.seedInput); }
         catch (const std::exception&) { baseParams.seed = -1; }
     }
-    for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
-        if (i < sp.loraSelected.size() && sp.loraSelected[i])
-            baseParams.loras.push_back({sp.availableLoras[i],
-                                        i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+    if (sp.currentModelLoraCompatible()) {
+        for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
+            if (i < sp.loraSelected.size() && sp.loraSelected[i])
+                baseParams.loras.push_back({sp.availableLoras[i],
+                                            i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
+        }
     }
 
     CandidateRunJob job;
     job.prompt               = prompt;
     job.negativePrompt       = negPrompt;
     job.modelDir             = modelDir;
+    job.loraCompatible       = sp.currentModelLoraCompatible();
     job.baseParams           = baseParams;
     job.runId                = runId;
     job.patronPath           = patronPath;
@@ -775,12 +780,11 @@ void ImageGeneratorController::launchEnhancement(ImageGeneratorView& view) {
             effectiveInstruction = it->second.llmHint;
     }
 
-    const ModelType modelType = inferModelType(modelDir);
-
     std::shared_ptr<IPromptEnhancer> enhCopy = enhancer;
 
     enhancementFuture_ = std::async(std::launch::async,
-        [posCapture, effectiveInstruction, modelType, enhCopy, strength = sp.generationParams.strength]() -> LLMResponse {
+        [posCapture, effectiveInstruction, modelType = cachedModelType_,
+         enhCopy, strength = sp.generationParams.strength]() -> LLMResponse {
             LLMRequest req;
             req.prompt      = posCapture;
             req.instruction = effectiveInstruction;
@@ -1093,10 +1097,14 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     if (modelsDirty) {
         sp.availableModels.clear();
         sp.availableModelNames.clear();
+        sp.modelVaeEncoderAvailable.clear();
+        sp.modelLoraCompatible.clear();
         ImportedModelRegistry reg(importedRegistryPath());
         for (const auto& model : reg.list()) {
             sp.availableModels.push_back(model.onnxPath.string());
             sp.availableModelNames.push_back(model.name);
+            sp.modelVaeEncoderAvailable.push_back(model.capabilities.vaeEncoderAvailable);
+            sp.modelLoraCompatible.push_back(model.capabilities.loraCompatible);
         }
         sp.selectedModelIdx = 0;
         modelsDirty = false;

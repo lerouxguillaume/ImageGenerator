@@ -47,6 +47,21 @@ bool ImportedModelRegistry::exists(const std::string& id) const {
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
+static ModelCapabilities loadCapabilities(const std::filesystem::path& onnxPath) {
+    ModelCapabilities caps;
+    std::ifstream f(onnxPath / "model.json");
+    if (!f) return caps;
+    try {
+        const auto j = nlohmann::json::parse(f);
+        if (j.contains("capabilities")) {
+            const auto& c = j["capabilities"];
+            caps.vaeEncoderAvailable = c.value("vae_encoder_available", true);
+            caps.loraCompatible      = c.value("lora_compatible",       true);
+        }
+    } catch (...) {}
+    return caps;
+}
+
 void ImportedModelRegistry::load() {
     std::ifstream f(registryPath_);
     if (!f) return;
@@ -59,7 +74,10 @@ void ImportedModelRegistry::load() {
             m.arch       = entry.value("arch",       std::string{});
             m.onnxPath   = entry.value("onnxPath",   std::string{});
             m.importedAt = entry.value("importedAt", std::string{});
-            if (!m.id.empty()) models_.push_back(std::move(m));
+            if (!m.id.empty()) {
+                m.capabilities = loadCapabilities(m.onnxPath);
+                models_.push_back(std::move(m));
+            }
         }
     } catch (...) {}
 }
