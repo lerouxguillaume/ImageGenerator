@@ -209,12 +209,30 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
         return;
     }
 
-    const std::vector<std::string> args = {
+    // Detect a partial export: output dir exists but model.json is absent,
+    // meaning a previous run started but did not complete.
+    bool resumeExport = false;
+    try {
+        if (std::filesystem::exists(outDir) && !std::filesystem::exists(outDir / "model.json")) {
+            for (const auto& entry : std::filesystem::directory_iterator(outDir)) {
+                if (entry.path().extension() == ".onnx") {
+                    resumeExport = true;
+                    break;
+                }
+            }
+        }
+    } catch (...) {}
+
+    std::vector<std::string> args = {
         pythonPath.string(), scriptPath.string(),
         "--input",  path.string(),
         "--output", outDir.string(),
         "--arch",   archOverride,
     };
+    if (resumeExport) {
+        args.push_back("--resume");
+        appendLog("Partial export detected — resuming from last completed component.");
+    }
 
     // Open a persistent log file so the full output survives past the modal's
     // visible line limit. Written to the output directory so it stays with the model.

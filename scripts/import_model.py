@@ -73,39 +73,24 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     """Extend model.json with a capabilities block after a successful export.
 
     This is the authoritative source of truth that the C++ pipeline reads to
-    know what the model supports — VAE encoder availability, LoRA compatibility,
-    and per-component dtypes. Written only after validate_output() confirms all
-    expected files exist.
+    know what the model supports — VAE encoder availability and LoRA compatibility.
+    Written only after validate_output() confirms all expected files exist.
     """
     path = os.path.join(output_dir, "model.json")
     try:
         with open(path) as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        data = {}
-
-    if arch == "sd15":
-        components = {
-            "text_encoder": {"dtype": "fp16"},
-            "unet":         {"dtype": "fp16"},
-            "vae_decoder":  {"dtype": "fp16"},
-            "vae_encoder":  {"dtype": "fp16"},
-        }
-    else:
-        components = {
-            "text_encoder":   {"dtype": "fp32"},
-            "text_encoder_2": {"dtype": "fp32"},
-            "unet":           {"dtype": "fp16"},
-            "vae_decoder":    {"dtype": "fp16"},
-            "vae_encoder":    {"dtype": "fp16"},
-        }
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(
+            f"model.json missing or corrupt before writing capabilities: {e}\n"
+            f"Expected at: {path}"
+        ) from e
 
     vae_encoder_available = os.path.exists(os.path.join(output_dir, "vae_encoder.onnx"))
 
     data["capabilities"] = {
         "vae_encoder_available": vae_encoder_available,
         "lora_compatible":       True,
-        "components":            components,
     }
 
     with open(path, "w") as f:
@@ -114,7 +99,7 @@ def write_capabilities(output_dir: str, arch: str) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run_import(model_file: str, output_dir: str, arch: str) -> None:
+def run_import(model_file: str, output_dir: str, arch: str, resume: bool = False) -> None:
     # The scripts live in the same directory as this file.
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     if scripts_dir not in sys.path:
@@ -140,11 +125,11 @@ def run_import(model_file: str, output_dir: str, arch: str) -> None:
     if arch == "sd15":
         print(f"PROGRESS:exporting_sd15", flush=True)
         from export_onnx_models import export_sd15
-        export_sd15(model_file, output_dir, resume=False, validate=False)
+        export_sd15(model_file, output_dir, resume=resume, validate=False)
     elif arch == "sdxl":
         print(f"PROGRESS:exporting_sdxl", flush=True)
         from sdxl_export_onnx_models import export_sdxl
-        export_sdxl(model_file, output_dir, resume=False, validate=False)
+        export_sdxl(model_file, output_dir, resume=resume, validate=False)
     else:
         print(f"ERROR:Unknown architecture '{arch}'", flush=True)
         sys.exit(1)
@@ -168,13 +153,18 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "sd15", "sdxl"],
         help="Model architecture (default: auto-detect)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip components whose output files already exist (resume an interrupted export)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     try:
-        run_import(args.input, args.output, args.arch)
+        run_import(args.input, args.output, args.arch, resume=args.resume)
     except (FileNotFoundError, ImportError) as e:
         print(f"ERROR:{e}", flush=True)
         sys.exit(1)

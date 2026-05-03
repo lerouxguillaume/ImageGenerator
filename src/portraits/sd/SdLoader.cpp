@@ -406,6 +406,11 @@ namespace sd {
         // Cache I/O names — GetInputNameAllocated returns a temporary, copy to std::string.
         ctx.te_input  = ctx.text_encoder.GetInputNameAllocated(0,  ctx.allocator).get();
         ctx.te_output = ctx.text_encoder.GetOutputNameAllocated(0, ctx.allocator).get();
+        if (ctx.text_encoder.GetInputCount() > 1) {
+            ctx.te_has_attn_mask = true;
+            ctx.te_attn_mask = ctx.text_encoder.GetInputNameAllocated(1, ctx.allocator).get();
+            Logger::info("text_encoder: attention_mask input detected (" + ctx.te_attn_mask + ")");
+        }
         ctx.unet_in0  = ctx.unet.GetInputNameAllocated(0,  ctx.allocator).get();
         ctx.unet_in1  = ctx.unet.GetInputNameAllocated(1,  ctx.allocator).get();
         ctx.unet_in2  = ctx.unet.GetInputNameAllocated(2,  ctx.allocator).get();
@@ -423,6 +428,11 @@ namespace sd {
             ctx.te2_pooled = ctx.text_encoder_2.GetOutputNameAllocated(1, ctx.allocator).get();
             ctx.unet_in3   = ctx.unet.GetInputNameAllocated(3, ctx.allocator).get();
             ctx.unet_in4   = ctx.unet.GetInputNameAllocated(4, ctx.allocator).get();
+            if (ctx.text_encoder_2.GetInputCount() > 1) {
+                ctx.te2_has_attn_mask = true;
+                ctx.te2_attn_mask = ctx.text_encoder_2.GetInputNameAllocated(1, ctx.allocator).get();
+                Logger::info("text_encoder_2: attention_mask input detected (" + ctx.te2_attn_mask + ")");
+            }
         }
 
         ctx.unetExpectsFp32 =

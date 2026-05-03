@@ -165,14 +165,33 @@ std::vector<float> encodeText(const std::string& prompt,
 
     auto tEnc = Clock::now();
     std::vector<int64_t> token_shape = {1, 77};
-    Ort::Value token_tensor = Ort::Value::CreateTensor<int64_t>(
-        ctx.memory_info, token_ids.data(), token_ids.size(),
-        token_shape.data(), token_shape.size());
 
-    const char* in_names[]  = {ctx.te_input.c_str()};
+    std::vector<Ort::Value> te_inputs;
+    te_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+        ctx.memory_info, token_ids.data(), token_ids.size(),
+        token_shape.data(), token_shape.size()));
+
+    // Declared outside the if-block so its backing buffer outlives the Ort::Value
+    // that references it; CreateTensor holds a raw pointer, not a copy.
+    std::vector<int64_t> attn_mask;
+    std::vector<const char*> in_names = {ctx.te_input.c_str()};
+    if (ctx.te_has_attn_mask) {
+        constexpr int64_t EOS = 49407;
+        attn_mask.assign(77, 0);
+        bool past_eos = false;
+        for (int i = 0; i < 77; ++i) {
+            if (!past_eos) { attn_mask[i] = 1; if (token_ids[i] == EOS) past_eos = true; }
+        }
+        te_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+            ctx.memory_info, attn_mask.data(), attn_mask.size(),
+            token_shape.data(), token_shape.size()));
+        in_names.push_back(ctx.te_attn_mask.c_str());
+    }
+
     const char* out_names[] = {ctx.te_output.c_str()};
     auto te_out = ctx.text_encoder.Run(Ort::RunOptions{nullptr},
-                                       in_names, &token_tensor, 1, out_names, 1);
+                                       in_names.data(), te_inputs.data(), te_inputs.size(),
+                                       out_names, 1);
     Logger::info("  text encoder run: " + fmtMs(tEnc));
 
     auto shape_info = te_out.front().GetTensorTypeAndShapeInfo();
@@ -221,29 +240,57 @@ std::vector<float> encodeTextSDXL(const std::string& prompt,
 
     std::vector<int64_t> token_shape = {1, 77};
 
+    // Build attention mask once — same token_ids are used for both encoders.
+    // 1 for all positions up to and including the first EOS, 0 for padding after.
+    std::vector<int64_t> attn_mask_data;
+    if (ctx.te_has_attn_mask || ctx.te2_has_attn_mask) {
+        constexpr int64_t EOS = 49407;
+        attn_mask_data.assign(77, 0);
+        bool past_eos = false;
+        for (int i = 0; i < 77; ++i) {
+            if (!past_eos) { attn_mask_data[i] = 1; if (token_ids[i] == EOS) past_eos = true; }
+        }
+    }
+
     // ── Encoder 1: CLIP-L → (1, 77, 768) ─────────────────────────────────────
-    Ort::Value tokens1 = Ort::Value::CreateTensor<int64_t>(
+    std::vector<Ort::Value> enc1_inputs;
+    enc1_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
         ctx.memory_info, token_ids.data(), token_ids.size(),
-        token_shape.data(), token_shape.size());
-    const char* enc1_in[]  = {ctx.te_input.c_str()};
+        token_shape.data(), token_shape.size()));
+    std::vector<const char*> enc1_in = {ctx.te_input.c_str()};
+    if (ctx.te_has_attn_mask) {
+        enc1_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+            ctx.memory_info, attn_mask_data.data(), attn_mask_data.size(),
+            token_shape.data(), token_shape.size()));
+        enc1_in.push_back(ctx.te_attn_mask.c_str());
+    }
     const char* enc1_out[] = {ctx.te_output.c_str()};
     auto tEnc1 = Clock::now();
     auto enc1_result = ctx.text_encoder.Run(Ort::RunOptions{nullptr},
-                                            enc1_in, &tokens1, 1, enc1_out, 1);
+                                            enc1_in.data(), enc1_inputs.data(), enc1_inputs.size(),
+                                            enc1_out, 1);
     Logger::info("  CLIP-L run: " + fmtMs(tEnc1));
     auto shape1 = enc1_result.front().GetTensorTypeAndShapeInfo().GetShape();
     auto emb1   = tensorToFloat(enc1_result.front());
     const int dim1 = static_cast<int>(shape1[2]); // 768
 
     // ── Encoder 2: OpenCLIP-G → (1, 77, 1280) + pooled (1, 1280) ─────────────
-    Ort::Value tokens2 = Ort::Value::CreateTensor<int64_t>(
+    std::vector<Ort::Value> enc2_inputs;
+    enc2_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
         ctx.memory_info, token_ids.data(), token_ids.size(),
-        token_shape.data(), token_shape.size());
-    const char* enc2_in[]  = {ctx.te2_input.c_str()};
+        token_shape.data(), token_shape.size()));
+    std::vector<const char*> enc2_in = {ctx.te2_input.c_str()};
+    if (ctx.te2_has_attn_mask) {
+        enc2_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+            ctx.memory_info, attn_mask_data.data(), attn_mask_data.size(),
+            token_shape.data(), token_shape.size()));
+        enc2_in.push_back(ctx.te2_attn_mask.c_str());
+    }
     const char* enc2_out[] = {ctx.te2_output.c_str(), ctx.te2_pooled.c_str()};
     auto tEnc2 = Clock::now();
     auto enc2_result = ctx.text_encoder_2.Run(Ort::RunOptions{nullptr},
-                                              enc2_in, &tokens2, 1, enc2_out, 2);
+                                              enc2_in.data(), enc2_inputs.data(), enc2_inputs.size(),
+                                              enc2_out, 2);
     Logger::info("  OpenCLIP-G run: " + fmtMs(tEnc2));
     auto shape2 = enc2_result[0].GetTensorTypeAndShapeInfo().GetShape();
     auto emb2   = tensorToFloat(enc2_result[0]);

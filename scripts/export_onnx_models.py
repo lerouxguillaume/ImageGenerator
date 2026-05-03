@@ -44,8 +44,8 @@ class CLIPTextEncoderClipSkip2(torch.nn.Module):
         super().__init__()
         self.text_encoder = text_encoder
 
-    def forward(self, input_ids):
-        out = self.text_encoder(input_ids, output_hidden_states=True)
+    def forward(self, input_ids, attention_mask):
+        out = self.text_encoder(input_ids, attention_mask=attention_mask, output_hidden_states=True)
         hidden = out.hidden_states[-2]
 
         # transformers >= 4.47 flattened CLIPTextModel; text_model may not exist
@@ -93,6 +93,7 @@ def export_sd15(model_file: str, output_dir: str, *,
 
     # 1. Text encoder ─────────────────────────────────────────────────────────
     dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, 77), dtype=torch.int64)
+    dummy_attn_mask = torch.ones(1, 77, dtype=torch.int64)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -101,13 +102,15 @@ def export_sd15(model_file: str, output_dir: str, *,
                 component_name="text_encoder",
                 filename="text_encoder.onnx",
                 model=CLIPTextEncoderClipSkip2(pipe.text_encoder).eval(),
-                dummy_inputs=dummy_ids,
-                input_names=["input_ids"],
+                dummy_inputs=(dummy_ids, dummy_attn_mask),
+                input_names=["input_ids", "attention_mask"],
                 output_names=["text_embeds", "hidden_latent"],
-                dynamic_axes=policy.text_encoder_dynamic_axes(
-                    "input_ids",
-                    ["text_embeds", "hidden_latent"],
-                ),
+                dynamic_axes={
+                    "input_ids":      {0: "batch"},
+                    "attention_mask": {0: "batch"},
+                    "text_embeds":    {0: "batch"},
+                    "hidden_latent":  {0: "batch"},
+                },
                 export_lora_weights=True,
                 skip_if_complete=resume,
                 validate=validate,
@@ -116,7 +119,7 @@ def export_sd15(model_file: str, output_dir: str, *,
         ),
     )
     pipe.text_encoder = None
-    del dummy_ids
+    del dummy_ids, dummy_attn_mask
     gc.collect()
 
     # 2. UNet ─────────────────────────────────────────────────────────────────

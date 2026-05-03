@@ -60,8 +60,8 @@ class CLIPL_Wrapper(torch.nn.Module):
         super().__init__()
         self.text_encoder = text_encoder
 
-    def forward(self, input_ids):
-        out = self.text_encoder(input_ids, output_hidden_states=True)
+    def forward(self, input_ids, attention_mask):
+        out = self.text_encoder(input_ids, attention_mask=attention_mask, output_hidden_states=True)
         return out.hidden_states[-2]
 
 
@@ -72,8 +72,8 @@ class OpenCLIPG_Wrapper(torch.nn.Module):
         super().__init__()
         self.text_encoder = text_encoder
 
-    def forward(self, input_ids):
-        out = self.text_encoder(input_ids, output_hidden_states=True)
+    def forward(self, input_ids, attention_mask):
+        out = self.text_encoder(input_ids, attention_mask=attention_mask, output_hidden_states=True)
         return out.hidden_states[-2], out.text_embeds
 
 
@@ -135,6 +135,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
 
     # 1. CLIP-L text encoder ──────────────────────────────────────────────────
     dummy_ids = torch.randint(0, pipe.tokenizer.vocab_size, (1, SEQ_LEN), dtype=torch.int64)
+    dummy_attn_mask = torch.ones(1, SEQ_LEN, dtype=torch.int64)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -143,10 +144,14 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 component_name="text_encoder",
                 filename="text_encoder.onnx",
                 model=CLIPL_Wrapper(pipe.text_encoder).eval(),
-                dummy_inputs=(dummy_ids,),
-                input_names=["input_ids"],
+                dummy_inputs=(dummy_ids, dummy_attn_mask),
+                input_names=["input_ids", "attention_mask"],
                 output_names=["hidden_states"],
-                dynamic_axes=policy.text_encoder_dynamic_axes("input_ids", ["hidden_states"]),
+                dynamic_axes={
+                    "input_ids":      {0: "batch"},
+                    "attention_mask": {0: "batch"},
+                    "hidden_states":  {0: "batch"},
+                },
                 export_lora_weights=True,
                 skip_if_complete=resume,
                 validate=validate,
@@ -155,11 +160,12 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
         )
     )
     pipe.text_encoder = None
-    del dummy_ids
+    del dummy_ids, dummy_attn_mask
     gc.collect()
 
     # 2. OpenCLIP-G text encoder ──────────────────────────────────────────────
     dummy_ids_2 = torch.randint(0, pipe.tokenizer_2.vocab_size, (1, SEQ_LEN), dtype=torch.int64)
+    dummy_attn_mask_2 = torch.ones(1, SEQ_LEN, dtype=torch.int64)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -168,13 +174,15 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 component_name="text_encoder_2",
                 filename="text_encoder_2.onnx",
                 model=OpenCLIPG_Wrapper(pipe.text_encoder_2).eval(),
-                dummy_inputs=(dummy_ids_2,),
-                input_names=["input_ids"],
+                dummy_inputs=(dummy_ids_2, dummy_attn_mask_2),
+                input_names=["input_ids", "attention_mask"],
                 output_names=["hidden_states", "text_embeds"],
-                dynamic_axes=policy.text_encoder_dynamic_axes(
-                    "input_ids",
-                    ["hidden_states", "text_embeds"],
-                ),
+                dynamic_axes={
+                    "input_ids":      {0: "batch"},
+                    "attention_mask": {0: "batch"},
+                    "hidden_states":  {0: "batch"},
+                    "text_embeds":    {0: "batch"},
+                },
                 export_lora_weights=True,
                 skip_if_complete=resume,
                 validate=validate,
@@ -183,7 +191,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
         ),
     )
     pipe.text_encoder_2 = None
-    del dummy_ids_2
+    del dummy_ids_2, dummy_attn_mask_2
     gc.collect()
 
     # 3. UNet ─────────────────────────────────────────────────────────────────

@@ -101,10 +101,15 @@ static bool isSupportedPython(const std::vector<std::string>& command) {
     int minor = 0;
     if (!parsePythonVersion(versionLine, major, minor)) return false;
 
-    // The SD single-file export stack is validated on these versions. Newer
-    // Python releases pull newer transformers/diffusers behavior that leaves
-    // CLIP weights on the meta device under Windows.
+    // Python 3.13+ on Windows pulls transformers behavior that leaves CLIP
+    // weights on the meta device with single-file loading.  The pip-pinned
+    // transformers<4.47 constraint mitigates this, but cap at 3.12 on Windows
+    // as an extra guard.  On Linux/macOS 3.13+ works with the pinned deps.
+#ifdef _WIN32
     return major == 3 && minor >= 10 && minor <= 12;
+#else
+    return major == 3 && minor >= 10;
+#endif
 }
 
 #ifdef _WIN32

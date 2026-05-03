@@ -982,9 +982,19 @@ def consolidate_external_data(path: str) -> None:
         raise
 
     # Serialize the updated graph structure (no tensor bytes — those stay in
-    # the .data file we just wrote).
-    with open(abs_path, "wb") as f:
-        f.write(model.SerializeToString())
+    # the .data file we just wrote).  Write to a temp file then rename so a
+    # crash mid-write never leaves a partially-written graph proto.
+    proto_tmp = abs_path + ".proto_tmp"
+    try:
+        with open(proto_tmp, "wb") as f:
+            f.write(model.SerializeToString())
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        os.rename(proto_tmp, abs_path)
+    except Exception:
+        if os.path.exists(proto_tmp):
+            os.remove(proto_tmp)
+        raise
 
     # Remove old per-tensor sidecar files
     removed = 0
@@ -1097,14 +1107,15 @@ def _export_lora_weights(model: torch.nn.Module, output_path: str) -> None:
 
 
 def _is_component_complete(path: str, spec: ExportComponentSpec) -> bool:
-    """Return True if all output files for a component already exist on disk."""
-    if not os.path.exists(path):
+    """Return True if all output files for a component already exist and are non-empty."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
         return False
-    if not os.path.exists(path + ".data"):
+    data_path = path + ".data"
+    if not os.path.exists(data_path) or os.path.getsize(data_path) == 0:
         return False
     if spec.export_lora_weights:
         weights = os.path.splitext(path)[0] + "_weights.safetensors"
-        if not os.path.exists(weights):
+        if not os.path.exists(weights) or os.path.getsize(weights) == 0:
             return False
     return True
 

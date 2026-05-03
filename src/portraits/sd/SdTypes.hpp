@@ -57,7 +57,11 @@ struct GenerationContext {
 
     // I/O names — populated by loadModels(), used by the encoder/UNet/VAE passes.
     std::string te_input,  te_output;                    // text encoder 1
+    bool        te_has_attn_mask = false;                // true if model has attention_mask input
+    std::string te_attn_mask;                            // attention_mask input name
     std::string te2_input, te2_output, te2_pooled;       // text encoder 2 (SDXL)
+    bool        te2_has_attn_mask = false;               // true if text encoder 2 has attention_mask input
+    std::string te2_attn_mask;                           // attention_mask input name for encoder 2
     std::string unet_in0, unet_in1, unet_in2,            // latent, timestep, embed
                 unet_in3, unet_in4,                      // SDXL: text_embeds, time_ids
                 unet_out0;
