@@ -73,6 +73,16 @@
 
 ## High Priority
 
+- `loadCapabilities()` should cross-check file existence, not only the flag.
+  `import_model.py` always writes `vae_encoder_available: true`; the import script does not
+  verify which ONNX files were actually produced. `SdLoader` guards against this at inference
+  time (`cfg.vaeEncoderAvailable && fs::exists(mdir / "vae_encoder.onnx")`), but
+  `loadCapabilities()` in `ImportedModelRegistry.cpp` trusts the flag alone. A model exported
+  without `vae_encoder.onnx` therefore shows the strength slider and reference controls in the
+  UI even though img2img will silently fall back. Fix: after reading the flag, override with
+  `std::filesystem::exists(onnxPath / "vae_encoder.onnx")` so the registry matches `SdLoader`'s
+  own check.
+
 - Split cached model state from per-run mutable state in the SD pipeline.
   Today `ModelManager` returns a shared `GenerationContext` that is mutated during each run
   (guidance, embeddings, time ids, latent shape, `run_opts`). This blocks safe concurrent
@@ -105,6 +115,35 @@
   ~~a minimal thread spawner with no exception handling or business logic.~~
 
 ## Medium Priority
+
+- Replace `inferModelType()` with `arch` from the registry.
+  `inferModelType()` is still called once in `ImageGeneratorController::update()` on every
+  model selection change, re-reading `model.json` from disk. `ImportedModel::arch` already
+  stores "sd15"/"sdxl" and is loaded at registry construction. Add a `ModelType` entry to the
+  `SettingsPanel` parallel model vectors (`availableModelTypes`, alongside the existing
+  `availableModels`/`availableModelNames`/`modelVaeEncoderAvailable`/`modelLoraCompatible`)
+  and replace `inferModelType()` with a direct lookup. This removes the last per-model-change
+  disk read and makes `inferModelType()` unused.
+
+- Show model type badge in the model selector dropdown.
+  `ImportedModel::arch` is available but not surfaced anywhere in the UI. Once the arch is in
+  `SettingsPanel`'s parallel vectors (see above), rendering a small "SD1.5" or "SDXL" label
+  alongside each model name in the dropdown requires no extra disk reads and gives users
+  immediate confirmation of which architecture they selected.
+
+- Import script: write accurate `vae_encoder_available` based on export output.
+  `import_model.py` currently always writes `vae_encoder_available: true` in the capabilities
+  block regardless of which ONNX files were actually produced. After exporting, check whether
+  `vae_encoder.onnx` exists in the output directory before writing the flag. Same applies to
+  `lora_compatible` — detect actual weight compatibility rather than defaulting to true. This
+  makes the flag trustworthy and removes the need for the file-existence override in
+  `loadCapabilities()`.
+
+- Prune missing models from the registry at load time.
+  If an imported model directory is deleted manually, `ImportedModelRegistry::load()` still
+  returns the entry. The model appears in the dropdown and any attempt to generate fails at
+  `SdLoader`. Filter out entries where `onnxPath` no longer exists during `load()`, and log
+  each pruned entry so the user knows why it disappeared.
 
 - Replace per-image thumbnail `std::async` spawning with a bounded thumbnail worker queue.
   (`ImageGeneratorController.cpp:1162–1177`) Gallery refresh currently launches one async task
@@ -146,6 +185,13 @@
   (`ImageGeneratorController.hpp:86–88`) Each new configurable path requires a new enum value,
   a new switch case in `update()`, and a new entry in `openSettings()`. A map of browse
   targets and their descriptions removes all three edits.
+
+- Sort the model dropdown by most recently imported.
+  `ImportedModel::importedAt` is populated on import, round-tripped through `registry.json`,
+  and loaded back into the registry — but never used. Sort `availableModels` (and all parallel
+  vectors) by descending `importedAt` when populating the `SettingsPanel` model list so the
+  most recently imported model is pre-selected. Optionally show the date in the dropdown
+  tooltip.
 
 - Add `valid()` invariant check to `ResolvedProjectContext`.
   (`src/projects/Project.hpp:108–126`) The struct can be constructed with `projectId` set but

@@ -152,9 +152,8 @@ void runPipeline(const std::string& prompt,
 
     if (stage) stage->store(GenerationStage::EncodingText);
     auto tEncode = Clock::now();
-    // vocab/merges live in the base model dir (parent of the specific model subdir).
-    const std::string baseDir = std::filesystem::path(modelDir).parent_path().string();
-    ClipTokenizer tokenizer(baseDir + "/vocab.json", baseDir + "/merges.txt");
+    // vocab/merges are always at models/ relative to the working directory.
+    ClipTokenizer tokenizer("models/vocab.json", "models/merges.txt");
     if (cfg.type == ModelType::SDXL) {
         ctx.text_embed   = encodeTextSDXL(prompt,     tokenizer, ctx, ctx.embed_shape, ctx.text_embeds_pool);
         ctx.uncond_embed = encodeTextSDXL(neg_prompt, tokenizer, ctx, ctx.embed_shape, ctx.uncond_embeds_pool);
