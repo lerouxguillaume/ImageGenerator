@@ -1,4 +1,5 @@
 #include "ImageGeneratorController.hpp"
+#include "../import/ImportedModelRegistry.hpp"
 #include "../assets/AssetArtifactStore.hpp"
 #include "../assets/CandidateScorer.hpp"
 #include "../postprocess/AssetValidator.hpp"
@@ -83,6 +84,20 @@ static std::string browseForFolder(const std::string& startPath) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+static std::filesystem::path executableDir() {
+#ifdef _WIN32
+    char buf[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    return std::filesystem::path(buf).parent_path();
+#else
+    return std::filesystem::read_symlink("/proc/self/exe").parent_path();
+#endif
+}
+
+static std::filesystem::path importedRegistryPath() {
+    return executableDir() / "models" / "imported" / "registry.json";
+}
+
 static ModelType inferModelType(const std::string& modelDir) {
     if (modelDir.empty()) return ModelType::SD15;
     std::ifstream f(modelDir + "/model.json");
@@ -130,9 +145,11 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     const auto& sp = view.settingsPanel;
     GenerationSettings gs;
     gs.dsl     = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
-    gs.modelId = sp.getSelectedModelDir().empty()
+    gs.modelId = sp.availableModels.empty()
         ? std::string{}
-        : std::filesystem::path(sp.getSelectedModelDir()).filename().string();
+        : (!sp.availableModelNames.empty()
+            ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
+            : std::filesystem::path(sp.getSelectedModelDir()).filename().string());
     gs.steps   = sp.generationParams.numSteps;
     gs.cfg     = sp.generationParams.guidanceScale;
     gs.width   = sp.generationParams.width;
@@ -368,8 +385,9 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     const ModelDefaults* md = nullptr;
     if (!sp.availableModels.empty()) {
-        const std::string name = std::filesystem::path(
-            sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
+        const std::string name = (!sp.availableModelNames.empty())
+            ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
+            : std::filesystem::path(sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
         const auto it = config.modelConfigs.find(name);
         if (it != config.modelConfigs.end()) md = &it->second;
     }
@@ -401,16 +419,13 @@ void ImageGeneratorController::startLlmLoad(const std::string& modelDir) {
 
 void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
     auto& m = view.settingsModal;
-    m.settingsModelDir            = config.modelBaseDir;
     m.settingsOutputDir           = config.outputDir;
     m.settingsLlmModelDir         = config.promptEnhancer.modelDir;
     m.settingsLoraDir             = config.loraBaseDir;
-    m.settingsModelDirCursor      = static_cast<int>(config.modelBaseDir.size());
     m.settingsOutputDirCursor     = static_cast<int>(config.outputDir.size());
     m.settingsLlmModelDirCursor   = static_cast<int>(config.promptEnhancer.modelDir.size());
     m.settingsLoraDirCursor       = static_cast<int>(config.loraBaseDir.size());
-    m.settingsModelDirActive      = true;
-    m.settingsOutputDirActive     = false;
+    m.settingsOutputDirActive     = true;
     m.settingsLlmModelDirActive   = false;
     m.settingsLoraDirActive       = false;
     m.saveRequested               = false;
@@ -423,7 +438,6 @@ void ImageGeneratorController::openSettings(ImageGeneratorView& view) {
 void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     auto& m = view.settingsModal;
     const std::string previousOutputDir = config.outputDir;
-    config.modelBaseDir             = m.settingsModelDir;
     config.outputDir                = m.settingsOutputDir;
     config.loraBaseDir              = m.settingsLoraDir;
 
@@ -436,6 +450,7 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
     view.showSettings = false;
 
     view.settingsPanel.availableModels.clear();
+    view.settingsPanel.availableModelNames.clear();
     view.settingsPanel.selectedModelIdx = 0;
     modelsDirty = true;
     lorasDirty  = true;
@@ -893,7 +908,6 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
                 auto& m = view.settingsModal;
                 std::string startPath;
                 switch (m.browseTarget) {
-                    case SettingsModal::BrowseTarget::ModelDir:  browseTarget = BrowseTarget::ModelDir;  startPath = m.settingsModelDir;    break;
                     case SettingsModal::BrowseTarget::OutputDir: browseTarget = BrowseTarget::OutputDir; startPath = m.settingsOutputDir;   break;
                     case SettingsModal::BrowseTarget::LlmDir:    browseTarget = BrowseTarget::LlmDir;    startPath = m.settingsLlmModelDir; break;
                     case SettingsModal::BrowseTarget::LoraDir:   browseTarget = BrowseTarget::LoraDir;   startPath = m.settingsLoraDir;     break;
@@ -1055,7 +1069,6 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         if (!picked.empty()) {
             auto& m = view.settingsModal;
             switch (browseTarget) {
-                case BrowseTarget::ModelDir:  m.settingsModelDir    = picked; m.settingsModelDirCursor    = static_cast<int>(picked.size()); break;
                 case BrowseTarget::OutputDir: m.settingsOutputDir   = picked; m.settingsOutputDirCursor   = static_cast<int>(picked.size()); break;
                 case BrowseTarget::LlmDir:    m.settingsLlmModelDir = picked; m.settingsLlmModelDirCursor = static_cast<int>(picked.size()); break;
                 case BrowseTarget::LoraDir:   m.settingsLoraDir     = picked; m.settingsLoraDirCursor     = static_cast<int>(picked.size()); break;
@@ -1063,16 +1076,25 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         }
     }
 
-    // Scan models directory
+    // Auto-detect new imports by watching the registry file mtime
+    {
+        std::error_code ec;
+        const auto mtime = std::filesystem::last_write_time(importedRegistryPath(), ec);
+        if (!ec && mtime != lastRegistryMtime_) {
+            modelsDirty = true;
+            lastRegistryMtime_ = mtime;
+        }
+    }
+
+    // Populate model list from the imported model registry
     if (modelsDirty) {
         sp.availableModels.clear();
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(config.modelBaseDir, ec)) {
-            if (!entry.is_directory()) continue;
-            if (std::filesystem::exists(entry.path() / "unet.onnx"))
-                sp.availableModels.push_back(entry.path().string());
+        sp.availableModelNames.clear();
+        ImportedModelRegistry reg(importedRegistryPath());
+        for (const auto& model : reg.list()) {
+            sp.availableModels.push_back(model.onnxPath.string());
+            sp.availableModelNames.push_back(model.name);
         }
-        std::sort(sp.availableModels.begin(), sp.availableModels.end());
         sp.selectedModelIdx = 0;
         modelsDirty = false;
     }
@@ -1163,7 +1185,9 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         sp.currentDsl = PromptParser::parse(posText, negText);
         if (cachedModelType_ == ModelType::SD15) {
             Prompt previewDsl = sp.currentDsl;
-            const std::string previewKey = std::filesystem::path(sp.getSelectedModelDir()).filename().string();
+            const std::string previewKey = (!sp.availableModelNames.empty())
+                ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
+                : std::filesystem::path(sp.getSelectedModelDir()).filename().string();
             if (const auto it = config.modelConfigs.find(previewKey); it != config.modelConfigs.end())
                 injectBoosters(previewDsl, it->second);
             sp.compiledPreview = PromptCompiler::compile(previewDsl, ModelType::SD15);

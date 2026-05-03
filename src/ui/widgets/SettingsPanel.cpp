@@ -109,7 +109,9 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     {
         const std::string displayName = availableModels.empty()
             ? "(no models found)"
-            : std::filesystem::path(availableModels[static_cast<size_t>(selectedModelIdx)]).filename().string();
+            : (!availableModelNames.empty()
+                ? availableModelNames[static_cast<size_t>(selectedModelIdx)]
+                : std::filesystem::path(availableModels[static_cast<size_t>(selectedModelIdx)]).filename().string());
         const std::string label = displayName + (showModelDropdown ? "  ^" : "  v");
         drawText(win, font, "Model:", colors.muted, x + pad, y + 4.f, type.body);
         btnModelDropdown_ = {x + pad + 52.f, y, 260.f, 22.f};
@@ -344,8 +346,9 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             const bool selected = (i == selectedModelIdx);
             if (selected)
                 drawRect(win, modelDropdownItems_[static_cast<size_t>(i)], Col::Panel);
-            const std::string name =
-                std::filesystem::path(availableModels[static_cast<size_t>(i)]).filename().string();
+            const std::string name = (!availableModelNames.empty())
+                ? availableModelNames[static_cast<size_t>(i)]
+                : std::filesystem::path(availableModels[static_cast<size_t>(i)]).filename().string();
             drawText(win, font, name, selected ? Col::GoldLt : Col::Text,
                      listX + 6.f, itemY2 + 4.f, 12);
         }

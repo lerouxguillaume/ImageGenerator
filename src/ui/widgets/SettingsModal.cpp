@@ -54,7 +54,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     win.draw(overlay);
 
     // Modal panel
-    constexpr float boxW = 560.f, boxH = 330.f;
+    constexpr float boxW = 560.f, boxH = 282.f;
     const float boxX = (WIN_W_F - boxW) / 2.f;
     const float boxY = (WIN_H_F - boxH) / 2.f;
     drawRect(win, {boxX, boxY, boxW, boxH}, colors.panel2, colors.borderHi, 2.f);
@@ -68,17 +68,8 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     constexpr float fieldH    = 26.f;
     const float     fieldX    = boxX + padX + labelW;
 
-    // Row 1: model directory
+    // Row 1: output directory
     float rowY = boxY + 52.f;
-    drawText(win, font, "Model directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
-    settingsModelDirField = {fieldX, rowY, fieldW, fieldH};
-    drawSingleLineField(win, font, settingsModelDirField, settingsModelDir,
-                        settingsModelDirCursor, settingsModelDirActive);
-    settingsBtnBrowseModel = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
-    drawButton(win, settingsBtnBrowseModel, "...", colors.panel, colors.text, false, 12, font);
-
-    // Row 2: output directory
-    rowY += 48.f;
     drawText(win, font, "Output directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
     settingsOutputDirField = {fieldX, rowY, fieldW, fieldH};
     drawSingleLineField(win, font, settingsOutputDirField, settingsOutputDir,
@@ -86,7 +77,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     settingsBtnBrowseOutput = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
     drawButton(win, settingsBtnBrowseOutput, "...", colors.panel, colors.text, false, 12, font);
 
-    // Row 3: LLM model directory
+    // Row 2: LLM model directory
     rowY += 48.f;
     drawText(win, font, "LLM model dir:", Col::Muted, boxX + padX, rowY + 6.f, 12);
     settingsLlmModelDirField = {fieldX, rowY, fieldW, fieldH};
@@ -97,7 +88,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
     if (llmLoading)
         drawText(win, font, "Loading...", Col::Muted, fieldX, rowY + fieldH + 2.f, 10);
 
-    // Row 4: LoRA directory
+    // Row 3: LoRA directory
     rowY += 48.f;
     drawText(win, font, "LoRA directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
     settingsLoraDirField = {fieldX, rowY, fieldW, fieldH};
@@ -119,25 +110,21 @@ bool SettingsModal::handleEvent(const sf::Event& e) {
     // Determine which field/cursor pair is active
     std::string& activeField = settingsLoraDirActive     ? settingsLoraDir
                              : settingsLlmModelDirActive ? settingsLlmModelDir
-                             : settingsModelDirActive    ? settingsModelDir
                                                          : settingsOutputDir;
     int& cursor = settingsLoraDirActive     ? settingsLoraDirCursor
                 : settingsLlmModelDirActive ? settingsLlmModelDirCursor
-                : settingsModelDirActive    ? settingsModelDirCursor
                                             : settingsOutputDirCursor;
 
     if (e.type == sf::Event::KeyPressed) {
         switch (e.key.code) {
         case sf::Keyboard::Tab:
-            // Cycle: ModelDir → OutputDir → LlmDir → LoraDir → ModelDir
-            if (settingsModelDirActive) {
-                settingsModelDirActive = false; settingsOutputDirActive = true;
-            } else if (settingsOutputDirActive) {
+            // Cycle: OutputDir → LlmDir → LoraDir → OutputDir
+            if (settingsOutputDirActive) {
                 settingsOutputDirActive = false; settingsLlmModelDirActive = true;
             } else if (settingsLlmModelDirActive) {
                 settingsLlmModelDirActive = false; settingsLoraDirActive = true;
             } else {
-                settingsLoraDirActive = false; settingsModelDirActive = true;
+                settingsLoraDirActive = false; settingsOutputDirActive = true;
             }
             break;
         case sf::Keyboard::Enter:
@@ -187,29 +174,20 @@ bool SettingsModal::handleEvent(const sf::Event& e) {
         if (settingsBtnSave.contains(pos))   { saveRequested = true;   return true; }
         if (settingsBtnCancel.contains(pos)) { cancelRequested = true; return true; }
 
-        if (settingsBtnBrowseModel.contains(pos))  { browseTarget = BrowseTarget::ModelDir;  return true; }
         if (settingsBtnBrowseOutput.contains(pos)) { browseTarget = BrowseTarget::OutputDir; return true; }
         if (settingsBtnBrowseLlm.contains(pos))    { browseTarget = BrowseTarget::LlmDir;    return true; }
         if (settingsBtnBrowseLora.contains(pos))   { browseTarget = BrowseTarget::LoraDir;   return true; }
 
-        if (settingsModelDirField.contains(pos)) {
-            settingsModelDirActive = true; settingsOutputDirActive = false;
-            settingsLlmModelDirActive = false; settingsLoraDirActive = false;
-            return true;
-        }
         if (settingsOutputDirField.contains(pos)) {
-            settingsModelDirActive = false; settingsOutputDirActive = true;
-            settingsLlmModelDirActive = false; settingsLoraDirActive = false;
+            settingsOutputDirActive = true; settingsLlmModelDirActive = false; settingsLoraDirActive = false;
             return true;
         }
         if (settingsLlmModelDirField.contains(pos)) {
-            settingsModelDirActive = false; settingsOutputDirActive = false;
-            settingsLlmModelDirActive = true; settingsLoraDirActive = false;
+            settingsOutputDirActive = false; settingsLlmModelDirActive = true; settingsLoraDirActive = false;
             return true;
         }
         if (settingsLoraDirField.contains(pos)) {
-            settingsModelDirActive = false; settingsOutputDirActive = false;
-            settingsLlmModelDirActive = false; settingsLoraDirActive = true;
+            settingsOutputDirActive = false; settingsLlmModelDirActive = false; settingsLoraDirActive = true;
             return true;
         }
         return true; // absorb all clicks while modal is open

@@ -73,6 +73,7 @@ private:
     std::shared_ptr<IPromptEnhancer> enhancer;
     bool                             modelsDirty     = true;
     bool                             lorasDirty      = true;
+    std::filesystem::file_time_type  lastRegistryMtime_ = {};
     bool                             viewInitialized = false;
     int                              lastModelIdx     = -1;
     ModelType                        cachedModelType_ = ModelType::SDXL;
@@ -90,9 +91,9 @@ private:
     std::jthread generationThread_;
 
     // Async folder browser
-    enum class BrowseTarget { ModelDir, OutputDir, LlmDir, LoraDir };
+    enum class BrowseTarget { OutputDir, LlmDir, LoraDir };
     std::future<std::string> browseFuture;
-    BrowseTarget             browseTarget = BrowseTarget::ModelDir;
+    BrowseTarget             browseTarget = BrowseTarget::OutputDir;
 
     // Active project context (empty = no project active)
     ResolvedProjectContext projectContext_;

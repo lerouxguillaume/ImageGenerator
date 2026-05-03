@@ -12,7 +12,6 @@ AppConfig AppConfig::load(const std::string& configPath) {
             return cfg;
         }
         const auto j = nlohmann::json::parse(f);
-        cfg.modelBaseDir            = j.value("modelBaseDir",            cfg.modelBaseDir);
         cfg.outputDir               = j.value("outputDir",               cfg.outputDir);
         cfg.loraBaseDir             = j.value("loraBaseDir",             cfg.loraBaseDir);
         cfg.defaultNumSteps         = j.value("defaultNumSteps",         cfg.defaultNumSteps);
@@ -48,8 +47,7 @@ AppConfig AppConfig::load(const std::string& configPath) {
             cfg.promptEnhancer.enabled  = pe.value("enabled",  false);
             cfg.promptEnhancer.modelDir = pe.value("modelDir", std::string{});
         }
-        Logger::info("Config loaded: modelBaseDir=" + cfg.modelBaseDir
-                     + "  outputDir=" + cfg.outputDir);
+        Logger::info("Config loaded: outputDir=" + cfg.outputDir);
     } catch (const std::exception& e) {
         Logger::info(std::string("Config parse error, using defaults: ") + e.what());
     }
@@ -59,7 +57,6 @@ AppConfig AppConfig::load(const std::string& configPath) {
 void AppConfig::save(const std::string& configPath) const {
     try {
         nlohmann::json j;
-        j["modelBaseDir"]          = modelBaseDir;
         j["outputDir"]             = outputDir;
         j["loraBaseDir"]           = loraBaseDir;
         j["defaultNumSteps"]       = defaultNumSteps;

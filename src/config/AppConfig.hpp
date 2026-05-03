@@ -32,7 +32,6 @@ struct ModelDefaults {
 // working directory. All paths are relative to the working directory unless
 // the user enters an absolute path.
 struct AppConfig {
-    std::string modelBaseDir = "models";           // Root directory scanned for model subdirectories
     std::string outputDir    = "assets/generated"; // Directory where generated images are written
     std::string loraBaseDir  = "loras";            // Directory scanned for .safetensors LoRA files
 

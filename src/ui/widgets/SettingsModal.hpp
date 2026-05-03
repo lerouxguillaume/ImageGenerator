@@ -8,18 +8,15 @@
 class SettingsModal {
 public:
     // ── Editable fields (populated by open()) ────────────────────────────────
-    std::string settingsModelDir;
     std::string settingsOutputDir;
     std::string settingsLlmModelDir;
     std::string settingsLoraDir;
 
-    int  settingsModelDirCursor     = 0;
     int  settingsOutputDirCursor    = 0;
     int  settingsLlmModelDirCursor  = 0;
     int  settingsLoraDirCursor      = 0;
 
-    bool settingsModelDirActive     = true;
-    bool settingsOutputDirActive    = false;
+    bool settingsOutputDirActive    = true;
     bool settingsLlmModelDirActive  = false;
     bool settingsLoraDirActive      = false;
 
@@ -27,7 +24,7 @@ public:
     bool saveRequested   = false;
     bool cancelRequested = false;
 
-    enum class BrowseTarget { None, ModelDir, OutputDir, LlmDir, LoraDir };
+    enum class BrowseTarget { None, OutputDir, LlmDir, LoraDir };
     BrowseTarget browseTarget = BrowseTarget::None;
 
     // llmLoading is displayed inside the modal when true
@@ -41,12 +38,10 @@ public:
 
 private:
     // Hit rects (written during render, read by handleEvent)
-    sf::FloatRect settingsModelDirField;
     sf::FloatRect settingsOutputDirField;
     sf::FloatRect settingsLlmModelDirField;
     sf::FloatRect settingsLoraDirField;
 
-    sf::FloatRect settingsBtnBrowseModel;
     sf::FloatRect settingsBtnBrowseOutput;
     sf::FloatRect settingsBtnBrowseLlm;
     sf::FloatRect settingsBtnBrowseLora;

@@ -23,7 +23,8 @@ public:
     GenerationParams generationParams;
 
     // ── Model selection ───────────────────────────────────────────────────────
-    std::vector<std::string> availableModels; // set by controller after scan
+    std::vector<std::string> availableModels;     // onnx paths, set by controller from registry
+    std::vector<std::string> availableModelNames; // display names, parallel to availableModels
     int  selectedModelIdx = 0;
     bool showModelDropdown = false;
     std::string activePresetId; // empty when no preset is active
