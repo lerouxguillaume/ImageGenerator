@@ -2,9 +2,11 @@
 
 .idea
 .claude
+.codex
 /deps
 /dist-windows
 /build-windows/
+/cache_dir/
 
 /scripts/*.safetensors
 /scripts/*/*
