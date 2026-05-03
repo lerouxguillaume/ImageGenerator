@@ -58,7 +58,6 @@ private:
     void launchGeneration(ImageGeneratorView& view);
     void launchCandidateRun(ImageGeneratorView& view);
     void startGenerationTask(ImageGeneratorView& view,
-                             const std::string& failureLabel,
                              std::function<void(std::stop_token)> task);
     void launchEnhancement(ImageGeneratorView& view);
     void refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection = {});

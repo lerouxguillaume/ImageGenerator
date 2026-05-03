@@ -104,9 +104,10 @@ void runPipeline(const std::string& prompt,
                  const std::string& outputPath,
                  const GenerationParams& params,
                  const std::string& modelDir,
-                 std::atomic<int>*  progressStep,
-                 std::atomic<int>*  currentImage,
-                 std::stop_token    stopToken) {
+                 std::atomic<int>*             progressStep,
+                 std::atomic<int>*             currentImage,
+                 std::stop_token               stopToken,
+                 std::atomic<GenerationStage>* stage) {
     auto tTotal = Clock::now();
 
     Logger::info("=== runPipeline ===");
@@ -140,6 +141,7 @@ void runPipeline(const std::string& prompt,
     Logger::info("Prompt: " + prompt);
     Logger::info("Neg:    " + neg_prompt);
 
+    if (stage) stage->store(GenerationStage::LoadingModel);
     static ModelManager s_modelManager;
     GenerationContext& ctx = s_modelManager.get(cfg, modelDir, params.loras);
     ctx.guidance_scale     = params.guidanceScale;
@@ -148,6 +150,7 @@ void runPipeline(const std::string& prompt,
                                : params.guidanceScale;  // 0 → same as guidance_scale (standard CFG)
     ctx.cfg_rescale        = params.cfgRescale;
 
+    if (stage) stage->store(GenerationStage::EncodingText);
     auto tEncode = Clock::now();
     // vocab/merges live in the base model dir (parent of the specific model subdir).
     const std::string baseDir = std::filesystem::path(modelDir).parent_path().string();
@@ -180,6 +183,7 @@ void runPipeline(const std::string& prompt,
             if (initImg.empty()) {
                 Logger::error("img2img: could not read '" + params.initImagePath + "' — falling back to txt2img.");
             } else {
+                if (stage) stage->store(GenerationStage::EncodingImage);
                 const float clampedStrength = std::max(0.0f, std::min(params.strength, 1.0f));
                 startStep  = static_cast<int>((1.0f - clampedStrength) * static_cast<float>(num_steps));
                 startStep  = std::max(0, std::min(startStep, num_steps - 1));
@@ -219,6 +223,7 @@ void runPipeline(const std::string& prompt,
             }
 
             Logger::info("--- Image " + std::to_string(i + 1) + "/" + std::to_string(num_images) + " ---");
+            if (stage) stage->store(GenerationStage::Denoising);
             auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx,
                                               progressStep, stopToken, startStep, initLatent);
 
@@ -234,6 +239,7 @@ void runPipeline(const std::string& prompt,
                          + "  max: " + std::to_string(lat_max)
                          + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.size())));
 
+            if (stage) stage->store(GenerationStage::DecodingImage);
             auto img = decodeLatent(latent, ctx);
             // Normalise separators so cv::imwrite gets a consistent path on Windows.
             std::string normPath = outPath;

@@ -550,6 +550,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.generationDone.store(false);
     rp.cancelToken.store(false);
     rp.generationStep.store(0);
+    rp.generationStage.store(GenerationStage::Idle);
     rp.resultLoaded = false;
     rp.displayedImagePath.clear();
     rp.generationFailed.store(false);
@@ -583,8 +584,9 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     }
 
     GenerationProgress progress;
-    progress.step = &rp.generationStep;
+    progress.step         = &rp.generationStep;
     progress.currentImage = &rp.generationImageNum;
+    progress.stage        = &rp.generationStage;
     GenerationJob job;
     job.prompt = prompt;
     job.negativePrompt = negPrompt;
@@ -605,11 +607,18 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.postProcess.reference.cacheDir = artifacts.referenceCacheDir();
     GenerationService* generationService = &generationService_;
 
+    GenerationCallbacks callbacks;
+    callbacks.onError = [failed = &rp.generationFailed,
+                         errorMsg = &rp.generationErrorMsg](std::string err) {
+        *errorMsg = err;
+        failed->store(true);
+    };
+
     startGenerationTask(
         view,
-        "Generation",
-        [job = std::move(job), generationService, progress](std::stop_token st) mutable {
-            generationService->run(job, progress, std::move(st));
+        [job = std::move(job), generationService, progress,
+         callbacks = std::move(callbacks)](std::stop_token st) mutable {
+            generationService->run(job, progress, std::move(callbacks), std::move(st));
         });
 }
 
@@ -648,6 +657,7 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     rp.generationDone.store(false);
     rp.cancelToken.store(false);
     rp.generationStep.store(0);
+    rp.generationStage.store(GenerationStage::Idle);
     rp.resultLoaded = false;
     rp.displayedImagePath.clear();
     rp.generationFailed.store(false);
@@ -707,46 +717,39 @@ void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
     job.refinementStrength   = candidateRun.refinementStrength;
     job.scoreThreshold       = candidateRun.scoreThreshold;
     GenerationProgress progress;
-    progress.step = &rp.generationStep;
+    progress.step         = &rp.generationStep;
     progress.currentImage = &rp.generationImageNum;
+    progress.stage        = &rp.generationStage;
 
     GenerationService* generationService = &generationService_;
 
+    CandidateRunCallbacks callbacks;
+    callbacks.onError = [failed = &rp.generationFailed,
+                         errorMsg = &rp.generationErrorMsg](std::string err) {
+        *errorMsg = err;
+        failed->store(true);
+    };
+
     startGenerationTask(
         view,
-        "Candidate run",
-        [job = std::move(job), generationService, progress](std::stop_token st) mutable {
-            generationService->runCandidateRun(job, progress, std::move(st));
+        [job = std::move(job), generationService, progress,
+         callbacks = std::move(callbacks)](std::stop_token st) mutable {
+            generationService->runCandidateRun(job, progress, std::move(callbacks), std::move(st));
         });
 }
 
 void ImageGeneratorController::startGenerationTask(ImageGeneratorView& view,
-                                                   const std::string& failureLabel,
                                                    std::function<void(std::stop_token)> task) {
     auto& rp = view.resultPanel;
-
-    std::atomic<bool>* done     = &rp.generationDone;
-    std::atomic<int>*  idPtr    = &rp.generationId;
-    std::atomic<bool>* failed   = &rp.generationFailed;
-    std::string*       errorMsg = &rp.generationErrorMsg;
     const int myId = ++rp.generationId;
+    auto* done  = &rp.generationDone;
+    auto* idPtr = &rp.generationId;
 
     // Assigning a new jthread implicitly request_stop() + join()s the previous one,
     // ensuring only one pipeline runs at a time and no thread is ever abandoned.
     generationThread_ = std::jthread(
-        [task = std::move(task), failureLabel, done, idPtr, myId, failed, errorMsg]
-        (std::stop_token st) mutable {
-            try {
-                task(std::move(st));
-            } catch (const std::exception& e) {
-                Logger::error(failureLabel + " failed: " + std::string(e.what()));
-                *errorMsg = e.what();
-                failed->store(true);
-            } catch (...) {
-                Logger::error(failureLabel + " failed: unknown error");
-                *errorMsg = "Unknown error during " + failureLabel + ". See log for details.";
-                failed->store(true);
-            }
+        [task = std::move(task), done, idPtr, myId](std::stop_token st) mutable {
+            task(std::move(st));
             if (idPtr->load() == myId) done->store(true);
         });
 }

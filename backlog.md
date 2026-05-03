@@ -60,6 +60,17 @@
   launcher for completion and error propagation. Broader UI orchestration still needs to move out
   of the controller.
 
+- Add typed `GenerationStage` progress reporting.
+  Added `GenerationStage` enum to `src/enum/enums.hpp` covering all pipeline phases for both
+  standard generation (`LoadingModel → EncodingText → EncodingImage → Denoising →
+  DecodingImage → PostProcessing → Done`) and candidate runs (`Exploring → Scoring →
+  Refining → WritingManifest → Done`). `GenerationProgress` gains a nullable
+  `atomic<GenerationStage>*` stage pointer alongside the existing step and image counters.
+  `SdPipeline::runPipeline()` writes stage transitions; `GenerationService::run()` owns
+  `PostProcessing` and `Done`. `CandidateRunPipeline` owns coarser outer transitions and does
+  not forward stage into inner pipeline calls. `ResultPanel` reads `generationStage` each frame
+  and renders a stage-specific label instead of a bare step counter.
+
 ## High Priority
 
 - Split cached model state from per-run mutable state in the SD pipeline.
@@ -88,13 +99,10 @@
   ownership with an interface or callback so failures are easier to isolate and the UI layer
   stays thin as features grow.
 
-- Extend the typed `GenerationJob` / `GenerationService` boundary across generation workflows.
-  The plain generation path now delegates model execution and post-processing to
-  `GenerationService`, and candidate runs now delegate execution through `CandidateRunJob`.
-  `ImageGeneratorController` still owns model browsing, LLM futures, thumbnail futures,
-  cancellation, gallery refresh, and project context state. Extend the
-  service-level API to emit typed progress/result/error events and move broader orchestration
-  onto the same boundary.
+- ~~Extend the typed `GenerationJob` / `GenerationService` boundary across generation workflows.~~
+  ~~Done: `GenerationCallbacks` / `CandidateRunCallbacks` added; both service methods return `void`~~
+  ~~and catch exceptions internally, routing them through `onError`. `startGenerationTask` is now~~
+  ~~a minimal thread spawner with no exception handling or business logic.~~
 
 ## Medium Priority
 

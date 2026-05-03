@@ -7,16 +7,21 @@ Main entry:
 
 # Execution stages
 
-1. Prompt preparation
-2. Text encoding (CLIP / SDXL dual encoder)
-3. Latent initialization
-   - **txt2img**: pure Gaussian noise at `sigmas[0]`
-   - **img2img**: `encodeImage()` → posterior mean latent → add noise at `sigmas[startStep]`
-4. Denoising loop (steps `startStep … numSteps-1`)
-5. CFG guidance
-6. Scheduler step updates
-7. VAE decode
-8. Image output
+| Stage | `GenerationStage` value | Notes |
+|---|---|---|
+| Model load | `LoadingModel` | Fast when cached by `ModelManager` |
+| Text encoding | `EncodingText` | CLIP or SDXL dual encoder |
+| Image encoding | `EncodingImage` | img2img only; absent for txt2img |
+| Denoising | `Denoising` | `progressStep` counter is live here |
+| VAE decode | `DecodingImage` | |
+| Post-processing | `PostProcessing` | Alpha cutout, processed PNG, metadata sidecar |
+| Complete | `Done` | Set by `GenerationService::run()` before calling `onResult` |
+
+`runPipeline()` writes `stage` atomically at each transition. `GenerationService::run()` owns `PostProcessing` and `Done` since post-processing happens after the pipeline returns. Callers that don't need stage reporting pass `nullptr`.
+
+Exceptions thrown anywhere inside `run()` or `runCandidateRun()` are caught by the service, which calls `onError(message)` instead of propagating. The caller thread is always left in a clean state.
+
+For **candidate runs** `CandidateRunPipeline` owns the stage and sets coarser transitions (`Exploring → Scoring → Refining → WritingManifest → Done`). It does **not** pass the stage into its inner `generateFromPrompt` calls, so fine-grained pipeline stages do not bleed into a candidate run.
 
 ---
 

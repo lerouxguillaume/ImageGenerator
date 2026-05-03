@@ -48,8 +48,9 @@ public:
                                    const std::string& negativePrompt,
                                    const std::string& outputPath,
                                    const GenerationParams& params,
-                                   const std::string& modelDir = "models",
-                                   std::atomic<int>* progressStep = nullptr,
-                                   std::atomic<int>* currentImage = nullptr,
-                                   std::stop_token   stopToken    = {});
+                                   const std::string& modelDir     = "models",
+                                   std::atomic<int>* progressStep  = nullptr,
+                                   std::atomic<int>* currentImage  = nullptr,
+                                   std::stop_token   stopToken     = {},
+                                   std::atomic<GenerationStage>* stage = nullptr);
 };

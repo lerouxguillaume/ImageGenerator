@@ -10,6 +10,25 @@
 using namespace Helpers;
 
 namespace {
+
+static std::string stageLabelText(GenerationStage stage, int step, int numSteps) {
+    switch (stage) {
+    case GenerationStage::LoadingModel:    return "Loading model...";
+    case GenerationStage::EncodingText:    return "Encoding prompt...";
+    case GenerationStage::EncodingImage:   return "Encoding image...";
+    case GenerationStage::Denoising:       return "Step " + std::to_string(step) + " / " + std::to_string(numSteps);
+    case GenerationStage::DecodingImage:   return "Decoding image...";
+    case GenerationStage::PostProcessing:  return "Post-processing...";
+    case GenerationStage::Exploring:       return "Exploring...";
+    case GenerationStage::Scoring:         return "Scoring candidates...";
+    case GenerationStage::Refining:        return "Refining...";
+    case GenerationStage::WritingManifest: return "Writing manifest...";
+    default:
+        return numSteps > 0
+            ? "Step " + std::to_string(step) + " / " + std::to_string(numSteps)
+            : "Generating...";
+    }
+}
 void drawContractOverlay(sf::RenderWindow& win, const ResultPanel& panel,
                          const sf::FloatRect& imageRect, const Theme& theme) {
     if (!panel.showContractOverlay) return;
@@ -171,7 +190,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         if (progress > 0.f)
             drawRect(win, {barX, barY, barW * progress, barH}, colors.gold);
 
-        const std::string stepLabel = "Step " + std::to_string(currentStep) + " / " + std::to_string(numSteps);
+        const std::string stepLabel = stageLabelText(generationStage.load(), currentStep, numSteps);
         drawTextC(win, font, stepLabel, colors.muted, cx, modalY + 72.f, type.compact);
 
         btnCancelGenerate_ = {cx - 55.f, modalY + modalH - 34.f, 110.f, 26.f};

@@ -1,8 +1,34 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 **ImageGenerator** — C++20 / SFML application with embedded Stable Diffusion inference (ONNX Runtime). Python is used only by the model import pipeline, never at runtime.
 
 This file is a **retrieval router** only. All implementation details live in `docs/`.
+
+---
+
+# Build commands
+
+```bash
+# Configure (required after adding/removing .cpp files — project uses GLOB_RECURSE)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build (incremental)
+cmake --build build
+
+# CPU + CUDA (Linux)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=ON \
+      -DONNXRUNTIME_ROOT=~/libs/onnxruntime/onnxruntime-linux-x64-gpu-1.24.4
+cmake --build build
+
+# Run
+./build/image_generator
+```
+
+There are no automated tests. Verification is done by running the binary.
+
+The binary expects `models/vocab.json` and `models/merges.txt` in the working directory (CMake copies them post-build). Logs go to `image_generator.log`.
 
 ---
 
@@ -24,6 +50,21 @@ This file is a **retrieval router** only. All implementation details live in `do
 
 ## Build system
 → docs/00_overview/build_system.md
+
+## Generation service — `GenerationService`, `CandidateRunPipeline`
+→ `src/controllers/GenerationService.hpp` (typed job structs)  
+→ `src/controllers/CandidateRunPipeline.cpp` (candidate-run execution)
+
+Key facts:
+- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, and post-process spec
+- `CandidateRunJob` carries the full candidate pipeline spec (patron path, run dirs, explore/refine counts, scoring spec)
+- `GenerationService::run()` handles reference normalization, single/multi-image generation, and post-processing; both `run()` and `runCandidateRun()` return `void`
+- `GenerationProgress` holds three nullable atomic pointers: `step` (denoising step counter), `currentImage` (1-based image index), and `stage` (`atomic<GenerationStage>*`) — all owned by `ResultPanel`
+- `GenerationCallbacks` / `CandidateRunCallbacks` carry typed `onResult` / `onError` functors; the service catches all exceptions internally and routes them through `onError` — exceptions never reach the caller thread
+- `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone`; it has no exception handling or business logic
+- `GenerationStage` enum is in `src/enum/enums.hpp`; standard generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`; candidate runs: `Exploring → Scoring → Refining → WritingManifest → Done`
+- Candidate runs do NOT forward `stage` into inner `generateFromPrompt` calls — coarse outer stages own the label
+- `GenerationResult` returns raw output paths and a `referenceUsed` flag
 
 ## SD Pipeline — `sd/SdPipeline.cpp → runPipeline()` (txt2img + img2img)
 → docs/10_pipeline/pipeline_orchestration.md  
@@ -67,6 +108,8 @@ Key facts:
 - Imported models land in `models/imported/<id>/` with an extended `model.json` (`capabilities` block)
 - Registry at `models/imported/registry.json` — updated after each successful import
 - Never read `ModelImporter::getOutputDir()` / `getModelId()` before `State::Done`
+- **Model discovery is registry-only** — `ImageGeneratorController` reads `ImportedModelRegistry` to populate the model list; there is no filesystem scan of a model base directory
+- The registry is watched by mtime in `ImageGeneratorController::update()` — newly imported models appear automatically when the user navigates to the generator screen
 
 ## LLM prompt enhancement — `OrtLlmEnhancer` (optional)
 → docs/60_llm/llm_overview.md  
@@ -131,3 +174,5 @@ Key facts:
 - Never destroy `LoraOverrides` before `Ort::Session` constructor returns
 - Never store a raw prompt string as internal state — use `Prompt` DSL
 - Never replace LLM-enhanced text directly — always merge via `PromptMerge::merge()`
+- Never scan a model base directory for `unet.onnx` — use `ImportedModelRegistry::list()` for all model discovery
+- Never derive model display name from `path.filename()` — use `availableModelNames` from `SettingsPanel` (parallel to `availableModels`)

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "../enum/enums.hpp"
 #include "../projects/Project.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -36,13 +38,19 @@ struct GenerationJob {
 };
 
 struct GenerationProgress {
-    std::atomic<int>* step = nullptr;
-    std::atomic<int>* currentImage = nullptr;
+    std::atomic<int>*              step         = nullptr;
+    std::atomic<int>*              currentImage = nullptr;
+    std::atomic<GenerationStage>*  stage        = nullptr;
 };
 
 struct GenerationResult {
     std::vector<std::string> rawPaths;
     bool referenceUsed = false;
+};
+
+struct GenerationCallbacks {
+    std::function<void(GenerationResult)> onResult;
+    std::function<void(std::string)>      onError;
 };
 
 struct CandidateRunJob {
@@ -76,13 +84,20 @@ struct CandidateRunResult {
     int refinementCount = 0;
 };
 
+struct CandidateRunCallbacks {
+    std::function<void(CandidateRunResult)> onResult;
+    std::function<void(std::string)>        onError;
+};
+
 class GenerationService {
 public:
-    GenerationResult run(const GenerationJob& job,
-                         GenerationProgress progress,
-                         std::stop_token stopToken) const;
+    void run(const GenerationJob& job,
+             GenerationProgress progress,
+             GenerationCallbacks callbacks,
+             std::stop_token stopToken) const;
 
-    CandidateRunResult runCandidateRun(const CandidateRunJob& job,
-                                       GenerationProgress progress,
-                                       std::stop_token stopToken) const;
+    void runCandidateRun(const CandidateRunJob& job,
+                         GenerationProgress progress,
+                         CandidateRunCallbacks callbacks,
+                         std::stop_token stopToken) const;
 };

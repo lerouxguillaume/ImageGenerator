@@ -1,6 +1,7 @@
 #pragma once
 #include "SdTypes.hpp"
 #include "../PortraitGeneratorAi.hpp"
+#include "../../enum/enums.hpp"
 #include <atomic>
 #include <stop_token>
 #include <string>
@@ -12,13 +13,15 @@ namespace sd {
 // Called by both PortraitGeneratorAi::generatePortrait and generateFromPrompt.
 // stopToken: each jthread owns its own stop_source; request_stop() fires SetTerminate()
 // immediately via std::stop_callback, with no polling delay.
+// stage: if non-null, updated at each pipeline phase so the UI can show meaningful labels.
 void runPipeline(const std::string& prompt,
                  const std::string& neg_prompt,
                  const std::string& outputPath,
                  const GenerationParams& params,
                  const std::string& modelDir,
-                 std::atomic<int>*  progressStep,
-                 std::atomic<int>*  currentImage,
-                 std::stop_token    stopToken = {});
+                 std::atomic<int>*             progressStep,
+                 std::atomic<int>*             currentImage,
+                 std::stop_token               stopToken = {},
+                 std::atomic<GenerationStage>* stage     = nullptr);
 
 } // namespace sd

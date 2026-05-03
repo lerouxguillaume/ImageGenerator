@@ -75,6 +75,42 @@ LLM enhancement, per-frame display update). It is not stored as persistent UI st
 
 ---
 
+# Generation service architecture
+
+`GenerationService` sits between the controller and the pipeline. It owns:
+- Reference normalization (img2img seed from project reference)
+- `PortraitGeneratorAi::generateFromPrompt()` invocation
+- `PostProcessing` and `Done` stage transitions after the pipeline returns
+- `CandidateRunPipeline` orchestration for candidate runs
+- Error handling — exceptions are caught internally and routed through typed callbacks
+
+**Progress** is reported via `GenerationProgress` — three nullable atomic pointers:
+
+| Field | Type | Owner |
+|---|---|---|
+| `step` | `atomic<int>*` | denoising step counter (1…numSteps) |
+| `currentImage` | `atomic<int>*` | 1-based image index |
+| `stage` | `atomic<GenerationStage>*` | typed pipeline phase (see `src/enum/enums.hpp`) |
+
+**Typed result/error events** are delivered via callbacks passed alongside progress:
+
+| Struct | Callback | Fired when |
+|---|---|---|
+| `GenerationCallbacks` | `onResult(GenerationResult)` | generation completed successfully |
+| `GenerationCallbacks` | `onError(std::string)` | exception caught during generation |
+| `CandidateRunCallbacks` | `onResult(CandidateRunResult)` | candidate run completed successfully |
+| `CandidateRunCallbacks` | `onError(std::string)` | exception caught during candidate run |
+
+Both service methods return `void`. The controller registers `onError` to write to `ResultPanel` atomics; `onResult` is optional (gallery refresh is driven by `generationDone` polled in `update()`).
+
+Standard generation stage sequence: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`
+
+Candidate run stage sequence: `Exploring → Scoring → Refining → WritingManifest → Done` — coarser; inner pipeline stages are suppressed (stage not forwarded into `generateFromPrompt`).
+
+**Controller thread boundary**: `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone` after the task returns. Exception handling and result routing are entirely the service's responsibility.
+
+---
+
 # SD pipeline architecture
 
 The pipeline is a linear graph:

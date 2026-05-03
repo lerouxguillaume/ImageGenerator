@@ -61,69 +61,92 @@ void processGeneratedOutput(const std::string& rawPath,
 
 } // namespace
 
-GenerationResult GenerationService::run(const GenerationJob& job,
-                                        GenerationProgress progress,
-                                        std::stop_token stopToken) const {
-    GenerationParams effectiveParams = job.params;
-    const bool referenceUsed = applyReferenceIfAvailable(effectiveParams, job.postProcess);
+void GenerationService::run(const GenerationJob& job,
+                            GenerationProgress progress,
+                            GenerationCallbacks callbacks,
+                            std::stop_token stopToken) const {
+    try {
+        GenerationParams effectiveParams = job.params;
+        const bool referenceUsed = applyReferenceIfAvailable(effectiveParams, job.postProcess);
 
-    PortraitGeneratorAi::generateFromPrompt(
-        job.prompt,
-        job.negativePrompt,
-        job.outputPath,
-        effectiveParams,
-        job.modelDir,
-        progress.step,
-        progress.currentImage,
-        std::move(stopToken));
+        PortraitGeneratorAi::generateFromPrompt(
+            job.prompt,
+            job.negativePrompt,
+            job.outputPath,
+            effectiveParams,
+            job.modelDir,
+            progress.step,
+            progress.currentImage,
+            std::move(stopToken),
+            progress.stage);
 
-    GenerationResult result;
-    result.referenceUsed = referenceUsed;
-    for (int i = 1; i <= effectiveParams.numImages; ++i) {
-        const std::string rawPath = nthImagePath(job.outputPath, i);
-        processGeneratedOutput(rawPath, job.postProcess, referenceUsed);
-        result.rawPaths.push_back(rawPath);
+        GenerationResult result;
+        result.referenceUsed = referenceUsed;
+        if (progress.stage) progress.stage->store(GenerationStage::PostProcessing);
+        for (int i = 1; i <= effectiveParams.numImages; ++i) {
+            const std::string rawPath = nthImagePath(job.outputPath, i);
+            processGeneratedOutput(rawPath, job.postProcess, referenceUsed);
+            result.rawPaths.push_back(rawPath);
+        }
+        if (progress.stage) progress.stage->store(GenerationStage::Done);
+        if (callbacks.onResult) callbacks.onResult(std::move(result));
+    } catch (const std::exception& e) {
+        Logger::error("Generation failed: " + std::string(e.what()));
+        if (callbacks.onError) callbacks.onError(e.what());
+    } catch (...) {
+        Logger::error("Generation failed: unknown error");
+        if (callbacks.onError) callbacks.onError("Unknown error during generation. See log for details.");
     }
-    return result;
 }
 
-CandidateRunResult GenerationService::runCandidateRun(const CandidateRunJob& job,
-                                                       GenerationProgress progress,
-                                                       std::stop_token stopToken) const {
-    CandidateRunPipeline pipeline;
-    pipeline.prompt = job.prompt;
-    pipeline.negPrompt = job.negativePrompt;
-    pipeline.modelDir = job.modelDir;
-    pipeline.baseParams = job.baseParams;
-    pipeline.runId = job.runId;
-    pipeline.patronPath = job.patronPath;
-    pipeline.runPath = job.runPath;
-    pipeline.exploreRawDir = job.exploreRawDir;
-    pipeline.exploreProcessedDir = job.exploreProcessedDir;
-    pipeline.refineRawDir = job.refineRawDir;
-    pipeline.refineProcessedDir = job.refineProcessedDir;
-    pipeline.exploreCount = job.exploreCount;
-    pipeline.candidateCount = job.candidateCount;
-    pipeline.refineVariants = job.refineVariants;
-    pipeline.requiresTransparency = job.requiresTransparency;
-    pipeline.exportSpec = job.exportSpec;
-    pipeline.spec = job.spec;
-    pipeline.assetTypeId = job.assetTypeId;
-    pipeline.explorationStrength = job.explorationStrength;
-    pipeline.refinementStrength = job.refinementStrength;
-    pipeline.scoreThreshold = job.scoreThreshold;
-    pipeline.step = progress.step;
-    pipeline.imgNum = progress.currentImage;
+void GenerationService::runCandidateRun(const CandidateRunJob& job,
+                                        GenerationProgress progress,
+                                        CandidateRunCallbacks callbacks,
+                                        std::stop_token stopToken) const {
+    try {
+        CandidateRunPipeline pipeline;
+        pipeline.prompt = job.prompt;
+        pipeline.negPrompt = job.negativePrompt;
+        pipeline.modelDir = job.modelDir;
+        pipeline.baseParams = job.baseParams;
+        pipeline.runId = job.runId;
+        pipeline.patronPath = job.patronPath;
+        pipeline.runPath = job.runPath;
+        pipeline.exploreRawDir = job.exploreRawDir;
+        pipeline.exploreProcessedDir = job.exploreProcessedDir;
+        pipeline.refineRawDir = job.refineRawDir;
+        pipeline.refineProcessedDir = job.refineProcessedDir;
+        pipeline.exploreCount = job.exploreCount;
+        pipeline.candidateCount = job.candidateCount;
+        pipeline.refineVariants = job.refineVariants;
+        pipeline.requiresTransparency = job.requiresTransparency;
+        pipeline.exportSpec = job.exportSpec;
+        pipeline.spec = job.spec;
+        pipeline.assetTypeId = job.assetTypeId;
+        pipeline.explorationStrength = job.explorationStrength;
+        pipeline.refinementStrength = job.refinementStrength;
+        pipeline.scoreThreshold = job.scoreThreshold;
+        pipeline.step   = progress.step;
+        pipeline.imgNum = progress.currentImage;
+        pipeline.stage  = progress.stage;
 
-    auto exploration = pipeline.explore(stopToken);
-    auto selected = pipeline.selectCandidates(exploration);
-    const auto refinement = pipeline.refine(selected, stopToken);
-    pipeline.writeManifest(exploration, refinement);
+        auto exploration = pipeline.explore(stopToken);
+        auto selected = pipeline.selectCandidates(exploration);
+        const auto refinement = pipeline.refine(selected, stopToken);
+        pipeline.writeManifest(exploration, refinement);
+        if (progress.stage) progress.stage->store(GenerationStage::Done);
 
-    CandidateRunResult result;
-    result.runId = job.runId;
-    result.explorationCount = static_cast<int>(exploration.size());
-    result.selectedCount = static_cast<int>(selected.size());
-    result.refinementCount = static_cast<int>(refinement.size());
-    return result;
+        CandidateRunResult result;
+        result.runId = job.runId;
+        result.explorationCount = static_cast<int>(exploration.size());
+        result.selectedCount = static_cast<int>(selected.size());
+        result.refinementCount = static_cast<int>(refinement.size());
+        if (callbacks.onResult) callbacks.onResult(std::move(result));
+    } catch (const std::exception& e) {
+        Logger::error("Candidate run failed: " + std::string(e.what()));
+        if (callbacks.onError) callbacks.onError(e.what());
+    } catch (...) {
+        Logger::error("Candidate run failed: unknown error");
+        if (callbacks.onError) callbacks.onError("Unknown error during candidate run. See log for details.");
+    }
 }

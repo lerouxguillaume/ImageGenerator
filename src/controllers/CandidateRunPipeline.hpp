@@ -31,8 +31,9 @@ struct CandidateRunPipeline {
     float                 explorationStrength  = 0.70f;
     float                 refinementStrength   = 0.27f;
     float                 scoreThreshold       = 150.0f;
-    std::atomic<int>*     step   = nullptr;
-    std::atomic<int>*     imgNum = nullptr;
+    std::atomic<int>*              step   = nullptr;
+    std::atomic<int>*              imgNum = nullptr;
+    std::atomic<GenerationStage>*  stage  = nullptr;
 
     std::vector<CandidateScore> explore(std::stop_token st);
     std::vector<CandidateScore> selectCandidates(std::vector<CandidateScore> scores) const;

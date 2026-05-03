@@ -200,7 +200,8 @@ Shows the full compiled positive including any quality boosters injected from `M
 
 ## `ResultPanel`
 
-State: `resultTexture`, `generating`, progress atomics (`generationStep`, `cancelToken`, …)  
+State: `resultTexture`, `generating`, progress atomics (`generationStep`, `generationStage`, `generationImageNum`, `generationTotalImages`, `cancelToken`, …)  
+The generating overlay reads `generationStage` (a `atomic<GenerationStage>`) to show a typed label — e.g. "Loading model...", "Encoding prompt...", "Step N / M" during denoising, "Decoding image...", "Post-processing...", or candidate-run phases ("Exploring...", "Scoring candidates...", etc.). The step counter drives the progress bar fill only during `Denoising`; all other stages leave the bar at its current fill.  
 Action flags: `generateRequested`, `improveRequested`, `deleteRequested`, `cancelToken`  
 Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown).
 

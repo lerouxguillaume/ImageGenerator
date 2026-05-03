@@ -38,6 +38,7 @@ std::string CandidateRunPipeline::processOutput(const std::string& rawPath,
 }
 
 std::vector<CandidateScore> CandidateRunPipeline::explore(std::stop_token st) {
+    if (stage) stage->store(GenerationStage::Exploring);
     const std::filesystem::path exploreFirst = exploreRawDir / "explore.png";
     GenerationParams exploreParams = baseParams;
     exploreParams.numImages = exploreCount;
@@ -64,6 +65,7 @@ std::vector<CandidateScore> CandidateRunPipeline::explore(std::stop_token st) {
 
 std::vector<CandidateScore> CandidateRunPipeline::selectCandidates(
     std::vector<CandidateScore> scores) const {
+    if (stage) stage->store(GenerationStage::Scoring);
     std::sort(scores.begin(), scores.end(),
               [](const auto& a, const auto& b) { return a.score < b.score; });
     if (static_cast<int>(scores.size()) > candidateCount)
@@ -73,6 +75,7 @@ std::vector<CandidateScore> CandidateRunPipeline::selectCandidates(
 
 std::vector<CandidateScore> CandidateRunPipeline::refine(
     const std::vector<CandidateScore>& candidates, std::stop_token st) {
+    if (stage) stage->store(GenerationStage::Refining);
     std::vector<CandidateScore> refined;
     int candidateIndex = 0;
     for (const auto& candidate : candidates) {
@@ -104,6 +107,7 @@ std::vector<CandidateScore> CandidateRunPipeline::refine(
 
 void CandidateRunPipeline::writeManifest(const std::vector<CandidateScore>& exploration,
                                           const std::vector<CandidateScore>& refinement) const {
+    if (stage) stage->store(GenerationStage::WritingManifest);
     nlohmann::json manifest;
     manifest["runId"]          = runId;
     manifest["assetTypeId"]    = assetTypeId;

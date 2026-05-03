@@ -45,14 +45,15 @@ public:
     std::string             generateButtonLabel = "Generate";
 
     // ── Generation state (shared with background thread via atomics) ──────────
-    bool              generating          = false;
-    std::atomic<bool> generationDone{false};
-    std::atomic<bool> cancelToken{false};
-    std::atomic<int>  generationStep{0};
-    std::atomic<int>  generationImageNum{0};
-    std::atomic<int>  generationTotalImages{1};
-    std::atomic<bool> generationFailed{false};
-    std::atomic<int>  generationId{0};
+    bool                         generating          = false;
+    std::atomic<bool>            generationDone{false};
+    std::atomic<bool>            cancelToken{false};
+    std::atomic<int>             generationStep{0};
+    std::atomic<int>             generationImageNum{0};
+    std::atomic<int>             generationTotalImages{1};
+    std::atomic<bool>            generationFailed{false};
+    std::atomic<int>             generationId{0};
+    std::atomic<GenerationStage> generationStage{GenerationStage::Idle};
     std::string       generationErrorMsg;
     std::string       lastImagePath;
     std::string       displayedImagePath;
