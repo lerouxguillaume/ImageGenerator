@@ -6,6 +6,12 @@
 #include <optional>
 #include <string>
 
+// ── GenAI implementation ──────────────────────────────────────────────────────
+
+#ifdef USE_GENAI
+#include "ort_genai.h"
+#include <stdexcept>
+
 // Local timing helpers — mirrors sd::fmtMs without pulling in SdUtils.hpp
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -15,12 +21,6 @@ std::string fmtMs(Clock::time_point start) {
     return std::to_string(ms) + " ms";
 }
 } // namespace
-
-// ── GenAI implementation ──────────────────────────────────────────────────────
-
-#ifdef USE_GENAI
-#include "ort_genai.h"
-#include <stdexcept>
 
 struct OrtLlmEnhancer::Impl {
     std::unique_ptr<OgaModel>     model;

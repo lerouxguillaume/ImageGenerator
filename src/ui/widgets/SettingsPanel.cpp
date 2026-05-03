@@ -365,6 +365,12 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                 : std::filesystem::path(availableModels[static_cast<size_t>(i)]).filename().string();
             drawText(win, font, name, selected ? Col::GoldLt : Col::Text,
                      listX + 6.f, itemY2 + 4.f, 12);
+            const ModelType modelType = static_cast<size_t>(i) < availableModelTypes.size()
+                ? availableModelTypes[static_cast<size_t>(i)]
+                : ModelType::SD15;
+            const std::string badge = modelType == ModelType::SDXL ? "SDXL" : "SD1.5";
+            drawTextR(win, font, badge, selected ? Col::GoldLt : Col::Muted,
+                      listX + listW - 8.f, itemY2 + 5.f, 11);
         }
     }
 

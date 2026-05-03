@@ -1,4 +1,5 @@
 #include "PresetManager.hpp"
+#include "../config/JsonFileIO.hpp"
 #include "../managers/Logger.hpp"
 #include "../prompt/PromptJson.hpp"
 #include "../prompt/PromptCompiler.hpp"
@@ -90,8 +91,7 @@ void PresetManager::save() const {
         nlohmann::json arr = nlohmann::json::array();
         for (const auto& p : presets_)
             arr.push_back(presetToJson(p));
-        std::ofstream f(filePath_);
-        f << arr.dump(4);
+        JsonFileIO::atomicWrite(filePath_, arr, 4);
         Logger::info("Presets saved to " + filePath_);
     } catch (const std::exception& e) {
         Logger::error(std::string("Preset save error: ") + e.what());

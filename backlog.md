@@ -71,17 +71,59 @@
   not forward stage into inner pipeline calls. `ResultPanel` reads `generationStage` each frame
   and renders a stage-specific label instead of a bare step counter.
 
-## High Priority
+- Fix initial model registry/default ordering in `ImageGeneratorController::update()`.
+  Moved registry mtime detection and model-list population before the model-default/model-type
+  refresh block. Registry rebuilds now reset `viewInitialized` and `lastModelIdx` so startup
+  and import-triggered model list changes apply defaults and infer type against the real
+  selected model instead of the fallback `"models"` path.
 
 - `loadCapabilities()` should cross-check file existence, not only the flag.
-  `import_model.py` always writes `vae_encoder_available: true`; the import script does not
-  verify which ONNX files were actually produced. `SdLoader` guards against this at inference
-  time (`cfg.vaeEncoderAvailable && fs::exists(mdir / "vae_encoder.onnx")`), but
-  `loadCapabilities()` in `ImportedModelRegistry.cpp` trusts the flag alone. A model exported
-  without `vae_encoder.onnx` therefore shows the strength slider and reference controls in the
-  UI even though img2img will silently fall back. Fix: after reading the flag, override with
-  `std::filesystem::exists(onnxPath / "vae_encoder.onnx")` so the registry matches `SdLoader`'s
-  own check.
+  Done: after reading the manifest flag, `ImportedModelRegistry::loadCapabilities()` now also
+  requires `onnxPath / "vae_encoder.onnx"` to exist. The registry-facing UI capability state now
+  matches `SdLoader`'s inference-time VAE encoder check, so img2img/reference controls are not
+  shown for models that cannot actually encode an init/reference image.
+
+- Replace `inferModelType()` with `arch` from the registry.
+  Done: `SettingsPanel` now carries `availableModelTypes` alongside the other model vectors,
+  populated from `ImportedModel::arch` when the registry is loaded. `ImageGeneratorController`
+  refreshes `cachedModelType_` from the selected model's typed registry value instead of
+  reopening and scanning `model.json`, and the old `inferModelType()` helper is gone.
+
+- Show model type badge in the model selector dropdown.
+  Done: `SettingsPanel::render()` now shows a compact right-aligned `SD1.5` or `SDXL` label
+  for each model dropdown row using `availableModelTypes`, with no extra disk reads and no
+  change to the collapsed selector layout.
+
+- Prune missing models from the registry at load time.
+  Done: `ImportedModelRegistry::load()` now skips entries with an empty or missing `onnxPath`
+  and logs the skipped id/name/path. The pruning is in-memory only for now, so the registry file
+  is not rewritten implicitly during load.
+
+- Import script: write accurate `vae_encoder_available` based on export output.
+  Done: `scripts/import_model.py` now writes `capabilities.vae_encoder_available` from the
+  actual presence of `vae_encoder.onnx` in the export output directory instead of hardcoding
+  `true`. LoRA compatibility still needs a separate concrete compatibility rule before changing
+  `lora_compatible`.
+
+- Add atomic save and backup behavior for user-owned JSON files.
+  Done: added `JsonFileIO::atomicWrite()` and routed `ProjectManager::save()`,
+  `PresetManager::save()`, `AppConfig::save()`, and `ImportedModelRegistry::save()` through it.
+  Saves now write a same-directory `.tmp`, retain one `.bak` when replacing an existing file,
+  and rename the temp file into place.
+
+- Wire up a practical static-analysis / formatting baseline.
+  Done: CMake now exports `compile_commands.json`, the repo has a `.clang-format`, and
+  `docs/00_overview/build_system.md` documents targeted `clang-tidy` and formatting commands.
+  clang-tidy is intentionally not enabled globally in every build yet because the profile is
+  strict and the full codebase is not at a zero-warning baseline.
+
+- Clear current compiler warnings from a clean rebuild.
+  Done: handled the unchecked `chdir` result in `Subprocess.cpp`, scoped the GenAI timing helper
+  to `USE_GENAI`, removed the unused `race` parameter name in `PromptBuilder.hpp`, stopped
+  parsing the unused ONNX external-data offset, and changed the manifest key loop in
+  `SdLoader.cpp` to avoid binding `std::string&` to string literal temporaries.
+
+## High Priority
 
 - Split cached model state from per-run mutable state in the SD pipeline.
   Today `ModelManager` returns a shared `GenerationContext` that is mutated during each run
@@ -114,36 +156,19 @@
   ~~and catch exceptions internally, routing them through `onError`. `startGenerationTask` is now~~
   ~~a minimal thread spawner with no exception handling or business logic.~~
 
+- Add a headless test harness for domain logic.
+  The project currently has no visible test target (`ctest --test-dir build` reports no tests).
+  Add a small CTest-enabled executable covering prompt parse/merge/compile behavior, project
+  JSON codecs, output path resolution, post-processing invariants, registry capability loading,
+  and candidate scoring without opening SFML windows or loading ONNX models. This should happen
+  before more feature work so cleanup can proceed with regression coverage.
+
 ## Medium Priority
 
-- Replace `inferModelType()` with `arch` from the registry.
-  `inferModelType()` is still called once in `ImageGeneratorController::update()` on every
-  model selection change, re-reading `model.json` from disk. `ImportedModel::arch` already
-  stores "sd15"/"sdxl" and is loaded at registry construction. Add a `ModelType` entry to the
-  `SettingsPanel` parallel model vectors (`availableModelTypes`, alongside the existing
-  `availableModels`/`availableModelNames`/`modelVaeEncoderAvailable`/`modelLoraCompatible`)
-  and replace `inferModelType()` with a direct lookup. This removes the last per-model-change
-  disk read and makes `inferModelType()` unused.
-
-- Show model type badge in the model selector dropdown.
-  `ImportedModel::arch` is available but not surfaced anywhere in the UI. Once the arch is in
-  `SettingsPanel`'s parallel vectors (see above), rendering a small "SD1.5" or "SDXL" label
-  alongside each model name in the dropdown requires no extra disk reads and gives users
-  immediate confirmation of which architecture they selected.
-
-- Import script: write accurate `vae_encoder_available` based on export output.
-  `import_model.py` currently always writes `vae_encoder_available: true` in the capabilities
-  block regardless of which ONNX files were actually produced. After exporting, check whether
-  `vae_encoder.onnx` exists in the output directory before writing the flag. Same applies to
-  `lora_compatible` — detect actual weight compatibility rather than defaulting to true. This
-  makes the flag trustworthy and removes the need for the file-existence override in
-  `loadCapabilities()`.
-
-- Prune missing models from the registry at load time.
-  If an imported model directory is deleted manually, `ImportedModelRegistry::load()` still
-  returns the entry. The model appears in the dropdown and any attempt to generate fails at
-  `SdLoader`. Filter out entries where `onnxPath` no longer exists during `load()`, and log
-  each pruned entry so the user knows why it disappeared.
+- Import script: detect actual LoRA compatibility.
+  `import_model.py` still writes `lora_compatible: true` in the capabilities block. Define the
+  compatibility rule in terms of exported companion weight files and/or key compatibility, then
+  write `lora_compatible` from that check instead of defaulting to true.
 
 - Replace per-image thumbnail `std::async` spawning with a bounded thumbnail worker queue.
   (`ImageGeneratorController.cpp:1162–1177`) Gallery refresh currently launches one async task
@@ -162,18 +187,12 @@
   codec files such as `ProjectJson.*` and `ConfigJson.*` so managers focus on storage semantics
   and project mutation rules.
 
-- Add atomic save and backup behavior for user-owned JSON files.
-  `ProjectManager::save()`, `PresetManager::save()`, and `AppConfig::save()` write directly to
-  their target files. Write to a temporary file, flush, then rename into place, optionally
-  retaining one `.bak`, so project/config/preset state is not corrupted if the app exits during
-  a save.
-
-- Add a headless test harness for domain logic.
-  The project has no visible test target. Add a small CTest-enabled executable covering prompt
-  parse/merge/compile behavior, project JSON codecs, output path resolution, post-processing
-  invariants, and candidate scoring without opening SFML windows or loading ONNX models.
-
 ## Low Priority
+
+- Clean local/project hygiene entries.
+  The repo has ignored build/package/dependency artifacts as expected, plus an untracked
+  `.codex` file, an empty `src/services` directory, and an unignored empty `cache_dir`. Decide
+  whether `cache_dir` and `src/services` are intentional, then remove or ignore/document them.
 
 - Centralise constraint token string literals.
   (`ProjectController.cpp` — `buildConstraintTokens`) `"transparent background"`,

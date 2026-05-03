@@ -92,7 +92,7 @@ inline PromptBuilder buildCharacterPrompt(const Race& race, const Gender gender)
 
 // Build the negative prompt to suppress opposite-gender outputs, quality issues,
 // and unwanted full-body compositions.
-inline PromptBuilder buildNegativePrompt(const Race& race, const Gender gender) {
+inline PromptBuilder buildNegativePrompt(const Race&, const Gender gender) {
     PromptBuilder neg;
 
     // Opposite gender first

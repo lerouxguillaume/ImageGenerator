@@ -126,7 +126,6 @@ OnnxExternalIndex parseExternalIndex(const OnnxModelBundle& bundle) {
             std::string          name;
             std::vector<int64_t> shape;
             int32_t              dtype    = 0;
-            int64_t              offset   = 0;
             int64_t              length   = -1;
             std::string          location;
             bool                 isExt    = false;
@@ -170,8 +169,7 @@ OnnxExternalIndex parseExternalIndex(const OnnxModelBundle& bundle) {
                     }
                     p = eend;
                     if      (key == "location") location = std::move(val);
-                    else if (key == "offset")   { try { offset = std::stoll(val); } catch (...) {} }
-                    else if (key == "length")   { try { length = std::stoll(val); } catch (...) {} }
+                    if (key == "length") { try { length = std::stoll(val); } catch (...) {} }
                 } else if (tf == 14 && tw == 0) {
                     // data_location: EXTERNAL = 1
                     if (readVarint(data, p, bodyEnd) == 1u) isExt = true;

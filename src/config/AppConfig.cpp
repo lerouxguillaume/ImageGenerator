@@ -1,4 +1,5 @@
 #include "AppConfig.hpp"
+#include "JsonFileIO.hpp"
 #include "../managers/Logger.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -89,8 +90,7 @@ void AppConfig::save(const std::string& configPath) const {
         j["modelConfigs"] = mcj;
         j["promptEnhancer"]["enabled"]  = promptEnhancer.enabled;
         j["promptEnhancer"]["modelDir"] = promptEnhancer.modelDir;
-        std::ofstream f(configPath);
-        f << j.dump(4);
+        JsonFileIO::atomicWrite(configPath, j, 4);
         Logger::info("Config saved to " + configPath);
     } catch (const std::exception& e) {
         Logger::info(std::string("Config save error: ") + e.what());

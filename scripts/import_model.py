@@ -100,8 +100,10 @@ def write_capabilities(output_dir: str, arch: str) -> None:
             "vae_encoder":    {"dtype": "fp16"},
         }
 
+    vae_encoder_available = os.path.exists(os.path.join(output_dir, "vae_encoder.onnx"))
+
     data["capabilities"] = {
-        "vae_encoder_available": True,
+        "vae_encoder_available": vae_encoder_available,
         "lora_compatible":       True,
         "components":            components,
     }

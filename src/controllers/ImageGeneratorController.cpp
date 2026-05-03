@@ -98,12 +98,8 @@ static std::filesystem::path importedRegistryPath() {
     return executableDir() / "models" / "imported" / "registry.json";
 }
 
-static ModelType inferModelType(const std::string& modelDir) {
-    if (modelDir.empty()) return ModelType::SD15;
-    std::ifstream f(modelDir + "/model.json");
-    if (!f.is_open()) return ModelType::SD15;
-    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    return (content.find("\"sdxl\"") != std::string::npos) ? ModelType::SDXL : ModelType::SD15;
+static ModelType modelTypeFromArch(const std::string& arch) {
+    return arch == "sdxl" ? ModelType::SDXL : ModelType::SD15;
 }
 
 static std::string sanitiseName(const std::string& s) {
@@ -451,6 +447,7 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
 
     view.settingsPanel.availableModels.clear();
     view.settingsPanel.availableModelNames.clear();
+    view.settingsPanel.availableModelTypes.clear();
     view.settingsPanel.selectedModelIdx = 0;
     modelsDirty = true;
     lorasDirty  = true;
@@ -1046,12 +1043,45 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     auto& rp = view.resultPanel;
 
+    // Auto-detect new imports by watching the registry file mtime
+    {
+        std::error_code ec;
+        const auto mtime = std::filesystem::last_write_time(importedRegistryPath(), ec);
+        if (!ec && mtime != lastRegistryMtime_) {
+            modelsDirty = true;
+            lastRegistryMtime_ = mtime;
+        }
+    }
+
+    // Populate model list from the imported model registry before applying
+    // model-specific defaults. On first open, this prevents the fallback
+    // "models" path from being cached as the active model.
+    if (modelsDirty) {
+        sp.availableModels.clear();
+        sp.availableModelNames.clear();
+        sp.availableModelTypes.clear();
+        sp.modelVaeEncoderAvailable.clear();
+        sp.modelLoraCompatible.clear();
+        ImportedModelRegistry reg(importedRegistryPath());
+        for (const auto& model : reg.list()) {
+            sp.availableModels.push_back(model.onnxPath.string());
+            sp.availableModelNames.push_back(model.name);
+            sp.availableModelTypes.push_back(modelTypeFromArch(model.arch));
+            sp.modelVaeEncoderAvailable.push_back(model.capabilities.vaeEncoderAvailable);
+            sp.modelLoraCompatible.push_back(model.capabilities.loraCompatible);
+        }
+        sp.selectedModelIdx = 0;
+        viewInitialized = false;
+        lastModelIdx = -1;
+        modelsDirty = false;
+    }
+
     // Apply model defaults on first open or model change
     if (!viewInitialized || sp.selectedModelIdx != lastModelIdx) {
         applyModelDefaults(view);
         lastModelIdx     = sp.selectedModelIdx;
         viewInitialized  = true;
-        cachedModelType_ = inferModelType(sp.getSelectedModelDir());
+        cachedModelType_ = sp.currentModelType();
         dslDirty_        = true;
         refreshGallery(view);
     }
@@ -1081,33 +1111,6 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                 case BrowseTarget::LoraDir:   m.settingsLoraDir     = picked; m.settingsLoraDirCursor     = static_cast<int>(picked.size()); break;
             }
         }
-    }
-
-    // Auto-detect new imports by watching the registry file mtime
-    {
-        std::error_code ec;
-        const auto mtime = std::filesystem::last_write_time(importedRegistryPath(), ec);
-        if (!ec && mtime != lastRegistryMtime_) {
-            modelsDirty = true;
-            lastRegistryMtime_ = mtime;
-        }
-    }
-
-    // Populate model list from the imported model registry
-    if (modelsDirty) {
-        sp.availableModels.clear();
-        sp.availableModelNames.clear();
-        sp.modelVaeEncoderAvailable.clear();
-        sp.modelLoraCompatible.clear();
-        ImportedModelRegistry reg(importedRegistryPath());
-        for (const auto& model : reg.list()) {
-            sp.availableModels.push_back(model.onnxPath.string());
-            sp.availableModelNames.push_back(model.name);
-            sp.modelVaeEncoderAvailable.push_back(model.capabilities.vaeEncoderAvailable);
-            sp.modelLoraCompatible.push_back(model.capabilities.loraCompatible);
-        }
-        sp.selectedModelIdx = 0;
-        modelsDirty = false;
     }
 
     // Scan LoRA directory

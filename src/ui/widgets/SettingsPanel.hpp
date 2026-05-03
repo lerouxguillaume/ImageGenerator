@@ -25,6 +25,7 @@ public:
     // ── Model selection ───────────────────────────────────────────────────────
     std::vector<std::string> availableModels;           // onnx paths, set by controller from registry
     std::vector<std::string> availableModelNames;       // display names, parallel to availableModels
+    std::vector<ModelType>   availableModelTypes;       // model architecture, parallel to availableModels
     std::vector<bool>        modelVaeEncoderAvailable;  // parallel to availableModels
     std::vector<bool>        modelLoraCompatible;       // parallel to availableModels
     int  selectedModelIdx = 0;
@@ -38,6 +39,10 @@ public:
     bool currentModelLoraCompatible() const {
         const auto idx = static_cast<size_t>(selectedModelIdx);
         return idx >= modelLoraCompatible.size() || modelLoraCompatible[idx];
+    }
+    ModelType currentModelType() const {
+        const auto idx = static_cast<size_t>(selectedModelIdx);
+        return idx < availableModelTypes.size() ? availableModelTypes[idx] : ModelType::SD15;
     }
 
     // ── LoRA selection ────────────────────────────────────────────────────────

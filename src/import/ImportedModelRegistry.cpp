@@ -1,4 +1,6 @@
 #include "ImportedModelRegistry.hpp"
+#include "../config/JsonFileIO.hpp"
+#include "../managers/Logger.hpp"
 
 #include <chrono>
 #include <fstream>
@@ -50,15 +52,18 @@ bool ImportedModelRegistry::exists(const std::string& id) const {
 static ModelCapabilities loadCapabilities(const std::filesystem::path& onnxPath) {
     ModelCapabilities caps;
     std::ifstream f(onnxPath / "model.json");
-    if (!f) return caps;
-    try {
-        const auto j = nlohmann::json::parse(f);
-        if (j.contains("capabilities")) {
-            const auto& c = j["capabilities"];
-            caps.vaeEncoderAvailable = c.value("vae_encoder_available", true);
-            caps.loraCompatible      = c.value("lora_compatible",       true);
-        }
-    } catch (...) {}
+    if (f) {
+        try {
+            const auto j = nlohmann::json::parse(f);
+            if (j.contains("capabilities")) {
+                const auto& c = j["capabilities"];
+                caps.vaeEncoderAvailable = c.value("vae_encoder_available", true);
+                caps.loraCompatible      = c.value("lora_compatible",       true);
+            }
+        } catch (...) {}
+    }
+    caps.vaeEncoderAvailable =
+        caps.vaeEncoderAvailable && std::filesystem::exists(onnxPath / "vae_encoder.onnx");
     return caps;
 }
 
@@ -75,6 +80,12 @@ void ImportedModelRegistry::load() {
             m.onnxPath   = entry.value("onnxPath",   std::string{});
             m.importedAt = entry.value("importedAt", std::string{});
             if (!m.id.empty()) {
+                if (m.onnxPath.empty() || !std::filesystem::exists(m.onnxPath)) {
+                    Logger::info("ImportedModelRegistry: skipping missing model '"
+                                 + (m.name.empty() ? m.id : m.name)
+                                 + "' at " + m.onnxPath.string());
+                    continue;
+                }
                 m.capabilities = loadCapabilities(m.onnxPath);
                 models_.push_back(std::move(m));
             }
@@ -83,7 +94,6 @@ void ImportedModelRegistry::load() {
 }
 
 void ImportedModelRegistry::save() const {
-    std::filesystem::create_directories(registryPath_.parent_path());
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& m : models_) {
         arr.push_back({
@@ -94,6 +104,5 @@ void ImportedModelRegistry::save() const {
             {"importedAt", m.importedAt.empty() ? utcNow() : m.importedAt},
         });
     }
-    std::ofstream f(registryPath_);
-    f << nlohmann::json{{"models", arr}}.dump(2);
+    JsonFileIO::atomicWrite(registryPath_, nlohmann::json{{"models", arr}}, 2);
 }

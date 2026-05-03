@@ -141,7 +141,7 @@ namespace sd {
         if (!j.contains("components")) return;
         Logger::info("Validating model manifest...");
         for (const auto& [compName, comp] : j["components"].items()) {
-            for (const std::string& key : {"onnx", "weights"}) {
+            for (const char* key : {"onnx", "weights"}) {
                 if (!comp.contains(key)) continue;
                 const std::string file = comp[key].get<std::string>();
                 const std::string full = modelDir + "/" + file;

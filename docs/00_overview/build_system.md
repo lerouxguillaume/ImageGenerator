@@ -43,3 +43,28 @@ You must run:
 
 ```bash
 cmake -B build
+```
+
+---
+
+# Static analysis and formatting
+
+CMake exports `build/compile_commands.json` for editor tooling and targeted
+`clang-tidy` runs.
+
+Targeted lint command:
+
+```bash
+clang-tidy -p build src/import/ImportedModelRegistry.cpp
+```
+
+Run lint on focused files while cleaning up a subsystem. Do not enable clang-tidy
+globally in every build yet; the current `.clang-tidy` profile is intentionally
+strict and the whole codebase is not at a zero-warning baseline.
+
+Formatting is defined by the repo-root `.clang-format`. Format touched C++ files
+with:
+
+```bash
+clang-format -i src/path/to/file.cpp
+```

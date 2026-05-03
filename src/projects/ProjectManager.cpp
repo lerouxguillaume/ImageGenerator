@@ -1,4 +1,5 @@
 #include "ProjectManager.hpp"
+#include "../config/JsonFileIO.hpp"
 #include "../managers/Logger.hpp"
 #include "../prompt/PromptJson.hpp"
 #include <chrono>
@@ -354,8 +355,7 @@ void ProjectManager::save() const {
         nlohmann::json arr = nlohmann::json::array();
         for (const auto& p : projects_)
             arr.push_back(projectToJson(p));
-        std::ofstream f(filePath_);
-        f << arr.dump(4);
+        JsonFileIO::atomicWrite(filePath_, arr, 4);
         Logger::info("Projects saved to " + filePath_);
     } catch (const std::exception& e) {
         Logger::error(std::string("Project save error: ") + e.what());

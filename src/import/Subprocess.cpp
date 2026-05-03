@@ -154,8 +154,8 @@ bool Subprocess::start(const std::vector<std::string>& args,
         ::dup2(pipefd[1], STDERR_FILENO);
         ::close(pipefd[1]);
 
-        if (!workDir.empty())
-            ::chdir(workDir.c_str());
+        if (!workDir.empty() && ::chdir(workDir.c_str()) != 0)
+            ::_exit(127);
 
         std::vector<char*> argv;
         std::vector<std::string> copy = args;
