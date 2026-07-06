@@ -482,7 +482,6 @@ void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const st
     const int selected = findGallerySelection(rp.gallery, target);
 
     selectGalleryImage(view, selected);
-    rp.bestWallCandidateScore = -1.f;
 }
 
 void ImageGeneratorController::flushPendingThumbs(ImageGeneratorView& view) {

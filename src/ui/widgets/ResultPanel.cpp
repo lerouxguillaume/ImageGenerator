@@ -308,15 +308,6 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             drawRect(win, {actionBarX, actionBarY, actionBarW, actionBarH},
                      colors.panel, colors.border, metrics.borderWidth);
 
-            if (bestWallCandidateScore >= 0.f) {
-                char scoreBuf[32];
-                std::snprintf(scoreBuf, sizeof(scoreBuf), "best: %.0f", bestWallCandidateScore);
-                const sf::Color scoreCol = (bestWallCandidateScore < 150.f) ? sf::Color(60, 180, 80)
-                                         : (bestWallCandidateScore < 500.f) ? colors.goldLt
-                                                                             : colors.redLt;
-                drawTextC(win, font, scoreBuf, scoreCol, cx, actionBarY + 4.f, type.helper, false);
-            }
-
             if (resultLoaded) {
                 auto placeButtons = [&](bool withImprove) {
                     const float totalW = (withImprove ? actionAuxW + actionGap : 0.f)

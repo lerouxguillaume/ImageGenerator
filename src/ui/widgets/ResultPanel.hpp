@@ -68,9 +68,6 @@ public:
     bool improveRequested  = false;
     bool deleteRequested   = false;
 
-    // Candidate-run score display
-    float bestWallCandidateScore = -1.f; // < 0 = not computed
-
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
     void render(sf::RenderWindow& win, sf::Font& font,
