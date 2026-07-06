@@ -29,14 +29,6 @@ struct GenerationParams {
 // Execution provider (CPU / CUDA / DML) is selected at compile time via USE_CUDA / USE_DML defines.
 class PortraitGeneratorAi {
 public:
-    // Generate a character portrait for the given race/gender combination.
-    // Builds the prompt automatically from PromptBuilder and saves to assets/generated/.
-    // progressStep: if non-null, incremented after each denoising step (for progress bars).Exporting the SDX
-    static void generatePortrait(const Race race,
-                                 const Gender gender,
-                                 const GenerationParams& params,
-                                 std::atomic<int>* progressStep = nullptr);
-
     // Generate an image from an explicit prompt pair.
     // outputPath: destination .png file (parent directory must exist or be creatable).
     // modelDir:   directory containing text_encoder.onnx, unet.onnx, vae_decoder.onnx,

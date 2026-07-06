@@ -10,7 +10,7 @@
 namespace sd {
 
 // Full generation pipeline: model load → text encode → denoise → VAE decode → save.
-// Called by both PortraitGeneratorAi::generatePortrait and generateFromPrompt.
+// Called by PortraitGeneratorAi::generateFromPrompt.
 // stopToken: each jthread owns its own stop_source; request_stop() fires SetTerminate()
 // immediately via std::stop_callback, with no polling delay.
 // stage: if non-null, updated at each pipeline phase so the UI can show meaningful labels.

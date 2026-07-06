@@ -96,14 +96,4 @@ float drawWrapped(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
     flush();
     return totalH;
 }
-
-sf::Color diffColor(int d) {
-    const auto& colors = Theme::instance().colors();
-    switch (d) {
-        case 1:  return colors.greenLt;
-        case 2:  return colors.gold;
-        case 3:  return colors.redLt;
-        default: return colors.purpleLt;
-    }
-}
 } // namespace Helpers

@@ -21,8 +21,4 @@ namespace Helpers {
                    sf::Color color, float rx, float y, unsigned size = 14);
     float drawWrapped(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
                       sf::Color color, float x, float y, float maxW, unsigned size = 12);
-    sf::Color   diffColor(int d);
-    std::string diffStars(int d);
-    std::string statusStr(Status s);
-    sf::Color   statusColor(Status s);
 }
