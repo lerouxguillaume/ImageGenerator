@@ -51,22 +51,20 @@ The binary expects `models/vocab.json` and `models/merges.txt` in the working di
 ## Build system
 → docs/00_overview/build_system.md
 
-## Generation service — `GenerationService`, `CandidateRunPipeline`
-→ `src/controllers/GenerationService.hpp` (typed job structs)  
-→ `src/controllers/CandidateRunPipeline.cpp` (candidate-run execution)
+## Generation service — `GenerationService`
+→ `src/controllers/GenerationService.hpp` (typed job structs)
 
 Key facts:
-- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, post-process spec, and model capabilities (`vaeEncoderAvailable`, `loraCompatible`)
-- `CandidateRunJob` carries the full candidate pipeline spec (patron path, run dirs, explore/refine counts, scoring spec) plus `loraCompatible`
-- `GenerationService::run()` handles reference normalization, single/multi-image generation, and post-processing; both `run()` and `runCandidateRun()` return `void`
-- `GenerationService` uses `job.vaeEncoderAvailable` to skip reference normalization before the pipeline sees it; uses `job.loraCompatible` to clear any LoRA entries defensively — neither silently falls back
+- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, and model capabilities (`vaeEncoderAvailable`, `loraCompatible`)
+- `GenerationService::run()` handles single/multi-image generation; it returns `void`
+- `GenerationService` uses `job.loraCompatible` to clear any LoRA entries defensively — it does not silently fall back
 - `GenerationProgress` holds three nullable atomic pointers: `step` (denoising step counter), `currentImage` (1-based image index), and `stage` (`atomic<GenerationStage>*`) — all owned by `ResultPanel`
-- `GenerationCallbacks` / `CandidateRunCallbacks` carry typed `onResult` / `onError` functors; the service catches all exceptions internally and routes them through `onError` — exceptions never reach the caller thread
+- `GenerationCallbacks` carry typed `onResult` / `onError` functors; the service catches all exceptions internally and routes them through `onError` — exceptions never reach the caller thread
 - `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone`; it has no exception handling or business logic
-- `cachedModelType_` is updated in `update()` on model change; `launchGeneration`, `launchCandidateRun`, and `launchEnhancement` all use it — `inferModelType()` is only called from `update()`
-- `GenerationStage` enum is in `src/enum/enums.hpp`; standard generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`; candidate runs: `Exploring → Scoring → Refining → WritingManifest → Done`
-- Candidate runs do NOT forward `stage` into inner `generateFromPrompt` calls — coarse outer stages own the label
-- `GenerationResult` returns raw output paths and a `referenceUsed` flag
+- `cachedModelType_` is updated in `update()` on model change; `launchGeneration` and `launchEnhancement` use it — `inferModelType()` is only called from `update()`
+- `GenerationStage` enum is in `src/enum/enums.hpp`; standard generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`
+- `GenerationResult` returns raw output paths
+- The gallery is a flat, newest-first scan of `config.outputDir` (`.png`/`.jpg`); generated images are written directly there as `img_<timestamp>.png`
 
 ## SD Pipeline — `sd/SdPipeline.cpp → runPipeline()` (txt2img + img2img)
 → docs/10_pipeline/pipeline_orchestration.md  
@@ -131,29 +129,6 @@ UI theme facts:
 
 ## Preset system — `PresetManager` (DSL-backed)
 → docs/80_presets/preset_overview.md
-
-## Project system — `src/projects/` (`Project`, `AssetType`, `ProjectManager`)
-→ docs/75_projects/project_overview.md  
-→ docs/features/auto_generate.md (candidate-run generation workflow)
-
-Key facts:
-- `ProjectView` is a first-class themed asset-pack workspace, not just a launcher into the standalone generator
-- The embedded project workspace reuses `ImageGeneratorController` for generation, settings modal, and gallery behavior, but owns its own theme/asset authoring UI
-- Built-in asset templates live in `AssetTypeTemplate.*` and are applied only at asset-type creation time
-- Gallery is scoped to the currently selected asset type subfolder in the project workspace; project asset selection happens in `ProjectView`, not through `ResultPanel::tabs`
-- `ProjectController` still uses `ResolvedProjectContext` instead of reading `ProjectManager` from `ImageGeneratorController`
-- Never access `ProjectManager` from `ImageGeneratorController` — use `ResolvedProjectContext` as the data carrier
-- Never bake constraint tokens into `stylePrompt` on the project struct — keep them separate so text areas show only user-authored content
-- Current `wall_left` generation uses `GenerationWorkflow::CandidateRun`
-- Candidate runs write to `runs/<run_id>/explore/` and `runs/<run_id>/refine/`, plus `manifest.json`
-- Candidate scoring lives in `src/assets/CandidateScorer.*`; it applies `AssetExportSpec::alphaCutout` before geometric scoring
-- Generated asset processing lives in `src/assets/GeneratedAssetProcessor.*`; standard and candidate-run flows share this for alpha cutout, processed output, standalone transparent derivatives when applicable, and metadata sidecars
-- Asset output paths and gallery discovery live in `src/assets/AssetArtifactStore.*`; do not rebuild `raw/`, `processed/`, `runs/`, `.reference_cache/`, or `patron.png` paths in controllers
-- Candidate-run counts, strengths, and score threshold are persisted on `AssetType::candidateRun` and copied through `ResolvedProjectContext`
-- Scoring coordinates are in the asset generation canvas space, e.g. the `wall_left` template uses 512×768
-- Each `CandidateRun` asset type has a patron at `output/<project>/<asset>/patron.png` — generated from `AssetSpec`, used as img2img seed for exploration; regenerated on orientation or bounds change
-- `PatronGenerator` draws orientation-specific patrons for `LeftWall`, `RightWall`, `FloorTile`, and `Character`; `Unset` and `Prop` use the rectangle fallback
-- Never regenerate the patron inside the generation thread — `launchCandidateRun` reads it; `ProjectController::refreshPatron` writes it
 
 ## Prompt DSL — `src/prompt/` (parse / compile / merge / JSON)
 → docs/85_prompt/prompt_dsl.md

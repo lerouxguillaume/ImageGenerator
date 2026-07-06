@@ -105,8 +105,6 @@ void MenuController::handleClick(sf::Vector2f pos, MenuView& screen, AppScreen& 
         appScreen = AppScreen::ImageGenerator;
     } else if (screen.btnImageEdit.contains(pos)) {
         appScreen = AppScreen::ImageEditor;
-    } else if (screen.btnProjects.contains(pos)) {
-        appScreen = AppScreen::Projects;
     } else if (screen.btnImportModel.contains(pos)) {
         showModal_ = true;
         importer_.reset();

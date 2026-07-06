@@ -1,12 +1,8 @@
 #include "ImageGeneratorController.hpp"
 #include "../import/ImportedModelRegistry.hpp"
-#include "../assets/AssetArtifactStore.hpp"
-#include "../assets/CandidateScorer.hpp"
-#include "../postprocess/AssetValidator.hpp"
 #include "../managers/Logger.hpp"
 #include "../enum/enums.hpp"
 #include "../presets/PresetManager.hpp"
-#include "../projects/PatronGenerator.hpp"
 #include "../prompt/PromptParser.hpp"
 #include "../prompt/PromptCompiler.hpp"
 #include "../prompt/PromptMerge.hpp"
@@ -102,19 +98,6 @@ static ModelType modelTypeFromArch(const std::string& arch) {
     return arch == "sdxl" ? ModelType::SDXL : ModelType::SD15;
 }
 
-static std::string sanitiseName(const std::string& s) {
-    std::string r;
-    r.reserve(s.size());
-    for (char c : s) {
-        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
-            c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
-            r += '_';
-        else
-            r += c;
-    }
-    return r;
-}
-
 static std::string trimCopy(const std::string& value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
@@ -154,29 +137,6 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     return gs;
 }
 
-struct SelectedImageMetadata {
-    bool        referenceUsed = false;
-    std::string referenceImage;
-    float       structureStrength = 0.0f;
-};
-
-
-static SelectedImageMetadata loadSelectedImageMetadata(const std::filesystem::path& imagePath) {
-    SelectedImageMetadata metadata;
-    std::ifstream metaFile(AssetArtifactStore::metadataPathFor(imagePath));
-    if (!metaFile.is_open())
-        return metadata;
-    nlohmann::json metaJson;
-    try {
-        metaFile >> metaJson;
-        metadata.referenceUsed = metaJson.value("referenceUsed", false);
-        metadata.referenceImage = metaJson.value("referenceImage", std::string{});
-        metadata.structureStrength = metaJson.value("structureStrength", 0.0f);
-    } catch (...) {
-        return {};
-    }
-    return metadata;
-}
 
 static sf::Image resizeImage(const sf::Image& src, unsigned dstW, unsigned dstH) {
     sf::Image dst;
@@ -217,83 +177,35 @@ struct GalleryImageEntry {
     std::string path;
     std::string filename;
     std::filesystem::file_time_type modified;
-    float score = -1.f;
-    bool scoreValid = false;
 };
 
-struct GalleryDisplayPath {
-    std::filesystem::path basePath;
-    std::filesystem::path displayPath;
-};
-
-struct GalleryImageData {
-    sf::Image img;
-    std::filesystem::path displayPath;
-    SelectedImageMetadata metadata;
-    std::vector<ResultPanel::ValidationChip> validationChips;
-    bool loaded = false;
-};
-
-static std::vector<GalleryImageEntry> loadGalleryEntries(
-    const AssetArtifactStore& artifacts, GenerationWorkflow workflow) {
+// Scans the output directory (non-recursive) for generated images, newest first.
+static std::vector<GalleryImageEntry> loadGalleryEntries(const std::filesystem::path& dir) {
     std::vector<GalleryImageEntry> entries;
-    for (const auto& entry : artifacts.listGalleryImages(workflow)) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        const std::string ext = entry.path().extension().string();
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg") continue;
+        std::error_code tec;
         entries.push_back({
-            entry.path.string(),
-            entry.filename,
-            entry.modified,
-            -1.f,
-            false
+            entry.path().string(),
+            entry.path().filename().string(),
+            std::filesystem::last_write_time(entry.path(), tec)
         });
     }
-    return entries;
-}
-
-static void scoreGalleryEntries(std::vector<GalleryImageEntry>& entries,
-                                const AssetSpec& spec,
-                                const AlphaCutoutSpec& cutoutSpec) {
-    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-        auto& entry = entries[static_cast<size_t>(i)];
-        const auto score = CandidateScorer::scoreCandidate(entry.path, spec, i, cutoutSpec);
-        entry.score = score.score;
-        entry.scoreValid = score.valid;
-    }
-}
-
-static void sortGalleryEntries(std::vector<GalleryImageEntry>& entries, bool candidateWorkflow) {
-    if (candidateWorkflow) {
-        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-            if (a.scoreValid != b.scoreValid) return a.scoreValid;
-            if (a.scoreValid && b.scoreValid && a.score != b.score) return a.score < b.score;
-            return a.modified > b.modified;
-        });
-        return;
-    }
-
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
         return a.modified > b.modified;
     });
+    return entries;
 }
 
 static std::vector<ResultPanel::GalleryItem> buildGalleryItems(
-    const std::vector<GalleryImageEntry>& entries,
-    bool candidateWorkflow,
-    float scoreThreshold) {
+    const std::vector<GalleryImageEntry>& entries) {
     std::vector<ResultPanel::GalleryItem> gallery;
     gallery.reserve(entries.size());
-    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-        const auto& entry = entries[static_cast<size_t>(i)];
-        const bool usable = candidateWorkflow && entry.scoreValid && entry.score <= scoreThreshold;
-        gallery.push_back({
-            entry.path,
-            entry.filename,
-            nullptr,
-            entry.scoreValid ? entry.score : -1.f,
-            candidateWorkflow && i == 0 && entry.scoreValid,
-            usable,
-            candidateWorkflow && entry.scoreValid && !usable
-        });
-    }
+    for (const auto& entry : entries)
+        gallery.push_back({entry.path, entry.filename, nullptr, -1.f, false, false, false});
     return gallery;
 }
 
@@ -319,51 +231,6 @@ static int findGallerySelection(const std::vector<ResultPanel::GalleryItem>& gal
         if (gallery[static_cast<size_t>(i)].path == target)
             return i;
     return gallery.empty() ? -1 : 0;
-}
-
-static GalleryDisplayPath resolveGalleryDisplayPath(const ResultPanel::GalleryItem& item,
-                                                    bool showProcessedOutput,
-                                                    const AssetSpec& spec) {
-    GalleryDisplayPath resolved;
-    resolved.basePath = showProcessedOutput
-        ? std::filesystem::path(item.path)
-        : AssetArtifactStore::rawPathForProcessed(item.path);
-    resolved.displayPath = resolved.basePath;
-    if (showProcessedOutput && spec.requiresTransparency) {
-        const std::filesystem::path transparentPath =
-            AssetArtifactStore::transparentPathFor(resolved.basePath);
-        if (std::filesystem::exists(transparentPath))
-            resolved.displayPath = transparentPath;
-    }
-    return resolved;
-}
-
-static std::vector<ResultPanel::ValidationChip> buildValidationChips(const sf::Image& img,
-                                                                     const AssetSpec& spec,
-                                                                     bool enabled) {
-    std::vector<ResultPanel::ValidationChip> chips;
-    if (!enabled) return chips;
-
-    const auto result = AssetValidator::validate(img, spec);
-    chips.reserve(result.checks.size());
-    for (const auto& c : result.checks)
-        chips.push_back({c.name, c.status, c.detail});
-    return chips;
-}
-
-static GalleryImageData loadGalleryImageData(const GalleryDisplayPath& paths,
-                                             const AssetSpec& spec,
-                                             bool validationEnabled) {
-    GalleryImageData data;
-    data.displayPath = paths.displayPath;
-    data.loaded = data.img.loadFromFile(paths.displayPath.string())
-               || data.img.loadFromFile(paths.basePath.string());
-    if (!data.loaded) return data;
-
-    data.metadata = loadSelectedImageMetadata(
-        AssetArtifactStore::processedPathForRaw(paths.basePath));
-    data.validationChips = buildValidationChips(data.img, spec, validationEnabled);
-    return data;
 }
 
 static void clearSelectedGalleryImage(ResultPanel& rp) {
@@ -473,53 +340,6 @@ static void injectBoosters(Prompt& dsl, const ModelDefaults& md) {
     }
 }
 
-static void upsertToken(std::vector<Token>& tokens, std::string value, float weight) {
-    for (auto& token : tokens) {
-        if (token.value == value) {
-            token.weight = std::max(token.weight, weight);
-            return;
-        }
-    }
-    tokens.push_back({std::move(value), weight});
-}
-
-static void injectWallCandidatePrompt(Prompt& dsl) {
-    dsl.subject = Token{"isometric modular left wall asset", 1.35f};
-
-    upsertToken(dsl.positive, "single vertical wall slab", 1.30f);
-    upsertToken(dsl.positive, "rectangular wall section", 1.25f);
-    upsertToken(dsl.positive, "flat wall face", 1.20f);
-    upsertToken(dsl.positive, "stone or plaster wall tile", 1.15f);
-    upsertToken(dsl.positive, "transparent background", 1.25f);
-    upsertToken(dsl.positive, "isolated game asset", 1.20f);
-    upsertToken(dsl.positive, "full wall visible", 1.15f);
-    upsertToken(dsl.positive, "straight vertical side edges", 1.10f);
-    upsertToken(dsl.positive, "clean silhouette", 1.10f);
-
-    upsertToken(dsl.negative, "portrait", 1.30f);
-    upsertToken(dsl.negative, "person", 1.30f);
-    upsertToken(dsl.negative, "hand", 1.30f);
-    upsertToken(dsl.negative, "face", 1.30f);
-    upsertToken(dsl.negative, "character", 1.25f);
-    upsertToken(dsl.negative, "product photo", 1.20f);
-    upsertToken(dsl.negative, "screen", 1.15f);
-    upsertToken(dsl.negative, "device", 1.15f);
-    upsertToken(dsl.negative, "room scene", 1.25f);
-    upsertToken(dsl.negative, "furniture", 1.20f);
-    upsertToken(dsl.negative, "floor plane", 1.25f);
-    upsertToken(dsl.negative, "ground plane", 1.25f);
-}
-
-static Prompt buildAssetPrompt(const ResolvedProjectContext& ctx, const Prompt& userDsl) {
-    if (ctx.empty()) return userDsl;
-    Prompt base = ctx.stylePrompt;
-    if (!ctx.constraintTokens.positive.empty() || !ctx.constraintTokens.negative.empty())
-        base = PromptMerge::merge(base, ctx.constraintTokens);
-    if (!ctx.assetTypeTokens.positive.empty() || ctx.assetTypeTokens.subject.has_value())
-        base = PromptMerge::merge(base, ctx.assetTypeTokens);
-    return PromptMerge::merge(base, userDsl);
-}
-
 // ── Generation ────────────────────────────────────────────────────────────────
 
 void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
@@ -534,14 +354,12 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     }
 
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
-    const bool assetModeEnabled = artifacts.assetMode();
-    artifacts.ensureStandardDirs();
+    std::error_code ec;
+    std::filesystem::create_directories(config.outputDir, ec);
 
     const std::string filename = "img_" + std::to_string(now) + ".png";
-    const std::filesystem::path rawOutPath = artifacts.rawImagePath(filename);
-    const std::filesystem::path processedOutPath = artifacts.processedImagePath(filename);
-    rp.lastImagePath = (assetModeEnabled ? processedOutPath : rawOutPath).string();
+    const std::filesystem::path rawOutPath = std::filesystem::path(config.outputDir) / filename;
+    rp.lastImagePath = rawOutPath.string();
 
     rp.generating = true;
     rp.generationDone.store(false);
@@ -556,9 +374,8 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
     const std::string modelDir  = sp.getSelectedModelDir();
-    Prompt            userDsl   = PromptParser::parse(sp.positiveArea.getText(),
-                                                      sp.negativeArea.getText());
-    Prompt dsl = buildAssetPrompt(projectContext_, userDsl);
+    Prompt dsl = PromptParser::parse(sp.positiveArea.getText(),
+                                     sp.negativeArea.getText());
 
     const std::string modelKey = std::filesystem::path(modelDir).filename().string();
     if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
@@ -593,18 +410,6 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.modelDir = modelDir;
     job.vaeEncoderAvailable = sp.currentModelVaeEncoderAvailable();
     job.loraCompatible      = sp.currentModelLoraCompatible();
-    job.postProcess.assetMode = assetModeEnabled;
-    job.postProcess.requiresTransparency = projectContext_.spec.requiresTransparency;
-    job.postProcess.processedDir = artifacts.processedDir();
-    job.postProcess.exportSpec = projectContext_.exportSpec;
-    job.postProcess.reference.enabled = projectContext_.referenceEnabled;
-    job.postProcess.reference.imagePath = projectContext_.referenceImagePath;
-    job.postProcess.reference.structureStrength = projectContext_.structureStrength;
-    job.postProcess.reference.canvasWidth =
-        std::max(1, params.width > 0 ? params.width : projectContext_.spec.canvasWidth);
-    job.postProcess.reference.canvasHeight =
-        std::max(1, params.height > 0 ? params.height : projectContext_.spec.canvasHeight);
-    job.postProcess.reference.cacheDir = artifacts.referenceCacheDir();
     GenerationService* generationService = &generationService_;
 
     GenerationCallbacks callbacks;
@@ -619,124 +424,6 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         [job = std::move(job), generationService, progress,
          callbacks = std::move(callbacks)](std::stop_token st) mutable {
             generationService->run(job, progress, std::move(callbacks), std::move(st));
-        });
-}
-
-void ImageGeneratorController::launchCandidateRun(ImageGeneratorView& view) {
-    auto& sp = view.settingsPanel;
-    auto& rp = view.resultPanel;
-
-    if (projectContext_.empty()
-        || projectContext_.workflow != GenerationWorkflow::CandidateRun) {
-        launchGeneration(view);
-        return;
-    }
-
-    const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    const std::string runId = "run_" + std::to_string(now);
-    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
-    const auto layout = artifacts.candidateRunLayout(runId);
-    artifacts.ensureCandidateRunDirs(layout);
-
-    const std::filesystem::path patronFile = artifacts.patronPath();
-    std::filesystem::create_directories(artifacts.baseDir());
-    const std::string patronPath = std::filesystem::exists(patronFile)
-        ? patronFile.string()
-        : PatronGenerator::generate(projectContext_.spec, patronFile);
-    if (patronPath.empty())
-        Logger::error("PatronGenerator: failed to write patron — exploration will run as txt2img");
-
-    const CandidateRunSettings candidateRun = projectContext_.candidateRun;
-    const int exploreCount = std::max(candidateRun.minExploreImages, sp.generationParams.numImages);
-    const int candidateCount = candidateRun.candidateCount;
-    const int refineVariants = candidateRun.refineVariants;
-    const int expectedTotalImages = exploreCount + candidateCount * refineVariants;
-    const float explorationStrength = candidateRun.explorationStrength;
-
-    rp.generating = true;
-    rp.generationDone.store(false);
-    rp.cancelToken.store(false);
-    rp.generationStep.store(0);
-    rp.generationStage.store(GenerationStage::Idle);
-    rp.resultLoaded = false;
-    rp.displayedImagePath.clear();
-    rp.generationFailed.store(false);
-    rp.generationErrorMsg.clear();
-    rp.generationTotalImages.store(expectedTotalImages);
-    rp.lastImagePath = (layout.refineProcessedDir / "ref_1.png").string();
-
-    const std::string modelDir  = sp.getSelectedModelDir();
-    Prompt userDsl = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
-    Prompt dsl = buildAssetPrompt(projectContext_, userDsl);
-    injectWallCandidatePrompt(dsl);
-
-    const std::string modelKey = std::filesystem::path(modelDir).filename().string();
-    if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
-        injectBoosters(dsl, it->second);
-
-    const std::string prompt = buildEditPrompt(PromptCompiler::compile(dsl, cachedModelType_), view);
-    const std::string negPrompt = PromptCompiler::compileNegative(dsl);
-
-    const AssetSpec spec = projectContext_.spec;
-    GenerationParams baseParams = sp.generationParams;
-    if (spec.canvasWidth > 0)
-        baseParams.width = spec.canvasWidth;
-    if (spec.canvasHeight > 0)
-        baseParams.height = spec.canvasHeight;
-    if (!sp.seedInput.empty()) {
-        try { baseParams.seed = std::stoll(sp.seedInput); }
-        catch (const std::exception&) { baseParams.seed = -1; }
-    }
-    if (sp.currentModelLoraCompatible()) {
-        for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
-            if (i < sp.loraSelected.size() && sp.loraSelected[i])
-                baseParams.loras.push_back({sp.availableLoras[i],
-                                            i < sp.loraScales.size() ? sp.loraScales[i] : 1.0f});
-        }
-    }
-
-    CandidateRunJob job;
-    job.prompt               = prompt;
-    job.negativePrompt       = negPrompt;
-    job.modelDir             = modelDir;
-    job.loraCompatible       = sp.currentModelLoraCompatible();
-    job.baseParams           = baseParams;
-    job.runId                = runId;
-    job.patronPath           = patronPath;
-    job.runPath              = layout.runPath;
-    job.exploreRawDir        = layout.exploreRawDir;
-    job.exploreProcessedDir  = layout.exploreProcessedDir;
-    job.refineRawDir         = layout.refineRawDir;
-    job.refineProcessedDir   = layout.refineProcessedDir;
-    job.exploreCount         = exploreCount;
-    job.candidateCount       = candidateCount;
-    job.refineVariants       = refineVariants;
-    job.requiresTransparency = spec.requiresTransparency;
-    job.exportSpec           = projectContext_.exportSpec;
-    job.spec                 = spec;
-    job.assetTypeId          = projectContext_.assetTypeId;
-    job.explorationStrength  = explorationStrength;
-    job.refinementStrength   = candidateRun.refinementStrength;
-    job.scoreThreshold       = candidateRun.scoreThreshold;
-    GenerationProgress progress;
-    progress.step         = &rp.generationStep;
-    progress.currentImage = &rp.generationImageNum;
-    progress.stage        = &rp.generationStage;
-
-    GenerationService* generationService = &generationService_;
-
-    CandidateRunCallbacks callbacks;
-    callbacks.onError = [failed = &rp.generationFailed,
-                         errorMsg = &rp.generationErrorMsg](std::string err) {
-        *errorMsg = err;
-        failed->store(true);
-    };
-
-    startGenerationTask(
-        view,
-        [job = std::move(job), generationService, progress,
-         callbacks = std::move(callbacks)](std::stop_token st) mutable {
-            generationService->runCandidateRun(job, progress, std::move(callbacks), std::move(st));
         });
 }
 
@@ -801,62 +488,38 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
 
     rp.selectedIndex = index;
     const auto& item = rp.gallery[static_cast<size_t>(index)];
-    const GalleryDisplayPath paths =
-        resolveGalleryDisplayPath(item, rp.showProcessedOutput, projectContext_.spec);
-    const bool validationEnabled = !projectContext_.empty() && rp.showProcessedOutput;
-    const GalleryImageData data =
-        loadGalleryImageData(paths, projectContext_.spec, validationEnabled);
 
-    if (!data.loaded) {
+    sf::Image img;
+    if (!img.loadFromFile(item.path)) {
         clearSelectedGalleryImage(rp);
         return;
     }
 
-    rp.resultTexture.loadFromImage(data.img);
+    rp.resultTexture.loadFromImage(img);
     rp.resultLoaded = true;
-    rp.displayedImagePath = data.displayPath.string();
-    rp.selectedReferenceUsed = data.metadata.referenceUsed;
-    rp.selectedReferenceImage = data.metadata.referenceImage;
-    rp.selectedStructureStrength = data.metadata.structureStrength;
-    rp.validationChips = data.validationChips;
+    rp.displayedImagePath = item.path;
+    rp.selectedReferenceUsed = false;
+    rp.selectedReferenceImage.clear();
+    rp.selectedStructureStrength = 0.0f;
+    rp.validationChips.clear();
 }
 
 void ImageGeneratorController::refreshGallery(ImageGeneratorView& view, const std::string& preferredSelection) {
     auto& rp = view.resultPanel;
-    const AssetArtifactStore artifacts(config.outputDir, projectContext_);
-    const bool isCandidateWorkflow = !projectContext_.empty()
-        && projectContext_.workflow == GenerationWorkflow::CandidateRun;
-    const GenerationWorkflow galleryWorkflow = isCandidateWorkflow
-        ? GenerationWorkflow::CandidateRun : GenerationWorkflow::Standard;
 
-    std::vector<GalleryImageEntry> entries = loadGalleryEntries(artifacts, galleryWorkflow);
-    if (isCandidateWorkflow)
-        scoreGalleryEntries(entries, projectContext_.spec, projectContext_.exportSpec.alphaCutout);
-    sortGalleryEntries(entries, isCandidateWorkflow);
+    std::vector<GalleryImageEntry> entries = loadGalleryEntries(config.outputDir);
 
     pendingThumbs_.clear();
-    rp.gallery = buildGalleryItems(
-        entries, isCandidateWorkflow, projectContext_.candidateRun.scoreThreshold);
-    for (const auto& item : rp.gallery) {
-        pendingThumbs_.push_back({
-            item.path,
-            scheduleThumbnailLoad(item.path)
-        });
-    }
+    rp.gallery = buildGalleryItems(entries);
+    for (const auto& item : rp.gallery)
+        pendingThumbs_.push_back({item.path, scheduleThumbnailLoad(item.path)});
 
-    std::string target;
-    if (!isCandidateWorkflow)
-        target = preferredSelection.empty()
-            ? AssetArtifactStore::processedPathForRaw(rp.displayedImagePath).string()
-            : AssetArtifactStore::processedPathForRaw(preferredSelection).string();
+    const std::string target =
+        preferredSelection.empty() ? rp.displayedImagePath : preferredSelection;
     const int selected = findGallerySelection(rp.gallery, target);
 
     selectGalleryImage(view, selected);
-
-    if (isCandidateWorkflow && !rp.gallery.empty())
-        rp.bestWallCandidateScore = rp.gallery.front().score;
-    else
-        rp.bestWallCandidateScore = -1.f;
+    rp.bestWallCandidateScore = -1.f;
 }
 
 void ImageGeneratorController::flushPendingThumbs(ImageGeneratorView& view) {
@@ -1155,35 +818,6 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         }
     }
 
-    // Sync gallery tabs from active project context
-    if (projectContext_.empty()) {
-        rp.tabs.clear();
-    } else {
-        if (rp.tabs.size() != projectContext_.allAssetTypes.size()) {
-            rp.tabs.clear();
-            for (const auto& at : projectContext_.allAssetTypes) {
-                rp.tabs.push_back({
-                    at.name, at.id,
-                    sanitiseName(projectContext_.projectName) + "/" + sanitiseName(at.name)
-                });
-            }
-            for (int i = 0; i < static_cast<int>(rp.tabs.size()); ++i) {
-                if (rp.tabs[static_cast<size_t>(i)].assetTypeId == projectContext_.assetTypeId) {
-                    rp.activeTabIndex = i;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Handle user switching gallery tab — signal ProjectController to build a fresh context
-    if (rp.tabChanged) {
-        rp.tabChanged = false;
-        const int idx = rp.activeTabIndex;
-        if (!rp.tabs.empty() && idx >= 0 && idx < static_cast<int>(rp.tabs.size()))
-            pendingAssetTypeSwitch_ = rp.tabs[static_cast<size_t>(idx)].assetTypeId;
-    }
-
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
 
@@ -1231,42 +865,10 @@ void ImageGeneratorController::setBackScreen(AppScreen screen) {
     backScreen_ = screen;
 }
 
-void ImageGeneratorController::activateProjectSession(ImageGeneratorView& view, const ResolvedProjectContext& ctx) {
-    setProjectContext(ctx);
-    view.settingsPanel.positiveArea.setText(PromptCompiler::compile(ctx.assetTypeTokens, ModelType::SDXL));
-    view.settingsPanel.negativeArea.setText(PromptCompiler::compileNegative(ctx.assetTypeTokens));
-    dslDirty_ = true;
-}
-
-ResolvedProjectContext ImageGeneratorController::getProjectContext() const {
-    return projectContext_;
-}
-
 void ImageGeneratorController::triggerGeneration(ImageGeneratorView& view) {
-    if (!projectContext_.empty()
-        && projectContext_.workflow == GenerationWorkflow::CandidateRun) {
-        launchCandidateRun(view);
-        return;
-    }
     launchGeneration(view);
 }
 
 void ImageGeneratorController::openSettingsDialog(ImageGeneratorView& view) {
     openSettings(view);
-}
-
-void ImageGeneratorController::setProjectContext(const ResolvedProjectContext& ctx) {
-    projectContext_  = ctx;
-    viewInitialized  = false; // forces gallery refresh on next update()
-    Logger::info("ImageGeneratorController: project context set — '"
-                 + ctx.projectName + " / " + ctx.assetTypeName + "'");
-}
-
-void ImageGeneratorController::clearProjectContext() {
-    projectContext_ = {};
-    viewInitialized = false;
-}
-
-std::string ImageGeneratorController::consumePendingAssetTypeSwitch() {
-    return std::exchange(pendingAssetTypeSwitch_, {});
 }

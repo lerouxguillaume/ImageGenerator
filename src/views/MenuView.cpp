@@ -23,11 +23,11 @@ void MenuView::render(sf::RenderWindow& win) {
 
     Logo::draw(win, cx, cy - 196.f, 52.f);
     Helpers::drawTextC(win, font, "Image Generator", colors.text, cx, cy - 112.f, 40, true);
-    Helpers::drawTextC(win, font, "Generate themed assets, iterate edits, and manage packs in one place.",
+    Helpers::drawTextC(win, font, "Generate images, refine edits, and import models in one place.",
                        colors.muted, cx, cy - 64.f, type.sectionTitle, false);
 
     const float cardW = 348.f;
-    const float cardH = 262.f;
+    const float cardH = 214.f;
     const float cardX = cx - cardW / 2.f;
     const float cardY = cy - 8.f;
     Helpers::drawRect(win, {cardX, cardY, cardW, cardH}, colors.panel2, colors.border, 1.f);
@@ -38,11 +38,9 @@ void MenuView::render(sf::RenderWindow& win) {
     const float gap = 10.f;
     btnImageGen   = {cardX + 20.f, cardY + 48.f,                    bw, bh};
     btnImageEdit  = {cardX + 20.f, btnImageGen.top  + bh + gap,     bw, bh};
-    btnProjects   = {cardX + 20.f, btnImageEdit.top + bh + gap,     bw, bh};
-    btnImportModel= {cardX + 20.f, btnProjects.top  + bh + gap,     bw, bh};
-    drawButton(win, btnImageGen,   "Generate Images", colors.panel,  colors.text,   false, 13, font);
+    btnImportModel= {cardX + 20.f, btnImageEdit.top + bh + gap,     bw, bh};
+    drawButton(win, btnImageGen,   "Generate Images", colors.blue,   colors.goldLt, false, 13, font);
     drawButton(win, btnImageEdit,  "Edit Image",      colors.panel,  colors.text,   false, 13, font);
-    drawButton(win, btnProjects,   "Projects",        colors.blue,   colors.goldLt, false, 13, font);
     drawButton(win, btnImportModel,"Import Model",    colors.panel,  colors.muted,  false, 13, font);
 
 }

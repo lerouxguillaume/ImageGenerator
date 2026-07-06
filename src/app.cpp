@@ -13,7 +13,6 @@ App::App()
     , win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close | sf::Style::Resize)
     , imageGenController(config, WorkflowMode::Generate)
     , imageEditController(config, WorkflowMode::Edit)
-    , projectController(config)
 {
     Logger::info("app constructor");
     win.setFramerateLimit(60);
@@ -32,8 +31,6 @@ void App::run() {
             imageGenController.update(imageGenScreen);
         else if (screen == AppScreen::ImageEditor)
             imageEditController.update(imageEditScreen);
-        else if (screen == AppScreen::Projects)
-            projectController.update(projectScreen);
 
         while (win.pollEvent(e)) {
             const AppScreen screenBeforeEvent = screen;
@@ -51,8 +48,6 @@ void App::run() {
                 imageGenController.handleEvent(e, win, imageGenScreen, screen);
             else if (screen == AppScreen::ImageEditor)
                 imageEditController.handleEvent(e, win, imageEditScreen, screen);
-            else if (screen == AppScreen::Projects)
-                projectController.handleEvent(e, win, projectScreen, screen);
             else
                 menuController.handleEvent(e, win, menuScreen, screen);
 
@@ -60,32 +55,11 @@ void App::run() {
             if (!editTarget.empty()) {
                 imageEditBackScreen = AppScreen::ImageGenerator;
                 imageEditController.setBackScreen(imageEditBackScreen);
-                const ResolvedProjectContext projectCtx = imageGenController.getProjectContext();
-                if (!projectCtx.empty())
-                    imageEditController.activateProjectSession(imageEditScreen, projectCtx);
-                else
-                    imageEditController.clearProjectContext();
                 imageEditController.prepareEditSession(imageEditScreen, editTarget);
                 screen = AppScreen::ImageEditor;
             } else if (screenBeforeEvent == AppScreen::MENU && screen == AppScreen::ImageEditor) {
                 imageEditBackScreen = AppScreen::MENU;
                 imageEditController.setBackScreen(imageEditBackScreen);
-                imageEditController.clearProjectContext();
-            }
-
-            const ResolvedProjectContext pendingCtx = projectController.consumePendingGeneration();
-            if (!pendingCtx.empty()) {
-                imageGenController.activateProjectSession(imageGenScreen, pendingCtx);
-                imageGenController.setBackScreen(AppScreen::Projects);
-                screen = AppScreen::ImageGenerator;
-            }
-
-            // Clear project context when navigating away from the generator to anywhere
-            // other than the edit screen (which inherits the session).
-            if (screenBeforeEvent == AppScreen::ImageGenerator
-                && screen != AppScreen::ImageGenerator
-                && screen != AppScreen::ImageEditor) {
-                imageGenController.clearProjectContext();
             }
         }
 
@@ -93,8 +67,6 @@ void App::run() {
             imageGenScreen.render(win);
         else if (screen == AppScreen::ImageEditor)
             imageEditScreen.render(win);
-        else if (screen == AppScreen::Projects)
-            projectScreen.render(win);
         else {
             menuScreen.render(win);
             menuController.renderOverlay(win);

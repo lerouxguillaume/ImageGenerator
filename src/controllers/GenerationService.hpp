@@ -1,32 +1,13 @@
 #pragma once
 
 #include "../enum/enums.hpp"
-#include "../projects/Project.hpp"
 #include "../portraits/PortraitGeneratorAi.hpp"
 
 #include <atomic>
-#include <filesystem>
 #include <functional>
 #include <stop_token>
 #include <string>
 #include <vector>
-
-struct GenerationReferenceInput {
-    bool enabled = false;
-    std::string imagePath;
-    float structureStrength = 0.0f;
-    int canvasWidth = 1;
-    int canvasHeight = 1;
-    std::filesystem::path cacheDir;
-};
-
-struct GenerationPostProcessSpec {
-    bool assetMode = false;
-    bool requiresTransparency = false;
-    std::filesystem::path processedDir;
-    AssetExportSpec exportSpec;
-    GenerationReferenceInput reference;
-};
 
 struct GenerationJob {
     std::string prompt;
@@ -34,7 +15,6 @@ struct GenerationJob {
     std::string outputPath;
     GenerationParams params;
     std::string modelDir;
-    GenerationPostProcessSpec postProcess;
     bool vaeEncoderAvailable = true;
     bool loraCompatible      = true;
 };
@@ -47,49 +27,11 @@ struct GenerationProgress {
 
 struct GenerationResult {
     std::vector<std::string> rawPaths;
-    bool referenceUsed = false;
 };
 
 struct GenerationCallbacks {
     std::function<void(GenerationResult)> onResult;
     std::function<void(std::string)>      onError;
-};
-
-struct CandidateRunJob {
-    std::string prompt;
-    std::string negativePrompt;
-    std::string modelDir;
-    GenerationParams baseParams;
-    bool loraCompatible = true;
-    std::string runId;
-    std::string patronPath;
-    std::filesystem::path runPath;
-    std::filesystem::path exploreRawDir;
-    std::filesystem::path exploreProcessedDir;
-    std::filesystem::path refineRawDir;
-    std::filesystem::path refineProcessedDir;
-    int exploreCount = 0;
-    int candidateCount = 0;
-    int refineVariants = 0;
-    bool requiresTransparency = false;
-    AssetExportSpec exportSpec;
-    AssetSpec spec;
-    std::string assetTypeId;
-    float explorationStrength = 0.70f;
-    float refinementStrength = 0.27f;
-    float scoreThreshold = 150.0f;
-};
-
-struct CandidateRunResult {
-    std::string runId;
-    int explorationCount = 0;
-    int selectedCount = 0;
-    int refinementCount = 0;
-};
-
-struct CandidateRunCallbacks {
-    std::function<void(CandidateRunResult)> onResult;
-    std::function<void(std::string)>        onError;
 };
 
 class GenerationService {
@@ -98,9 +40,4 @@ public:
              GenerationProgress progress,
              GenerationCallbacks callbacks,
              std::stop_token stopToken) const;
-
-    void runCandidateRun(const CandidateRunJob& job,
-                         GenerationProgress progress,
-                         CandidateRunCallbacks callbacks,
-                         std::stop_token stopToken) const;
 };

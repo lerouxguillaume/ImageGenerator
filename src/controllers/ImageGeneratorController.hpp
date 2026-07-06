@@ -9,7 +9,6 @@
 #include "../llm/IPromptEnhancer.hpp"
 #include "../llm/PromptEnhancerFactory.hpp"
 #include "../presets/PresetManager.hpp"
-#include "../projects/Project.hpp"
 #include "../views/ImageGeneratorView.hpp"
 #include "GenerationService.hpp"
 #include "MenuController.hpp"
@@ -32,16 +31,8 @@ public:
     void prepareEditSession(ImageGeneratorView& screen, const std::string& imagePath);
     std::string consumePendingEditNavigation();
     void setBackScreen(AppScreen screen);
-    void activateProjectSession(ImageGeneratorView& view, const ResolvedProjectContext& ctx);
-    ResolvedProjectContext getProjectContext() const;
     void triggerGeneration(ImageGeneratorView& view);
     void openSettingsDialog(ImageGeneratorView& view);
-
-    // Sets the active project context for the next generation session.
-    // Resets the gallery to the project/asset-type subfolder.
-    void setProjectContext(const ResolvedProjectContext& ctx);
-    void clearProjectContext();
-    std::string consumePendingAssetTypeSwitch();
 
 private:
     // ── Settings helpers ──────────────────────────────────────────────────────
@@ -56,7 +47,6 @@ private:
 
     // ── Generation ────────────────────────────────────────────────────────────
     void launchGeneration(ImageGeneratorView& view);
-    void launchCandidateRun(ImageGeneratorView& view);
     void startGenerationTask(ImageGeneratorView& view,
                              std::function<void(std::stop_token)> task);
     void launchEnhancement(ImageGeneratorView& view);
@@ -93,10 +83,6 @@ private:
     enum class BrowseTarget { OutputDir, LlmDir, LoraDir };
     std::future<std::string> browseFuture;
     BrowseTarget             browseTarget = BrowseTarget::OutputDir;
-
-    // Active project context (empty = no project active)
-    ResolvedProjectContext projectContext_;
-    std::string            pendingAssetTypeSwitch_;
 
     // Async thumbnail loading (load+resize on background thread, create texture on main thread)
     struct PendingThumb {

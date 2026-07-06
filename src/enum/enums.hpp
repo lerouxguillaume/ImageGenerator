@@ -13,7 +13,6 @@ enum class WorkflowMode : std::uint8_t { Generate, Edit };
 // Stage reported by the generation thread to the UI thread via atomic<GenerationStage>.
 // Standard generation cycles: LoadingModel → EncodingText → (EncodingImage) → Denoising
 //   → DecodingImage → PostProcessing → Done.
-// Candidate runs set high-level outer stages and do not expose inner pipeline stages.
 enum class GenerationStage : int {
     Idle = 0,
     LoadingModel,
@@ -22,10 +21,6 @@ enum class GenerationStage : int {
     Denoising,        // step counter is meaningful while in this stage
     DecodingImage,
     PostProcessing,
-    Exploring,        // candidate run — exploration phase
-    Scoring,          // candidate run — scoring / selection
-    Refining,         // candidate run — refinement phase
-    WritingManifest,  // candidate run — manifest write
     Done
 };
 
