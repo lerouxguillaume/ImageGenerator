@@ -99,7 +99,7 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
     drawRect(win, rect_, colors.panel, colors.border, metrics.borderWidth);
     drawRect(win, {x + 1.f, y + 1.f, w - 2.f, h - 2.f}, colors.surfaceRaised, sf::Color::Transparent, 0.f);
 
-    constexpr float pad = static_cast<float>(PAD);
+    const float pad = static_cast<float>(theme.metrics().pad);
 
     // Back button
     btnBack_ = {x + pad, y + (h - 26.f) / 2.f, 70.f, 26.f};

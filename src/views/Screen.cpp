@@ -1,5 +1,5 @@
 #include "Screen.hpp"
-#include "../enum/constants.hpp"
+#include "../ui/Theme.h"
 
 Screen::Screen() {
     if (!font.loadFromFile("arial.ttf") &&
@@ -15,7 +15,10 @@ Screen::Screen() {
     {
         // no font found — text will be invisible
     }
-    midRect = {static_cast<float>(MID_X), static_cast<float>(HEADER_H), static_cast<float>(MID_W), static_cast<float>(BODY_H)};
+    const auto& m = Theme::instance().metrics();
+    midRect = {static_cast<float>(m.leftSidebarWidth), static_cast<float>(m.headerHeight),
+               static_cast<float>(m.windowWidth - m.leftSidebarWidth),
+               static_cast<float>(m.windowHeight - m.headerHeight - m.logHeight)};
 }
 
 sf::Vector2f Screen::localPosMid(sf::Vector2f screenPos) const {

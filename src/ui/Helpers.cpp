@@ -27,9 +27,10 @@ void drawRect(sf::RenderTarget& rt, sf::FloatRect r, sf::Color fill, sf::Color b
 
 void drawDividers(sf::RenderWindow& win) {
     const auto& theme = Theme::instance();
-    for (const float x : {static_cast<float>(LEFT_W)}) {
-        sf::RectangleShape line({1.f, static_cast<float>(BODY_H)});
-        line.setPosition(x, HEADER_H);
+    const auto& m = theme.metrics();
+    for (const float x : {static_cast<float>(m.leftSidebarWidth)}) {
+        sf::RectangleShape line({1.f, static_cast<float>(m.windowHeight - m.headerHeight - m.logHeight)});
+        line.setPosition(x, static_cast<float>(m.headerHeight));
         line.setFillColor(theme.colors().border);
         win.draw(line);
     }

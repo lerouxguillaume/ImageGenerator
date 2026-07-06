@@ -1,7 +1,6 @@
 #include "app.hpp"
 
 #include "config/AppConfig.hpp"
-#include "enum/constants.hpp"
 #include "ui/Theme.h"
 #include "managers/Logger.hpp"
 #include "ui/Logo.hpp"
@@ -11,7 +10,9 @@ static constexpr unsigned MIN_WIN_H = 550u;
 
 App::App()
     : config(AppConfig::load("config.json"))
-    , win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close | sf::Style::Resize)
+    , win(sf::VideoMode(Theme::instance().metrics().windowWidth,
+                        Theme::instance().metrics().windowHeight),
+          "Image generator", sf::Style::Close | sf::Style::Resize)
     , imageGenController(config)
 {
     Logger::info("app constructor");

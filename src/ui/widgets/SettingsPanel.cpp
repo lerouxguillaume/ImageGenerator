@@ -96,7 +96,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     const auto& type = theme.typography();
     const float x  = rect_.left;
     const float pw = rect_.width;       // panel width
-    constexpr float pad  = static_cast<float>(PAD);
+    const float pad  = static_cast<float>(metrics.pad);
     const float fw = pw - pad * 2.f;    // field width inside padding
 
     // Panel background with right border

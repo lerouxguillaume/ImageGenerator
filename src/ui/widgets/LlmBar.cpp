@@ -12,11 +12,12 @@ void LlmBar::setRect(const sf::FloatRect& rect) {
 
 void LlmBar::render(sf::RenderWindow& win, sf::Font& font) {
     const auto& colors = Theme::instance().colors();
+    const auto& metrics = Theme::instance().metrics();
     const float x = rect_.left;
     const float y = rect_.top;
     const float w = rect_.width;
-    constexpr float pad  = static_cast<float>(PAD);
-    constexpr float barH = LLM_BAR_H;
+    const float pad  = static_cast<float>(metrics.pad);
+    const float barH = metrics.llmBarHeight;
 
     // Bar background + top border
     drawRect(win, rect_, colors.panel2);
