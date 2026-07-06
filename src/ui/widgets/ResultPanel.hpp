@@ -62,9 +62,6 @@ public:
         std::string detail;
     };
     std::vector<ValidationChip> validationChips;
-    bool                        showOutputModeToggle = false;
-    bool                        showProcessedOutput = true;
-    bool                        outputModeChanged = false;
 
     // Action flags — set by handleEvent, cleared by controller
     bool generateRequested = false;
@@ -97,8 +94,6 @@ private:
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
     std::vector<sf::FloatRect> tabRects_;
-    sf::FloatRect processedToggleRect_;
-    sf::FloatRect rawToggleRect_;
     int thumbnailScrollOffset_ = 0;
     int lastVisibleSelectedIndex_ = -1;
 

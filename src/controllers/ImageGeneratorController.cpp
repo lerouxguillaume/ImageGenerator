@@ -597,10 +597,6 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     }
 
     if (view.resultPanel.handleEvent(e)) {
-        if (view.resultPanel.outputModeChanged) {
-            view.resultPanel.outputModeChanged = false;
-            selectGalleryImage(view, view.resultPanel.selectedIndex);
-        }
         const std::string selectedPath = view.resultPanel.getSelectedImagePath();
         if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath) {
             selectGalleryImage(view, view.resultPanel.selectedIndex);
