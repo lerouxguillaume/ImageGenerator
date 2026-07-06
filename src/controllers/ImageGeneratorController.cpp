@@ -215,9 +215,6 @@ static void clearSelectedGalleryImage(ResultPanel& rp) {
     rp.resultLoaded = false;
     rp.displayedImagePath.clear();
     rp.validationChips.clear();
-    rp.selectedReferenceUsed = false;
-    rp.selectedReferenceImage.clear();
-    rp.selectedStructureStrength = 0.0f;
 }
 
 // ── Model defaults ────────────────────────────────────────────────────────────
@@ -467,9 +464,6 @@ void ImageGeneratorController::selectGalleryImage(ImageGeneratorView& view, int 
     rp.resultTexture.loadFromImage(img);
     rp.resultLoaded = true;
     rp.displayedImagePath = item.path;
-    rp.selectedReferenceUsed = false;
-    rp.selectedReferenceImage.clear();
-    rp.selectedStructureStrength = 0.0f;
     rp.validationChips.clear();
 }
 

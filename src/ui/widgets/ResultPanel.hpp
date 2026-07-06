@@ -65,9 +65,6 @@ public:
     bool                        showOutputModeToggle = false;
     bool                        showProcessedOutput = true;
     bool                        outputModeChanged = false;
-    bool                        selectedReferenceUsed = false;
-    std::string                 selectedReferenceImage;
-    float                       selectedStructureStrength = 0.0f;
 
     // Action flags — set by handleEvent, cleared by controller
     bool generateRequested = false;

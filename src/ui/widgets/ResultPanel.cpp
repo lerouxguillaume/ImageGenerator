@@ -158,7 +158,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         // ── Selected image preview ────────────────────────────────────────────
         const float galleryH = gallery.empty() ? 0.f : 132.f;
         const bool hasOutputMode = showOutputModeToggle;
-        const bool hasReferenceInfo = showOutputModeToggle || selectedReferenceUsed || !selectedReferenceImage.empty();
+        const bool hasReferenceInfo = showOutputModeToggle;
         const float infoH = generationFailed.load() ? 62.f
                           : ((hasOutputMode ? 28.f : 0.f)
                              + (hasReferenceInfo ? 22.f : 0.f)
@@ -220,19 +220,6 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
                        showProcessedOutput ? colors.muted : colors.goldLt,
                        false, type.compact, font);
             infoY += 28.f;
-        }
-
-        if (selectedReferenceUsed || !selectedReferenceImage.empty()) {
-            std::string refLabel = selectedReferenceUsed ? "Reference shape" : "Prompt only";
-            if (selectedReferenceUsed && selectedStructureStrength > 0.f) {
-                char strengthBuf[16];
-                std::snprintf(strengthBuf, sizeof(strengthBuf), "%.2f", selectedStructureStrength);
-                refLabel += "  strength " + std::string(strengthBuf);
-            }
-            drawText(win, font, refLabel,
-                     selectedReferenceUsed ? colors.blueLt : colors.muted,
-                     frameX, infoY, type.compact, false);
-            infoY += 22.f;
         }
 
         // ── Validation chips (below image frame, above gallery/action bar) ────
