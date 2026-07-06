@@ -34,11 +34,34 @@ void ImportModelModal::syncFrom(const ModelImporter& importer) {
 
 // ── ETA: countdown re-based at each completed unit (never climbs) ──────────────
 
+// Cumulative relative cost of the first `k` steps of a phase. Export is heavily
+// dominated by the UNet step (~minutes vs seconds for the text-encoder/VAE
+// steps), so a step count alone is a poor time proxy; verify checks are roughly
+// uniform. `total` distinguishes the 5-step SDXL export from the 4-step SD1.5
+// export. Weights are relative — only their ratios matter, since the actual
+// seconds-per-weight rate is learned at runtime.
+static double phaseCumWeight(int phase, int k, int total) {
+    if (k <= 0) return 0.0;
+    if (phase == 2) { // Exporting
+        static const double sdxl[5] = {1.0, 1.0, 90.0, 5.0, 5.0}; // TE, TE2, UNet, VAEdec, VAEenc
+        static const double sd15[4] = {1.0, 60.0, 4.0, 4.0};      // TE, UNet, VAEdec, VAEenc
+        const double* w = total >= 5 ? sdxl : sd15;
+        const int     n = total >= 5 ? 5 : 4;
+        double sum = 0.0;
+        for (int i = 0; i < k && i < n; ++i) sum += w[i];
+        return sum;
+    }
+    return static_cast<double>(k); // uniform (verify)
+}
+
 void ImportModelModal::updateEta() {
-    // Pick the countable unit for the current phase.
-    int done = 0, total = 0, phase = -1;
+    // Pick the countable unit for the current phase. `done` counts the in-progress
+    // step for export (the log announces a step as it *starts*), but completed
+    // checks for verify — so completed-unit count differs by phase.
+    int  done = 0, total = 0, phase = -1;
+    bool doneIsInProgress = false;
     if (importerState_ == ModelImporter::State::Exporting) {
-        done = exportStep_; total = exportTotal_; phase = 2;
+        done = exportStep_; total = exportTotal_; phase = 2; doneIsInProgress = true;
     } else if (importerState_ == ModelImporter::State::Verifying) {
         done  = static_cast<int>(verifyChecks_.size());
         total = inspection_.architecture == SafetensorsInfo::Architecture::SDXL ? 4 : 3;
@@ -47,11 +70,10 @@ void ImportModelModal::updateEta() {
 
     // Reset tracking on a new import or when the phase changes.
     if (importerState_ == ModelImporter::State::Idle || phase != etaPhase_) {
-        etaPhase_        = phase;
-        etaUnitDone_     = -1;
-        etaUnitTime_     = 0.0;
-        etaElapsedAtUnit_= elapsed_;
-        etaValid_        = false;
+        etaPhase_      = phase;
+        etaUnitDone_   = -1;
+        etaPhaseStart_ = elapsed_;
+        etaValid_      = false;
     }
 
     if (total <= 0 || done <= 0 || done > total) return;
@@ -59,22 +81,24 @@ void ImportModelModal::updateEta() {
     // Re-base only when a unit boundary is crossed; between boundaries the
     // displayed remaining = etaTargetSec_ - elapsed_ ticks down on its own.
     if (done != etaUnitDone_) {
-        if (etaUnitDone_ > 0 && done > etaUnitDone_) {
-            const double per = (elapsed_ - etaElapsedAtUnit_)
-                             / static_cast<double>(done - etaUnitDone_);
-            if (per > 0.0)
-                etaUnitTime_ = etaUnitTime_ > 0.0 ? 0.5 * etaUnitTime_ + 0.5 * per : per;
-        } else if (etaUnitTime_ <= 0.0) {
-            // Bootstrap from time spent in THIS phase only. Using total elapsed_
-            // would fold in analyze + (first-run) Python-setup time and grossly
-            // overestimate; the per-unit EMA above refines it from the next unit on.
-            const double inPhase = elapsed_ - etaElapsedAtUnit_;
-            if (inPhase > 0.0) etaUnitTime_ = inPhase / static_cast<double>(done);
+        etaUnitDone_ = done;
+
+        // Steps whose duration is now known, and their cost weight.
+        const int    completedSteps = doneIsInProgress ? done - 1 : done;
+        const double completedW     = phaseCumWeight(phase, completedSteps, total);
+        const double totalW         = phaseCumWeight(phase, total, total);
+        const double timeInPhase    = elapsed_ - etaPhaseStart_;
+
+        // Need at least one completed unit to learn the seconds-per-weight rate;
+        // until then (e.g. still inside the first, fast text-encoder step) we show
+        // no ETA rather than a bogus one.
+        if (completedW > 0.0 && timeInPhase > 0.0 && totalW > completedW) {
+            const double rate = timeInPhase / completedW; // seconds per weight-unit
+            etaTargetSec_ = elapsed_ + rate * (totalW - completedW);
+            etaValid_     = true;
+        } else {
+            etaValid_ = false;
         }
-        etaUnitDone_      = done;
-        etaElapsedAtUnit_ = elapsed_;
-        etaTargetSec_     = elapsed_ + etaUnitTime_ * static_cast<double>(total - done);
-        etaValid_         = done < total;
     }
 }
 

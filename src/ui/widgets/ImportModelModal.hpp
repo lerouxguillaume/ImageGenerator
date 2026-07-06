@@ -53,12 +53,13 @@ private:
     int                   exportTotal_= 0;
 
     // ETA estimate — a countdown re-based each time a discrete unit (export step
-    // or verify check) completes, so it ticks down instead of climbing.
+    // or verify check) completes, so it ticks down instead of climbing. Export
+    // steps are cost-weighted (the UNet step dwarfs the text-encoder/VAE steps),
+    // so the rate is learned per weight-unit, not per step.
     void   updateEta();
     int    etaPhase_        = -1;   // which phase the unit tracking belongs to
     int    etaUnitDone_     = -1;
-    double etaUnitTime_     = 0.0;  // EMA seconds per unit
-    double etaElapsedAtUnit_= 0.0;
+    double etaPhaseStart_   = 0.0;  // elapsed_ when the current phase began
     double etaTargetSec_    = 0.0;  // predicted total elapsed at completion
     bool   etaValid_        = false;
 };
