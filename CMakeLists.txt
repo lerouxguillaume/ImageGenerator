@@ -182,13 +182,6 @@ add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E touch
         "$<TARGET_FILE_DIR:image_generator>/assets/generated/.gitkeep")
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/assets/references")
-    add_custom_command(TARGET image_generator POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/references"
-            "$<TARGET_FILE_DIR:image_generator>/assets/references")
-endif()
-
 # On Windows copy all required DLLs next to the binary
 if(WIN32)
     # Ask the cross-compiler where each runtime DLL lives.

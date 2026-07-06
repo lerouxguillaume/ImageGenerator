@@ -320,6 +320,15 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     auto& rp = view.resultPanel;
 
+    const std::string modelDir = sp.getSelectedModelDir();
+    if (modelDir.empty()) {
+        rp.generating = false;
+        rp.generationFailed.store(true);
+        rp.generationErrorMsg = "No model selected — import a model before generating.";
+        Logger::error("Generation aborted: no model selected");
+        return;
+    }
+
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
     std::error_code ec;
     std::filesystem::create_directories(config.outputDir, ec);
@@ -340,7 +349,6 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
 
     rp.generationTotalImages.store(sp.generationParams.numImages);
 
-    const std::string modelDir  = sp.getSelectedModelDir();
     Prompt dsl = PromptParser::parse(sp.positiveArea.getText(),
                                      sp.negativeArea.getText());
 

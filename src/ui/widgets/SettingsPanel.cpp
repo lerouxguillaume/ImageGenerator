@@ -16,7 +16,7 @@ void SettingsPanel::setRect(const sf::FloatRect& rect) {
 }
 
 std::string SettingsPanel::getSelectedModelDir() const {
-    if (availableModels.empty()) return "models";
+    if (availableModels.empty()) return {};
     return availableModels[static_cast<size_t>(selectedModelIdx)];
 }
 

@@ -68,7 +68,7 @@ public:
     // Also handles mouse-wheel scroll on text areas.
     bool handleEvent(const sf::Event& e);
 
-    // Returns the full path of the selected model dir, or "models" if none.
+    // Returns the full path of the selected model dir, or "" if no model is available.
     std::string getSelectedModelDir() const;
     sf::FloatRect getRect() const;
 
