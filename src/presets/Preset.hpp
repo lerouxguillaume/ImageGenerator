@@ -9,7 +9,7 @@ struct Preset {
     Prompt      dsl;       // source of truth for prompts
     int         steps     = 20;
     float       cfg       = 7.0f;
-    std::string modelId;   // matches availableModels entry (model folder name)
+    std::string modelId;   // stable model id (SettingsPanel::ModelEntry::id)
     int         width     = 0;
     int         height    = 0;
     uint64_t    createdAt = 0; // Unix seconds

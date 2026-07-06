@@ -34,6 +34,6 @@ private:
 };
 
 // Replaces ALL relevant SettingsPanel fields with preset values (no merge).
-// Finds modelId in panel.availableModels and sets selectedModelIdx accordingly.
+// Finds preset.modelId in panel.models (by ModelEntry::id) and sets selectedModelIdx accordingly.
 // Logs a warning if modelId is not found; selectedModelIdx is left unchanged.
 void applyPresetToSettings(const Preset& preset, SettingsPanel& panel);

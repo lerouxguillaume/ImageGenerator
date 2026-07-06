@@ -102,11 +102,8 @@ static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view
     const auto& sp = view.settingsPanel;
     GenerationSettings gs;
     gs.dsl     = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
-    gs.modelId = sp.availableModels.empty()
-        ? std::string{}
-        : (!sp.availableModelNames.empty()
-            ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
-            : std::filesystem::path(sp.getSelectedModelDir()).filename().string());
+    const auto* selected = sp.currentModel();
+    gs.modelId = selected ? selected->id : std::string{};
     gs.steps   = sp.generationParams.numSteps;
     gs.cfg     = sp.generationParams.guidanceScale;
     gs.width   = sp.generationParams.width;
@@ -222,11 +219,8 @@ static void clearSelectedGalleryImage(ResultPanel& rp) {
 void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     const ModelDefaults* md = nullptr;
-    if (!sp.availableModels.empty()) {
-        const std::string name = (!sp.availableModelNames.empty())
-            ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
-            : std::filesystem::path(sp.availableModels[static_cast<size_t>(sp.selectedModelIdx)]).filename().string();
-        const auto it = config.modelConfigs.find(name);
+    if (const auto* selected = sp.currentModel()) {
+        const auto it = config.modelConfigs.find(selected->id);
         if (it != config.modelConfigs.end()) md = &it->second;
     }
 
@@ -286,9 +280,7 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
 
     view.showSettings = false;
 
-    view.settingsPanel.availableModels.clear();
-    view.settingsPanel.availableModelNames.clear();
-    view.settingsPanel.availableModelTypes.clear();
+    view.settingsPanel.models.clear();
     view.settingsPanel.selectedModelIdx = 0;
     modelsDirty = true;
     lorasDirty  = true;
@@ -352,8 +344,9 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     Prompt dsl = PromptParser::parse(sp.positiveArea.getText(),
                                      sp.negativeArea.getText());
 
-    const std::string modelKey = std::filesystem::path(modelDir).filename().string();
-    if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
+    // modelDir is non-empty (guarded above), so currentModel() is non-null.
+    const SettingsPanel::ModelEntry* selected = sp.currentModel();
+    if (const auto it = config.modelConfigs.find(selected->id); it != config.modelConfigs.end())
         injectBoosters(dsl, it->second);
 
     const std::string prompt    = PromptCompiler::compile(dsl, cachedModelType_);
@@ -687,18 +680,16 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
     // model-specific defaults. On first open, this prevents the fallback
     // "models" path from being cached as the active model.
     if (modelsDirty) {
-        sp.availableModels.clear();
-        sp.availableModelNames.clear();
-        sp.availableModelTypes.clear();
-        sp.modelVaeEncoderAvailable.clear();
-        sp.modelLoraCompatible.clear();
+        sp.models.clear();
         ImportedModelRegistry reg(importedRegistryPath());
         for (const auto& model : reg.list()) {
-            sp.availableModels.push_back(model.onnxPath.string());
-            sp.availableModelNames.push_back(model.name);
-            sp.availableModelTypes.push_back(modelTypeFromArch(model.arch));
-            sp.modelVaeEncoderAvailable.push_back(model.capabilities.vaeEncoderAvailable);
-            sp.modelLoraCompatible.push_back(model.capabilities.loraCompatible);
+            SettingsPanel::ModelEntry entry;
+            entry.id           = model.id;
+            entry.displayName  = model.name;
+            entry.path         = model.onnxPath.string();
+            entry.type         = modelTypeFromArch(model.arch);
+            entry.capabilities = model.capabilities;
+            sp.models.push_back(std::move(entry));
         }
         sp.selectedModelIdx = 0;
         viewInitialized = false;
@@ -804,9 +795,8 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         sp.currentDsl = PromptParser::parse(posText, negText);
         if (cachedModelType_ == ModelType::SD15) {
             Prompt previewDsl = sp.currentDsl;
-            const std::string previewKey = (!sp.availableModelNames.empty())
-                ? sp.availableModelNames[static_cast<size_t>(sp.selectedModelIdx)]
-                : std::filesystem::path(sp.getSelectedModelDir()).filename().string();
+            const auto* selected = sp.currentModel();
+            const std::string previewKey = selected ? selected->id : std::string{};
             if (const auto it = config.modelConfigs.find(previewKey); it != config.modelConfigs.end())
                 injectBoosters(previewDsl, it->second);
             sp.compiledPreview = PromptCompiler::compile(previewDsl, ModelType::SD15);

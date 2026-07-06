@@ -6,6 +6,7 @@
 #include "../../portraits/PortraitGeneratorAi.hpp"  // GenerationParams, LoraEntry
 #include "../../prompt/Prompt.hpp"
 #include "../../enum/enums.hpp"
+#include "../../import/ImportedModelRegistry.hpp"   // ModelCapabilities
 #include "MultiLineTextArea.hpp"
 #include "../SliderTypes.hpp"
 
@@ -21,26 +22,37 @@ public:
     GenerationParams generationParams;
 
     // ── Model selection ───────────────────────────────────────────────────────
-    std::vector<std::string> availableModels;           // onnx paths, set by controller from registry
-    std::vector<std::string> availableModelNames;       // display names, parallel to availableModels
-    std::vector<ModelType>   availableModelTypes;       // model architecture, parallel to availableModels
-    std::vector<bool>        modelVaeEncoderAvailable;  // parallel to availableModels
-    std::vector<bool>        modelLoraCompatible;       // parallel to availableModels
+    // Single source of truth for the model list, populated by the controller
+    // from ImportedModelRegistry. Persisted references (presets, modelConfigs)
+    // key on ModelEntry::id — the stable id, never the display name.
+    struct ModelEntry {
+        std::string       id;           // stable id == folder name under models/imported/<id>/
+        std::string       displayName;  // shown in the UI
+        std::string       path;         // onnx directory path (see getSelectedModelDir)
+        ModelType         type = ModelType::SD15;
+        ModelCapabilities capabilities;
+    };
+    std::vector<ModelEntry> models;
     int  selectedModelIdx = 0;
     bool showModelDropdown = false;
     std::string activePresetId; // empty when no preset is active
 
-    bool currentModelVaeEncoderAvailable() const {
+    // Returns the selected entry, or nullptr when no model is available.
+    const ModelEntry* currentModel() const {
         const auto idx = static_cast<size_t>(selectedModelIdx);
-        return idx >= modelVaeEncoderAvailable.size() || modelVaeEncoderAvailable[idx];
+        return idx < models.size() ? &models[idx] : nullptr;
+    }
+    bool currentModelVaeEncoderAvailable() const {
+        const auto* m = currentModel();
+        return !m || m->capabilities.vaeEncoderAvailable;
     }
     bool currentModelLoraCompatible() const {
-        const auto idx = static_cast<size_t>(selectedModelIdx);
-        return idx >= modelLoraCompatible.size() || modelLoraCompatible[idx];
+        const auto* m = currentModel();
+        return !m || m->capabilities.loraCompatible;
     }
     ModelType currentModelType() const {
-        const auto idx = static_cast<size_t>(selectedModelIdx);
-        return idx < availableModelTypes.size() ? availableModelTypes[idx] : ModelType::SD15;
+        const auto* m = currentModel();
+        return m ? m->type : ModelType::SD15;
     }
 
     // ── LoRA selection ────────────────────────────────────────────────────────

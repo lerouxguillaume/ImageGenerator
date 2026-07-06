@@ -16,8 +16,8 @@ void SettingsPanel::setRect(const sf::FloatRect& rect) {
 }
 
 std::string SettingsPanel::getSelectedModelDir() const {
-    if (availableModels.empty()) return {};
-    return availableModels[static_cast<size_t>(selectedModelIdx)];
+    const auto* m = currentModel();
+    return m ? m->path : std::string{};
 }
 
 sf::FloatRect SettingsPanel::getRect() const {
@@ -107,11 +107,8 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
 
     // Model selector + LoRA button
     {
-        const std::string displayName = availableModels.empty()
-            ? "(no models found)"
-            : (!availableModelNames.empty()
-                ? availableModelNames[static_cast<size_t>(selectedModelIdx)]
-                : std::filesystem::path(availableModels[static_cast<size_t>(selectedModelIdx)]).filename().string());
+        const ModelEntry* selected = currentModel();
+        const std::string displayName = selected ? selected->displayName : "(no models found)";
         const std::string label = displayName + (showModelDropdown ? "  ^" : "  v");
         drawText(win, font, "Model:", colors.muted, x + pad, y + 4.f, type.body);
         btnModelDropdown_ = {x + pad + 52.f, y, 260.f, 22.f};
@@ -314,13 +311,13 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     y += 34.f;
 
     // ── Model dropdown list (overlay, drawn last so it renders on top) ────────
-    if (showModelDropdown && !availableModels.empty()) {
+    if (showModelDropdown && !models.empty()) {
         constexpr float itemH   = 22.f;
         constexpr float listPad = 2.f;
         const float listX = btnModelDropdown_.left;
         const float listW = btnModelDropdown_.width;
         const float listY = btnModelDropdown_.top + btnModelDropdown_.height + 2.f;
-        const int   count = static_cast<int>(availableModels.size());
+        const int   count = static_cast<int>(models.size());
         const float listH = listPad * 2.f + itemH * static_cast<float>(count);
 
         drawRect(win, {listX, listY, listW, listH}, Col::Panel2, Col::BorderHi, 1.f);
@@ -331,15 +328,10 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             const bool selected = (i == selectedModelIdx);
             if (selected)
                 drawRect(win, modelDropdownItems_[static_cast<size_t>(i)], Col::Panel);
-            const std::string name = (!availableModelNames.empty())
-                ? availableModelNames[static_cast<size_t>(i)]
-                : std::filesystem::path(availableModels[static_cast<size_t>(i)]).filename().string();
-            drawText(win, font, name, selected ? Col::GoldLt : Col::Text,
+            const ModelEntry& entry = models[static_cast<size_t>(i)];
+            drawText(win, font, entry.displayName, selected ? Col::GoldLt : Col::Text,
                      listX + 6.f, itemY2 + 4.f, 12);
-            const ModelType modelType = static_cast<size_t>(i) < availableModelTypes.size()
-                ? availableModelTypes[static_cast<size_t>(i)]
-                : ModelType::SD15;
-            const std::string badge = modelType == ModelType::SDXL ? "SDXL" : "SD1.5";
+            const std::string badge = entry.type == ModelType::SDXL ? "SDXL" : "SD1.5";
             drawTextR(win, font, badge, selected ? Col::GoldLt : Col::Muted,
                       listX + listW - 8.f, itemY2 + 5.f, 11);
         }
