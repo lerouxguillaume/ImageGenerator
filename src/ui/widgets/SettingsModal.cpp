@@ -1,5 +1,4 @@
 #include "SettingsModal.hpp"
-#include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
 #include "../../ui/Theme.h"
@@ -70,7 +69,7 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
 
     // Row 1: output directory
     float rowY = boxY + 52.f;
-    drawText(win, font, "Output directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    drawText(win, font, "Output directory:", colors.muted, boxX + padX, rowY + 6.f, 12);
     settingsOutputDirField = {fieldX, rowY, fieldW, fieldH};
     drawSingleLineField(win, font, settingsOutputDirField, settingsOutputDir,
                         settingsOutputDirCursor, settingsOutputDirActive);
@@ -79,18 +78,18 @@ void SettingsModal::render(sf::RenderWindow& win, sf::Font& font) {
 
     // Row 2: LLM model directory
     rowY += 48.f;
-    drawText(win, font, "LLM model dir:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    drawText(win, font, "LLM model dir:", colors.muted, boxX + padX, rowY + 6.f, 12);
     settingsLlmModelDirField = {fieldX, rowY, fieldW, fieldH};
     drawSingleLineField(win, font, settingsLlmModelDirField, settingsLlmModelDir,
                         settingsLlmModelDirCursor, settingsLlmModelDirActive);
     settingsBtnBrowseLlm = {fieldX + fieldW + browseGap, rowY, browseW, fieldH};
     drawButton(win, settingsBtnBrowseLlm, "...", colors.panel, colors.text, false, 12, font);
     if (llmLoading)
-        drawText(win, font, "Loading...", Col::Muted, fieldX, rowY + fieldH + 2.f, 10);
+        drawText(win, font, "Loading...", colors.muted, fieldX, rowY + fieldH + 2.f, 10);
 
     // Row 3: LoRA directory
     rowY += 48.f;
-    drawText(win, font, "LoRA directory:", Col::Muted, boxX + padX, rowY + 6.f, 12);
+    drawText(win, font, "LoRA directory:", colors.muted, boxX + padX, rowY + 6.f, 12);
     settingsLoraDirField = {fieldX, rowY, fieldW, fieldH};
     drawSingleLineField(win, font, settingsLoraDirField, settingsLoraDir,
                         settingsLoraDirCursor, settingsLoraDirActive);

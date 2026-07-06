@@ -1,18 +1,19 @@
 #pragma once
 #include <cmath>
 #include <SFML/Graphics.hpp>
-#include "../enum/constants.hpp"
+#include "Theme.h"
 
 namespace Logo {
 
 // Draws a gold medallion (4-pointed star inside a bordered circle) centred at
 // (cx, cy). Works on any sf::RenderTarget — window or off-screen texture.
 inline void draw(sf::RenderTarget& target, float cx, float cy, float radius) {
+    const auto& colors = Theme::instance().colors();
     // Outer circle background
     sf::CircleShape bg(radius);
-    bg.setFillColor(Col::Panel);
+    bg.setFillColor(colors.panel);
     bg.setOutlineThickness(radius * 0.07f);
-    bg.setOutlineColor(Col::Gold);
+    bg.setOutlineColor(colors.gold);
     bg.setOrigin(radius, radius);
     bg.setPosition(cx, cy);
     target.draw(bg);
@@ -22,7 +23,7 @@ inline void draw(sf::RenderTarget& target, float cx, float cy, float radius) {
     sf::CircleShape ring(ringR);
     ring.setFillColor(sf::Color::Transparent);
     ring.setOutlineThickness(radius * 0.025f);
-    ring.setOutlineColor(Col::Border);
+    ring.setOutlineColor(colors.border);
     ring.setOrigin(ringR, ringR);
     ring.setPosition(cx, cy);
     target.draw(ring);
@@ -38,15 +39,15 @@ inline void draw(sf::RenderTarget& target, float cx, float cy, float radius) {
         star.setPoint(i, {cx + r * std::cos(angleRad),
                           cy + r * std::sin(angleRad)});
     }
-    star.setFillColor(Col::GoldLt);
+    star.setFillColor(colors.goldLt);
     target.draw(star);
 
     // Centre gem
     const float gemR = radius * 0.12f;
     sf::CircleShape gem(gemR);
-    gem.setFillColor(Col::Panel);
+    gem.setFillColor(colors.panel);
     gem.setOutlineThickness(radius * 0.03f);
-    gem.setOutlineColor(Col::Gold);
+    gem.setOutlineColor(colors.gold);
     gem.setOrigin(gemR, gemR);
     gem.setPosition(cx, cy);
     target.draw(gem);

@@ -1,5 +1,6 @@
 #include "LlmBar.hpp"
 #include "../../enum/constants.hpp"
+#include "../../ui/Theme.h"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
 
@@ -10,6 +11,7 @@ void LlmBar::setRect(const sf::FloatRect& rect) {
 }
 
 void LlmBar::render(sf::RenderWindow& win, sf::Font& font) {
+    const auto& colors = Theme::instance().colors();
     const float x = rect_.left;
     const float y = rect_.top;
     const float w = rect_.width;
@@ -17,22 +19,22 @@ void LlmBar::render(sf::RenderWindow& win, sf::Font& font) {
     constexpr float barH = LLM_BAR_H;
 
     // Bar background + top border
-    drawRect(win, rect_, Col::Panel2);
-    drawRect(win, {x, y, w, 1.f}, Col::Border);
+    drawRect(win, rect_, colors.panel2);
+    drawRect(win, {x, y, w, 1.f}, colors.border);
 
     // Toggle button (always in the top barH strip)
     const std::string toggleLabel = expanded ? "v LLM" : "> LLM";
     btnToggle_ = {x + pad, y + (barH - 22.f) / 2.f, 70.f, 22.f};
-    drawButton(win, btnToggle_, toggleLabel, Col::Panel, expanded ? Col::GoldLt : Col::Muted, false, 11, font);
+    drawButton(win, btnToggle_, toggleLabel, colors.panel, expanded ? colors.goldLt : colors.muted, false, 11, font);
 
     if (llmLoading) {
-        drawText(win, font, "LLM loading...", Col::Muted, x + pad + 80.f, y + (barH - 12.f) / 2.f, 11);
+        drawText(win, font, "LLM loading...", colors.muted, x + pad + 80.f, y + (barH - 12.f) / 2.f, 11);
         btnEnhance_ = {};
     } else if (promptEnhancerAvailable) {
         const std::string enhLabel = enhancing ? "Enhancing..." : "Enhance";
-        const sf::Color   enhCol   = enhancing ? Col::Muted : Col::GoldLt;
+        const sf::Color   enhCol   = enhancing ? colors.muted : colors.goldLt;
         btnEnhance_ = {x + w - pad - 100.f, y + (barH - 22.f) / 2.f, 100.f, 22.f};
-        drawButton(win, btnEnhance_, enhLabel, Col::Panel, enhCol, false, 11, font);
+        drawButton(win, btnEnhance_, enhLabel, colors.panel, enhCol, false, 11, font);
     } else {
         btnEnhance_ = {};
     }
@@ -41,14 +43,14 @@ void LlmBar::render(sf::RenderWindow& win, sf::Font& font) {
     if (expanded) {
         const float expandedY = y + barH;
         const float expandedH = rect_.height - barH;
-        drawRect(win, {x, expandedY - 1.f, w, 1.f}, Col::Border);
+        drawRect(win, {x, expandedY - 1.f, w, 1.f}, colors.border);
 
         constexpr float fieldH = 46.f;
         constexpr float labelW = 160.f;
         const float fieldW = w - pad * 2.f - labelW;
         const float fieldY = expandedY + (expandedH - fieldH) / 2.f;
 
-        drawText(win, font, "Instruction (optional):", Col::Muted, x + pad, fieldY + 4.f, 12);
+        drawText(win, font, "Instruction (optional):", colors.muted, x + pad, fieldY + 4.f, 12);
         instructionArea.setRect({x + pad + labelW, fieldY, fieldW, fieldH});
         instructionArea.render(win, font);
     }

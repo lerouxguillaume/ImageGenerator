@@ -1,5 +1,5 @@
 #include "MultiLineTextArea.hpp"
-#include "../../enum/constants.hpp"
+#include "../Theme.h"
 #include "../Helpers.hpp"
 #include <SFML/Window/Clipboard.hpp>
 #include <algorithm>
@@ -91,7 +91,8 @@ MultiLineTextArea::computeLines(sf::Font& font) const {
 
 void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
     cachedFont_ = &font;
-    drawRect(win, rect_, Col::Panel2, active_ ? Col::BorderHi : Col::Border, 1.f);
+    const auto& colors = Theme::instance().colors();
+    drawRect(win, rect_, colors.panel2, active_ ? colors.borderHi : colors.border, 1.f);
 
     // Selection highlight (drawn before text so text renders on top)
     if (active_ && allSelected_) {
@@ -146,8 +147,8 @@ void MultiLineTextArea::render(sf::RenderWindow& win, sf::Font& font) {
                            + trackH * static_cast<float>(scrollLine_)
                                      / static_cast<float>(lines_.size());
         const float trackX = rect_.left + rect_.width - FIELD_PAD_X + 1.f;
-        drawRect(win, {trackX, rect_.top + FIELD_PAD_Y, 4.f, trackH}, Col::Panel);
-        drawRect(win, {trackX, thumbY, 4.f, thumbH}, Col::Border);
+        drawRect(win, {trackX, rect_.top + FIELD_PAD_Y, 4.f, trackH}, colors.panel);
+        drawRect(win, {trackX, thumbY, 4.f, thumbH}, colors.border);
     }
 }
 

@@ -2,33 +2,6 @@
 #include <SFML/Graphics.hpp>
 #include "../ui/Theme.h"
 
-// ─── Colour palette ───────────────────────────────────────────────────────────
-// Dark parchment / tavern theme. All values are sRGB (0–255).
-// Naming convention: plain = base tone, Lt = lighter/highlight variant.
-namespace Col {
-    inline const UiColors ThemeColors{};
-    // Backgrounds
-    inline const sf::Color Bg       = ThemeColors.bg;       // Window background (near-black warm)
-    inline const sf::Color Panel    = ThemeColors.panel;    // Primary panel surface
-    inline const sf::Color Panel2   = ThemeColors.panel2;   // Raised / secondary panel surface
-
-    // Borders
-    inline const sf::Color Border   = ThemeColors.border;   // Default border
-    inline const sf::Color BorderHi = ThemeColors.borderHi; // Hovered / focused border
-
-    // Gold — primary accent for headings, icons, active elements
-    inline const sf::Color Gold     = ThemeColors.gold;
-    inline const sf::Color GoldLt   = ThemeColors.goldLt;
-
-    // Text
-    inline const sf::Color Text     = ThemeColors.text;  // Body text (warm parchment)
-    inline const sf::Color Muted    = ThemeColors.muted; // Disabled / secondary text
-
-    // Status colours
-    inline const sf::Color Blue     = ThemeColors.blue;     // Info / selected
-    inline const sf::Color BlueLt   = ThemeColors.blueLt;   // Info highlight
-}
-
 // ─── Layout constants ─────────────────────────────────────────────────────────
 // Fixed window layout — all sizes in pixels.
 //

@@ -1,5 +1,4 @@
 #include "ResultPanel.hpp"
-#include "../../enum/constants.hpp"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"
 #include "../../ui/Theme.h"
@@ -375,7 +374,8 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
     constexpr float gap    = 8.f;
     constexpr float navW   = 28.f;
 
-    drawRect(win, {stripX, stripY, stripW, stripH}, Col::Panel, Col::Border, 1.f);
+    const auto& colors = Theme::instance().colors();
+    drawRect(win, {stripX, stripY, stripW, stripH}, colors.panel, colors.border, 1.f);
     thumbnailRects_.clear();
     thumbnailIndices_.clear();
 
@@ -391,9 +391,9 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
     if (showThumbNav) {
         btnPrevThumbs_ = {stripX + 10.f, thumbY + (thumbH - navW) / 2.f, navW, navW};
         btnNextThumbs_ = {stripX + stripW - 10.f - navW, thumbY + (thumbH - navW) / 2.f, navW, navW};
-        drawButton(win, btnPrevThumbs_, "<", Col::Panel2, Col::GoldLt,
+        drawButton(win, btnPrevThumbs_, "<", colors.panel2, colors.goldLt,
                    thumbnailScrollOffset_ == 0, 14, font);
-        drawButton(win, btnNextThumbs_, ">", Col::Panel2, Col::GoldLt,
+        drawButton(win, btnNextThumbs_, ">", colors.panel2, colors.goldLt,
                    thumbnailScrollOffset_ + visible >= static_cast<int>(gallery.size()), 14, font);
     } else {
         btnPrevThumbs_ = {};
@@ -407,7 +407,7 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
         thumbnailRects_.push_back(thumbRect);
         thumbnailIndices_.push_back(galleryIndex);
         const bool selected = (galleryIndex == selectedIndex);
-        drawRect(win, thumbRect, Col::Panel2, selected ? Col::GoldLt : Col::Border, selected ? 2.f : 1.f);
+        drawRect(win, thumbRect, colors.panel2, selected ? colors.goldLt : colors.border, selected ? 2.f : 1.f);
 
         if (item.thumbnail && item.thumbnail->getSize().x > 0 && item.thumbnail->getSize().y > 0) {
             const float imgScale = std::min((thumbW - 8.f) / static_cast<float>(item.thumbnail->getSize().x),
@@ -419,12 +419,12 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
             thumb.setPosition(thumbX + (thumbW - drawW) / 2.f, thumbY + (thumbH - drawH) / 2.f);
             win.draw(thumb);
         } else {
-            drawTextC(win, font, "No preview", Col::Muted,
+            drawTextC(win, font, "No preview", colors.muted,
                       thumbX + thumbW / 2.f, thumbY + thumbH / 2.f - 6.f, 10);
         }
         if (item.recommended || item.usable || item.near) {
             const std::string badge = item.recommended ? "BEST" : (item.usable ? "OK" : "NEAR");
-            const sf::Color badgeFill = item.recommended ? Col::GoldLt
+            const sf::Color badgeFill = item.recommended ? colors.goldLt
                                       : item.usable ? sf::Color(60, 180, 80)
                                                     : sf::Color(180, 140, 60);
             const sf::FloatRect badgeRect{thumbX + 5.f, thumbY + 5.f,
@@ -441,6 +441,6 @@ void ResultPanel::renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
                   std::to_string(thumbnailScrollOffset_ + 1) + "-"
                     + std::to_string(thumbnailScrollOffset_ + visible) + " / "
                     + std::to_string(static_cast<int>(gallery.size())),
-                  Col::Muted, stripX + stripW - 10.f, stripY + stripH - 18.f, 10);
+                  colors.muted, stripX + stripW - 10.f, stripY + stripH - 18.f, 10);
     }
 }

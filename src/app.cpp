@@ -2,6 +2,7 @@
 
 #include "config/AppConfig.hpp"
 #include "enum/constants.hpp"
+#include "ui/Theme.h"
 #include "managers/Logger.hpp"
 #include "ui/Logo.hpp"
 
@@ -24,7 +25,7 @@ void App::run() {
     Logger::info("Application run started");
     while (win.isOpen()) {
         sf::Event e;
-        win.clear(Col::Bg);
+        win.clear(Theme::instance().colors().bg);
 
         if (screen == AppScreen::ImageGenerator)
             imageGenController.update(imageGenScreen);

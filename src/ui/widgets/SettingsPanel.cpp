@@ -132,7 +132,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     constexpr float fieldH    = 86.f;
     constexpr float fieldH_sm = 68.f;
     {
-        drawText(win, font, "Positive prompt:", Col::Muted, x + pad, y, 12);
+        drawText(win, font, "Positive prompt:", colors.muted, x + pad, y, 12);
         y += 18.f;
         positiveArea.setRect({x + pad, y, fw, fieldH});
         positiveArea.render(win, font);
@@ -162,7 +162,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                     std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight);
                     lbl += buf;
                 }
-                chips.push_back({lbl, Col::Gold, Col::GoldLt});
+                chips.push_back({lbl, colors.gold, colors.goldLt});
             }
 
             for (const auto& tok : currentDsl.positive) {
@@ -172,10 +172,10 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                     std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight);
                     lbl += buf;
                 }
-                const sf::Color border = (tok.weight > 1.f) ? Col::BlueLt
-                                       : (tok.weight < 1.f) ? Col::Muted
-                                                             : Col::Border;
-                chips.push_back({lbl, border, Col::Text});
+                const sf::Color border = (tok.weight > 1.f) ? colors.blueLt
+                                       : (tok.weight < 1.f) ? colors.muted
+                                                             : colors.border;
+                chips.push_back({lbl, border, colors.text});
             }
 
             for (const auto& chip : chips) {
@@ -186,7 +186,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                     cx  = x + pad;
                     if (++rows > 2) break;
                 }
-                drawRect(win, {cx, cy, cw, chipH}, Col::Panel2, chip.border, 1.f);
+                drawRect(win, {cx, cy, cw, chipH}, colors.panel2, chip.border, 1.f);
                 drawText(win, font, chip.label, chip.text, cx + chipPadX, cy + 4.f, 11);
                 cx += cw + chipGap;
             }
@@ -195,10 +195,10 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             y += pad * 2.f;
         }
 
-        drawText(win, font, "Negative prompt:", Col::Muted, x + pad, y, 12);
+        drawText(win, font, "Negative prompt:", colors.muted, x + pad, y, 12);
         y += 18.f;
         negativeArea.setRect({x + pad, y, fw, fieldH_sm});
-        negativeArea.setTextColor(Col::Muted);
+        negativeArea.setTextColor(colors.muted);
         negativeArea.render(win, font);
         y += fieldH_sm + 4.f;
 
@@ -214,7 +214,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                 measure.setString(txt);
             }
             if (txt.size() < compiledPreview.size()) txt += "\xe2\x80\xa6";
-            drawText(win, font, "\xe2\x86\x92 " + txt, Col::Muted, x + pad, y, 10);
+            drawText(win, font, "\xe2\x86\x92 " + txt, colors.muted, x + pad, y, 10);
             y += 16.f;
         }
 
@@ -259,25 +259,25 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                 std::filesystem::path(generationParams.initImagePath).filename().string();
             const std::string truncated = stem.size() > 24 ? stem.substr(0, 22) + "\xe2\x80\xa6" : stem;
             const sf::FloatRect bannerRect{x + pad, y, sliderW, 24.f};
-            drawRect(win, bannerRect, Col::Panel2, Col::BlueLt, 1.f);
-            drawText(win, font, "\xe2\x9c\x8e Editing: " + truncated, Col::BlueLt, x + pad + 8.f, y + 5.f, 11);
+            drawRect(win, bannerRect, colors.panel2, colors.blueLt, 1.f);
+            drawText(win, font, "\xe2\x9c\x8e Editing: " + truncated, colors.blueLt, x + pad + 8.f, y + 5.f, 11);
             btnClearInit_ = {x + pad + sliderW - 40.f, y + 3.f, 34.f, 18.f};
-            drawButton(win, btnClearInit_, "\xc3\x97", Col::Panel, Col::Muted, false, 12, font);
+            drawButton(win, btnClearInit_, "\xc3\x97", colors.panel, colors.muted, false, 12, font);
             y += 32.f;
         }
 
         if (currentModelVaeEncoderAvailable()) {
-            drawText(win, font, "Strength presets:", Col::Muted, x + pad, y + 4.f, 11);
-            const sf::Color subtleCol = generationParams.strength <= 0.35f ? Col::GoldLt : Col::Text;
+            drawText(win, font, "Strength presets:", colors.muted, x + pad, y + 4.f, 11);
+            const sf::Color subtleCol = generationParams.strength <= 0.35f ? colors.goldLt : colors.text;
             const sf::Color mediumCol = (generationParams.strength > 0.35f && generationParams.strength < 0.7f)
-                ? Col::GoldLt : Col::Text;
-            const sf::Color strongCol = generationParams.strength >= 0.7f ? Col::GoldLt : Col::Text;
+                ? colors.goldLt : colors.text;
+            const sf::Color strongCol = generationParams.strength >= 0.7f ? colors.goldLt : colors.text;
             btnStrengthSubtle_ = {x + pad + 110.f, y, 68.f, 22.f};
             btnStrengthMedium_ = {x + pad + 184.f, y, 72.f, 22.f};
             btnStrengthStrong_ = {x + pad + 262.f, y, 68.f, 22.f};
-            drawButton(win, btnStrengthSubtle_, "Subtle", Col::Panel2, subtleCol, false, 11, font);
-            drawButton(win, btnStrengthMedium_, "Medium", Col::Panel2, mediumCol, false, 11, font);
-            drawButton(win, btnStrengthStrong_, "Strong", Col::Panel2, strongCol, false, 11, font);
+            drawButton(win, btnStrengthSubtle_, "Subtle", colors.panel2, subtleCol, false, 11, font);
+            drawButton(win, btnStrengthMedium_, "Medium", colors.panel2, mediumCol, false, 11, font);
+            drawButton(win, btnStrengthStrong_, "Strong", colors.panel2, strongCol, false, 11, font);
             y += 28.f;
 
             strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
@@ -292,7 +292,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             btnStrengthMedium_ = {};
             btnStrengthStrong_ = {};
             strengthSliderTrack_ = {};
-            drawText(win, font, "img2img not supported by this model", Col::Muted, x + pad, y + 6.f, 11);
+            drawText(win, font, "img2img not supported by this model", colors.muted, x + pad, y + 6.f, 11);
             y += 24.f;
         }
     } else {
@@ -302,8 +302,8 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     }
 
     // Seed input
-    drawText(win, font, "Seed:", Col::Muted, x + pad, y + 6.f, 12);
-    drawText(win, font, "(empty = random)", Col::Border, x + pad + 44.f, y + 6.f, 11);
+    drawText(win, font, "Seed:", colors.muted, x + pad, y + 6.f, 12);
+    drawText(win, font, "(empty = random)", colors.border, x + pad + 44.f, y + 6.f, 11);
     constexpr float seedFieldW = 160.f;
     constexpr float seedFieldH = 24.f;
     seedField_ = {x + pad + sliderW - seedFieldW, y, seedFieldW, seedFieldH};
@@ -320,19 +320,19 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         const int   count = static_cast<int>(models.size());
         const float listH = listPad * 2.f + itemH * static_cast<float>(count);
 
-        drawRect(win, {listX, listY, listW, listH}, Col::Panel2, Col::BorderHi, 1.f);
+        drawRect(win, {listX, listY, listW, listH}, colors.panel2, colors.borderHi, 1.f);
         modelDropdownItems_.resize(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
             const float itemY2 = listY + listPad + static_cast<float>(i) * itemH;
             modelDropdownItems_[static_cast<size_t>(i)] = {listX, itemY2, listW, itemH};
             const bool selected = (i == selectedModelIdx);
             if (selected)
-                drawRect(win, modelDropdownItems_[static_cast<size_t>(i)], Col::Panel);
+                drawRect(win, modelDropdownItems_[static_cast<size_t>(i)], colors.panel);
             const ModelEntry& entry = models[static_cast<size_t>(i)];
-            drawText(win, font, entry.displayName, selected ? Col::GoldLt : Col::Text,
+            drawText(win, font, entry.displayName, selected ? colors.goldLt : colors.text,
                      listX + 6.f, itemY2 + 4.f, 12);
             const std::string badge = entry.type == ModelType::SDXL ? "SDXL" : "SD1.5";
-            drawTextR(win, font, badge, selected ? Col::GoldLt : Col::Muted,
+            drawTextR(win, font, badge, selected ? colors.goldLt : colors.muted,
                       listX + listW - 8.f, itemY2 + 5.f, 11);
         }
     }
@@ -348,12 +348,12 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         const int   count  = static_cast<int>(availableLoras.size());
 
         if (count == 0) {
-            drawRect(win, {panelX, panelY, panelW, 30.f}, Col::Panel2, Col::BorderHi, 1.f);
+            drawRect(win, {panelX, panelY, panelW, 30.f}, colors.panel2, colors.borderHi, 1.f);
             drawText(win, font, "No .safetensors found in LoRA dir",
-                     Col::Muted, panelX + 8.f, panelY + 8.f, 11);
+                     colors.muted, panelX + 8.f, panelY + 8.f, 11);
         } else {
             const float panelH = listPad * 2.f + rowH * static_cast<float>(count);
-            drawRect(win, {panelX, panelY, panelW, panelH}, Col::Panel2, Col::BorderHi, 1.f);
+            drawRect(win, {panelX, panelY, panelW, panelH}, colors.panel2, colors.borderHi, 1.f);
 
             loraRowToggleRects_.resize(static_cast<size_t>(count));
             loraScaleRects_.resize(static_cast<size_t>(count));
@@ -363,16 +363,16 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
                 const bool  sel   = (i < static_cast<int>(loraSelected.size())) && loraSelected[static_cast<size_t>(i)];
 
                 if (sel)
-                    drawRect(win, {panelX + 1.f, rowY2, panelW - 2.f, rowH}, Col::Panel);
+                    drawRect(win, {panelX + 1.f, rowY2, panelW - 2.f, rowH}, colors.panel);
 
                 constexpr float cbSize = 10.f;
                 const float cbX = panelX + 8.f;
                 const float cbY = rowY2 + (rowH - cbSize) / 2.f;
-                drawRect(win, {cbX, cbY, cbSize, cbSize}, sel ? Col::GoldLt : Col::Panel2, Col::Border, 1.f);
+                drawRect(win, {cbX, cbY, cbSize, cbSize}, sel ? colors.goldLt : colors.panel2, colors.border, 1.f);
 
                 const std::string name = std::filesystem::path(
                     availableLoras[static_cast<size_t>(i)]).stem().string();
-                drawText(win, font, name, sel ? Col::GoldLt : Col::Text,
+                drawText(win, font, name, sel ? colors.goldLt : colors.text,
                          cbX + cbSize + 6.f, rowY2 + 5.f, 11);
 
                 loraRowToggleRects_[static_cast<size_t>(i)] = {

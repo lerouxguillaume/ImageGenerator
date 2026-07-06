@@ -22,7 +22,8 @@ void MenuBar::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
                                    const sf::FloatRect& field,
                                    const std::string& text,
                                    int cursor, bool active) {
-    drawRect(win, field, Col::Panel, active ? Col::GoldLt : Col::Border, 1.f);
+    const auto& colors = Theme::instance().colors();
+    drawRect(win, field, colors.panel, active ? colors.goldLt : colors.border, 1.f);
 
     constexpr float    padX     = 6.f;
     constexpr unsigned fontSize = 13;
@@ -39,14 +40,14 @@ void MenuBar::drawSingleLineField(sf::RenderWindow& win, sf::Font& font,
     sf::Text textObj;
     textObj.setFont(font);
     textObj.setCharacterSize(fontSize);
-    textObj.setFillColor(Col::Text);
+    textObj.setFillColor(colors.text);
     textObj.setString(text);
     textObj.setPosition(field.left + padX - scrollX, textY);
     win.draw(textObj);
 
     if (active) {
         sf::RectangleShape cur({1.f, static_cast<float>(fontSize) + 3.f});
-        cur.setFillColor(Col::GoldLt);
+        cur.setFillColor(colors.goldLt);
         cur.setPosition(field.left + padX + cursorPx - scrollX, textY);
         win.draw(cur);
     }
@@ -143,23 +144,23 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
         const bool  hasActive = !activePresetId_.empty();
         // 2 action items + separator + preset list
         const float listH = listPad * 2.f + itemH * 2.f + 5.f + itemH * static_cast<float>(count);
-        drawRect(win, {listX, listY, listW, listH}, Col::Panel2, Col::BorderHi, 1.f);
+        drawRect(win, {listX, listY, listW, listH}, colors.panel2, colors.borderHi, 1.f);
 
         float iy = listY + listPad;
 
         // "Save" — overwrite active preset (greyed when none active)
         dropdownSaveItem_ = {listX, iy, listW, itemH};
         drawText(win, font, "Save",
-                 hasActive ? Col::Text : Col::Muted, listX + 8.f, iy + 5.f, 12);
+                 hasActive ? colors.text : colors.muted, listX + 8.f, iy + 5.f, 12);
         iy += itemH;
 
         // "Save As..."
         dropdownSaveAsItem_ = {listX, iy, listW, itemH};
-        drawText(win, font, "Save As...", Col::Text, listX + 8.f, iy + 5.f, 12);
+        drawText(win, font, "Save As...", colors.text, listX + 8.f, iy + 5.f, 12);
         iy += itemH;
 
         // Separator
-        drawRect(win, {listX + 4.f, iy + 2.f, listW - 8.f, 1.f}, Col::Border);
+        drawRect(win, {listX + 4.f, iy + 2.f, listW - 8.f, 1.f}, colors.border);
         iy += 5.f;
 
         // Preset list (Load)
@@ -167,10 +168,10 @@ void MenuBar::render(sf::RenderWindow& win, sf::Font& font) {
         for (int i = 0; i < count; ++i) {
             presetDropdownItems_[static_cast<size_t>(i)] = {listX, iy, listW, itemH};
             const bool active = (presets_[static_cast<size_t>(i)].id == activePresetId_);
-            if (active) drawRect(win, presetDropdownItems_[static_cast<size_t>(i)], Col::Panel);
+            if (active) drawRect(win, presetDropdownItems_[static_cast<size_t>(i)], colors.panel);
             const std::string prefix = active ? "\u2713 " : "  ";
             drawText(win, font, prefix + presets_[static_cast<size_t>(i)].name,
-                     active ? Col::GoldLt : Col::Text, listX + 8.f, iy + 5.f, 12);
+                     active ? colors.goldLt : colors.text, listX + 8.f, iy + 5.f, 12);
             iy += itemH;
         }
     }
