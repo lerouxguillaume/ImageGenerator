@@ -2,12 +2,13 @@
 
 SFML-based retained UI system with a component panel architecture.
 
-The UI now uses a centralized theme layer in `src/ui/Theme.h`:
+The UI styling lives entirely in the centralized theme layer `src/ui/Theme.h`,
+accessed via `Theme::instance().colors()` / `.metrics()` / `.typography()`:
 - `UiColors` — semantic colors for backgrounds, panels, accents, status states, and overlays
 - `UiMetrics` — spacing tokens, control heights, layout widths, and shared sizing
 - `UiTypography` — shared text scale for titles, section labels, body copy, and helper text
 
-`src/enum/constants.hpp` remains as a compatibility facade for older code paths while screens and widgets migrate to direct theme access.
+There is no longer a `constants.hpp` compatibility layer — it has been removed and all code reads Theme directly.
 
 ---
 
@@ -31,8 +32,8 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 - Default size: 1280 × 800
 - Minimum enforced size: **700 × 550** (smaller resize attempts are snapped back)
 - On `sf::Event::Resized`: the SFML view is updated so coordinates map directly to pixels
-- `SettingsPanel` stays at fixed width (`LEFT_PANEL_W = 460`); `ResultPanel` takes remaining width
-- All layout values read from `win.getSize()` dynamically every frame — no hard-coded WIN_W/WIN_H in panel code
+- `SettingsPanel` stays at fixed width (`metrics.generatorLeftPanelWidth = 460`); `ResultPanel` takes remaining width
+- All layout values read from `win.getSize()` dynamically every frame — no hard-coded window dimensions in panel code
 
 ---
 
@@ -64,16 +65,16 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 *compiled preview visible only when SD1.5 model is selected
 **"Editing: `<file>`" banner + strength presets/slider appear only when an input image is attached; the primary button then reads **Edit Image**
 
-Layout constants (`src/enum/constants.hpp` and `Theme::metrics()`):
-- `MENU_BAR_H = 40` — top bar height
-- `LEFT_PANEL_W = 460` — SettingsPanel width (fixed)
-- `LLM_BAR_H = 44` — bottom bar height (collapsed)
-- `LLM_EXPANDED_H = 80` — extra height added when LLM bar is expanded
+Layout metrics (`Theme::metrics()` / `UiMetrics`):
+- `menuBarHeight = 40` — top bar height
+- `generatorLeftPanelWidth = 460` — SettingsPanel width (fixed)
+- `llmBarHeight = 44` — bottom bar height (collapsed)
+- `llmExpandedExtraHeight = 80` — extra height added when LLM bar is expanded
 
 Body height is computed dynamically in `ImageGeneratorView::render` from `win.getSize()`:
-- No LLM bar: `winH - MENU_BAR_H`
-- LLM bar collapsed: `winH - MENU_BAR_H - LLM_BAR_H`
-- LLM bar expanded: `winH - MENU_BAR_H - LLM_BAR_H - LLM_EXPANDED_H`
+- No LLM bar: `winH - menuBarHeight`
+- LLM bar collapsed: `winH - menuBarHeight - llmBarHeight`
+- LLM bar expanded: `winH - menuBarHeight - llmBarHeight - llmExpandedExtraHeight`
 
 The LLM bar is shown whenever a prompt enhancer is available or loading, regardless of whether an input image is attached.
 
@@ -162,7 +163,7 @@ Path fields: `lastImagePath` (base output path, set at generation start), `displ
 State: `instructionArea`, `expanded` toggle  
 Capture fields: `originalPositive`, `originalNegative` (snapshot before enhancement for merge base)  
 Action flag: `enhanceRequested`  
-Collapsed: 44px strip. Expanded: bar grows by `LLM_EXPANDED_H` (80px); instruction textarea
+Collapsed: 44px strip. Expanded: bar grows by `metrics.llmExpandedExtraHeight` (80px); instruction textarea
 appears below the toggle row (not as a floating overlay).  
 Only rendered when `promptEnhancerAvailable || llmLoading`
 
@@ -250,9 +251,8 @@ No callbacks or virtual dispatch — plain public bools and strings.
 `src/ui/Helpers.hpp` — `drawRect`, `drawText`, `drawTextC`, `drawTextR`, `drawWrapped`, `drawBar`  
 `src/ui/Buttons.hpp` — `drawButton`  
 `src/ui/Theme.h/.cpp` — font loading plus `UiColors`, `UiMetrics`, `UiTypography`
-`src/enum/constants.hpp` — compatibility `Col::*` palette aliases and legacy layout constants
 
-Panels still use the shared helpers directly, but the shared helpers and newer screens now draw from the centralized theme tokens rather than ad hoc per-screen styling.
+Panels and shared helpers draw from the centralized theme tokens (`Theme::instance().colors()` / `.metrics()`) rather than ad hoc per-screen styling.
 
 ---
 

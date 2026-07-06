@@ -38,9 +38,9 @@ Import system:
 - Venv is placed in `localDataDir()` (platform-appropriate local path) to avoid shared-drive limitations
 
 UI theme system:
-- `Theme` centralizes `UiColors`, `UiMetrics`, and `UiTypography`
-- shared rendering helpers and newer views consume theme tokens directly
-- `src/enum/constants.hpp` remains as compatibility glue while older code paths migrate
+- `Theme` centralizes `UiColors`, `UiMetrics`, and `UiTypography` and is the sole styling source
+- all rendering helpers and views consume theme tokens directly via `Theme::instance()`
+- the old `src/enum/constants.hpp` compatibility layer has been removed
 
 ---
 

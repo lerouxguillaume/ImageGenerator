@@ -123,8 +123,7 @@ Key facts:
 → docs/70_ui/multiline_textarea.md
 
 UI theme facts:
-- `Theme` is now the authoritative UI styling source for colors, metrics, and typography
-- `constants.hpp` is compatibility glue, not the long-term styling source
+- `Theme` (`src/ui/Theme.h`) is the sole UI styling source for colors, metrics, and typography — read via `Theme::instance().colors()` / `.metrics()` / `.typography()`. The old `constants.hpp` compatibility layer has been removed.
 - prefer reading current UI behavior from `docs/70_ui/ui_architecture.md` before inferring from older helper usage
 
 ## Preset system — `PresetManager` (DSL-backed)
