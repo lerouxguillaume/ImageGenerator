@@ -171,8 +171,12 @@ void runPipeline(const std::string& prompt,
 
     if (stage) stage->store(GenerationStage::EncodingText);
     auto tEncode = Clock::now();
-    // vocab/merges are always at models/ relative to the working directory.
-    ClipTokenizer tokenizer("models/vocab.json", "models/merges.txt");
+    // vocab/merges live under models/ next to the executable. Resolve against the
+    // executable dir (not cwd) — cwd is not reliably the executable dir on every
+    // platform (e.g. a VirtualBox shared folder, where chdir into the share fails).
+    const auto modelsDir = resourceDir() / "models";
+    ClipTokenizer tokenizer((modelsDir / "vocab.json").string(),
+                            (modelsDir / "merges.txt").string());
     if (cfg.type == ModelType::SDXL) {
         ctx.text_embed   = encodeTextSDXL(prompt,     tokenizer, ctx, ctx.embed_shape, ctx.text_embeds_pool);
         ctx.uncond_embed = encodeTextSDXL(neg_prompt, tokenizer, ctx, ctx.embed_shape, ctx.uncond_embeds_pool);

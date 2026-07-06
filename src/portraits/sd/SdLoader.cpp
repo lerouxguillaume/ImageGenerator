@@ -10,6 +10,15 @@
 #include "../../managers/Logger.hpp"
 #include <unordered_map>
 
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <climits>
+#else
+#include <unistd.h>
+#endif
+
 #ifdef USE_DML
 // Forward-declare the DML entry point to avoid pulling in DirectML.h (Windows
 // SDK header not available during Linux cross-compilation).
@@ -22,6 +31,27 @@ namespace sd {
     // Survives across loadModels() calls so base weights are not reloaded from
     // disk on every LoRA config change — only the merge computation is redone.
     static std::unordered_map<std::string, LoraInjector> s_injectors;
+
+    std::filesystem::path resourceDir() {
+#if defined(_WIN32)
+        char buffer[MAX_PATH];
+        DWORD len = GetModuleFileNameA(NULL, buffer, MAX_PATH);
+        if (len == 0 || len == MAX_PATH) return std::filesystem::current_path();
+        return std::filesystem::path(buffer).parent_path();
+#elif defined(__APPLE__)
+        char buffer[PATH_MAX];
+        uint32_t size = sizeof(buffer);
+        if (_NSGetExecutablePath(buffer, &size) != 0)
+            return std::filesystem::current_path();
+        return std::filesystem::path(buffer).parent_path();
+#else // Linux/Unix
+        char buffer[4096];
+        ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+        if (len <= 0) return std::filesystem::current_path();
+        buffer[len] = '\0';
+        return std::filesystem::path(buffer).parent_path();
+#endif
+    }
 
     // ── Model I/O logging ─────────────────────────────────────────────────────────
 
@@ -246,8 +276,10 @@ namespace sd {
         auto unetBundle = resolveBundle(mdir / "unet.onnx");
         auto vaeBundle  = resolveBundle(mdir / "vae_decoder.onnx");
         const bool hasVaeEncoder = cfg.vaeEncoderAvailable && fs::exists(mdir / "vae_encoder.onnx");
-        for (const auto* p : {"models/vocab.json", "models/merges.txt"})
-            Logger::info((fs::exists(p) ? "  [OK] " : "  [MISSING] ") + std::string(p));
+        for (const auto* p : {"vocab.json", "merges.txt"}) {
+            const fs::path tok = resourceDir() / "models" / p;
+            Logger::info((fs::exists(tok) ? "  [OK] " : "  [MISSING] ") + tok.string());
+        }
         // text_encoder_2 (SDXL only) is resolved at the point of use below.
 
         // ── Session loader helper ─────────────────────────────────────────────────

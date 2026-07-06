@@ -1,10 +1,19 @@
 #pragma once
 #include "SdTypes.hpp"
 #include "../../config/AppConfig.hpp"
+#include <filesystem>
 #include <string>
 #include <vector>
 
 namespace sd {
+
+// Absolute path to the directory containing the running executable. Bundled
+// resources (the tokenizer vocab/merges under models/) are resolved against
+// this rather than the process working directory: cwd is not reliably the
+// executable dir on all platforms — e.g. when running from a VirtualBox shared
+// folder, where chdir into the share fails and cwd stays elsewhere. Falls back
+// to the current working directory if the executable path cannot be determined.
+std::filesystem::path resourceDir();
 
 // Reads <modelDir>/model.json; falls back to SD 1.5 defaults if absent.
 ModelConfig loadModelConfig(const std::string& modelDir);
