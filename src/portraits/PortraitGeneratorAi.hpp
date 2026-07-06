@@ -20,6 +20,8 @@ struct GenerationParams {
     std::vector<LoraEntry> loras;        // LoRA adapters to apply; empty = none
     std::string initImagePath;           // img2img: path to input image; empty = txt2img
     float       strength         = 1.0f; // img2img: denoising strength [0,1]; 1 = full noise (txt2img)
+    int         cropTop          = 0;    // SDXL time_ids: crop_y offset in pixels (0 = no crop)
+    int         cropLeft         = 0;    // SDXL time_ids: crop_x offset in pixels (0 = no crop)
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).

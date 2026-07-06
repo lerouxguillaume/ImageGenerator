@@ -45,7 +45,14 @@ int sigmaToTimestep(float sigma, const std::vector<float>& alphas_cumprod) {
         if (alphas_cumprod[mid] < ab) hi = mid;
         else lo = mid + 1;
     }
-    return lo;
+    // lo is the first index where alphas_cumprod[lo] < ab (upper bound).
+    // Return the nearest neighbour rather than always rounding up.
+    if (lo > 0 && lo < T) {
+        const float dist_lo   = ab - alphas_cumprod[lo];      // always >= 0
+        const float dist_prev = alphas_cumprod[lo - 1] - ab;  // always >= 0
+        if (dist_prev < dist_lo) return lo - 1;
+    }
+    return std::min(lo, T - 1);
 }
 
 } // namespace sd

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 #include <chrono>
 #include <stop_token>
@@ -50,28 +51,33 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
         float sigma      = sigmas[step];
         float sigma_next = sigmas[step + 1];
         auto  tStep      = Clock::now();
-        Logger::info("DPM++ step " + std::to_string(step + 1) + "/" + std::to_string(num_steps)
-                     + "  sigma=" + std::to_string(sigma));
 
         float c_in = 1.0f / std::sqrt(1.0f + sigma * sigma);
         std::vector<float> x_t(ctx.latent_size);
         for (int j = 0; j < ctx.latent_size; ++j) x_t[j] = x[j] * c_in;
 
         auto eps = runUNetCFG(x_t, sigma, alphas_cumprod, ctx);
+        if (std::isnan(eps[0]) || std::isinf(eps[0]))
+            throw std::runtime_error("NaN/Inf in UNet output at step "
+                                     + std::to_string(step + 1)
+                                     + " (sigma=" + std::to_string(sigma)
+                                     + ") — likely fp16 overflow; try reducing guidance scale");
 
         std::vector<float> denoised(ctx.latent_size);
         for (int j = 0; j < ctx.latent_size; ++j)
             denoised[j] = x[j] - sigma * eps[j];
 
-        float ratio = sigma_next / sigma;
-        float h     = std::log(sigma / sigma_next);
-        float coeff = 1.0f - ratio;
+        const float ratio       = sigma_next / sigma;
+        const float coeff       = 1.0f - ratio;
+        const bool  is_last     = (sigma_next == 0.0f);
+        // Avoid log(sigma/0) = +Inf on the final step; h is unused there anyway.
+        const float h           = is_last ? 0.0f : std::log(sigma / sigma_next);
 
-        if (prev_denoised.empty() || sigma_next == 0.0f) {
+        if (prev_denoised.empty() || is_last) {
             for (int j = 0; j < ctx.latent_size; ++j)
                 x[j] = ratio * x[j] + coeff * denoised[j];
         } else {
-            float r = h_prev / h;
+            const float r = h_prev / h;
             for (int j = 0; j < ctx.latent_size; ++j) {
                 float D = (1.0f + 1.0f / (2.0f * r)) * denoised[j]
                         - (1.0f / (2.0f * r)) * prev_denoised[j];
@@ -82,14 +88,23 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
         prev_denoised = denoised;
         h_prev        = h;
 
-        if ((step + 1) % 5 == 0 || step == 0 || step + 1 == num_steps) {
+        {
             float x_mn = 1e9f, x_mx = -1e9f, x_sum = 0.0f;
-            for (float v : x) { x_mn = std::min(x_mn, v); x_mx = std::max(x_mx, v); x_sum += v; }
-            Logger::info("  latent stats: min=" + std::to_string(x_mn)
-                         + "  max=" + std::to_string(x_mx)
-                         + "  mean=" + std::to_string(x_sum / static_cast<float>(ctx.latent_size)));
+            bool  nan_seen = false;
+            for (float v : x) {
+                if (std::isnan(v) || std::isinf(v)) { nan_seen = true; break; }
+                x_mn = std::min(x_mn, v); x_mx = std::max(x_mx, v); x_sum += v;
+            }
+            if (nan_seen)
+                Logger::info("  [NaN/Inf] step " + std::to_string(step + 1)
+                             + "  σ=" + std::to_string(sigma));
+            else
+                Logger::info("  step " + std::to_string(step + 1) + "/" + std::to_string(num_steps)
+                             + "  σ=" + std::to_string(sigma)
+                             + "  lat[" + std::to_string(x_mn) + ", " + std::to_string(x_mx)
+                             + "] mean=" + std::to_string(x_sum / static_cast<float>(ctx.latent_size))
+                             + "  " + fmtMs(tStep));
         }
-        Logger::info("  step done in " + fmtMs(tStep));
         if (progressStep) progressStep->fetch_add(1);
     }
 
@@ -150,6 +165,10 @@ void runPipeline(const std::string& prompt,
                                : params.guidanceScale;  // 0 → same as guidance_scale (standard CFG)
     ctx.cfg_rescale        = params.cfgRescale;
 
+    if (params.guidanceScale > 12.0f && params.cfgRescale == 0.0f)
+        Logger::info("[WARN] guidance_scale=" + std::to_string(params.guidanceScale)
+                     + " is high — consider cfg_rescale≈0.7 to reduce oversaturation");
+
     if (stage) stage->store(GenerationStage::EncodingText);
     auto tEncode = Clock::now();
     // vocab/merges are always at models/ relative to the working directory.
@@ -159,15 +178,62 @@ void runPipeline(const std::string& prompt,
         ctx.uncond_embed = encodeTextSDXL(neg_prompt, tokenizer, ctx, ctx.embed_shape, ctx.uncond_embeds_pool);
         const float h    = static_cast<float>(cfg.image_h);
         const float w    = static_cast<float>(cfg.image_w);
-        ctx.time_ids     = {h, w, 0.0f, 0.0f, h, w};
+        ctx.time_ids     = {h, w,
+                            static_cast<float>(params.cropTop),
+                            static_cast<float>(params.cropLeft),
+                            h, w};
     } else {
         ctx.text_embed   = encodeText(prompt,     tokenizer, ctx, ctx.embed_shape);
         ctx.uncond_embed = encodeText(neg_prompt, tokenizer, ctx, ctx.embed_shape);
     }
     Logger::info("Text encoding total: " + fmtMs(tEncode));
 
+    {
+        // RMS norm and cosine similarity between cond/uncond embeddings.
+        // Near-identical embeddings (sim > 0.99) mean CFG has no effect.
+        auto rms = [](const std::vector<float>& v) {
+            float s = 0.0f;
+            for (float x : v) s += x * x;
+            return std::sqrt(s / static_cast<float>(v.size()));
+        };
+        float dot = 0.0f, na = 0.0f, nb = 0.0f;
+        for (size_t i = 0; i < ctx.text_embed.size(); ++i) {
+            dot += ctx.text_embed[i] * ctx.uncond_embed[i];
+            na  += ctx.text_embed[i] * ctx.text_embed[i];
+            nb  += ctx.uncond_embed[i] * ctx.uncond_embed[i];
+        }
+        const float sim = (na > 0.0f && nb > 0.0f) ? dot / (std::sqrt(na) * std::sqrt(nb)) : 0.0f;
+        Logger::info("Embeddings: cond_rms=" + std::to_string(rms(ctx.text_embed))
+                     + "  uncond_rms=" + std::to_string(rms(ctx.uncond_embed))
+                     + "  cosine_sim=" + std::to_string(sim));
+        if (sim > 0.99f) {
+            Logger::info("[WARN] cond/uncond embeddings nearly identical"
+                         " — CFG will have minimal effect; check prompt and negative prompt");
+            // Log first few values at BOS (pos 0) and first content token (pos 1)
+            // to determine whether the issue is in input_ids or the ONNX model.
+            // embed shape: [1, 77, dim]
+            if (!ctx.text_embed.empty() && !ctx.uncond_embed.empty()) {
+                const int dim = static_cast<int>(ctx.embed_shape.size() >= 3 ? ctx.embed_shape[2] : 768);
+                std::string cond_p0, uncond_p0, cond_p1, uncond_p1;
+                for (int d = 0; d < std::min(dim, 4); ++d) {
+                    cond_p0   += std::to_string(ctx.text_embed[d])   + " ";
+                    uncond_p0 += std::to_string(ctx.uncond_embed[d]) + " ";
+                    if (dim + d < (int)ctx.text_embed.size()) {
+                        cond_p1   += std::to_string(ctx.text_embed[dim + d])   + " ";
+                        uncond_p1 += std::to_string(ctx.uncond_embed[dim + d]) + " ";
+                    }
+                }
+                Logger::info("  embed[pos=0]: cond=[" + cond_p0 + "]  uncond=[" + uncond_p0 + "]");
+                Logger::info("  embed[pos=1]: cond=[" + cond_p1 + "]  uncond=[" + uncond_p1 + "]");
+            }
+        }
+    }
+
     auto alphas_cumprod = buildAlphasCumprod(cfg.T, cfg.beta_start, cfg.beta_end);
     auto sigmas         = buildKarrasSchedule(alphas_cumprod, num_steps);
+    Logger::info("Schedule: sigma_max=" + std::to_string(sigmas[0])
+                 + "  sigma_min=" + std::to_string(sigmas[num_steps - 1])
+                 + "  steps=" + std::to_string(num_steps));
 
     // img2img: encode the input image once before the per-image loop.
     // sample=false (posterior mean) is deterministic, so the latent is identical
@@ -226,6 +292,7 @@ void runPipeline(const std::string& prompt,
             auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx,
                                               progressStep, stopToken, startStep, initLatent);
 
+            if (latent.empty()) break;  // cancelled or aborted inside denoising
             if (stopToken.stop_requested()) break;
 
             float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;

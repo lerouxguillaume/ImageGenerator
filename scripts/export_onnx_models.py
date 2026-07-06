@@ -5,7 +5,7 @@ Usage:
     python export_onnx_models.py <model.safetensors> [--name MODEL_NAME]
 
 Outputs (under models/<MODEL_NAME>/):
-    text_encoder.onnx   — CLIP-L with clip-skip-2, fp16
+    text_encoder.onnx   — CLIP-L with clip-skip-2, fp32
     unet.onnx           — UNet, fp16, dynamic H/W
     vae_decoder.onnx    — VAE decoder, fp16, dynamic H/W
     vae_encoder.onnx    — VAE encoder, fp16, static shape
@@ -88,6 +88,13 @@ def export_sd15(model_file: str, output_dir: str, *,
     assert_no_meta_tensors(pipe.unet, "unet")
     assert_no_meta_tensors(pipe.vae, "vae")
     vae_scaling_factor = float(pipe.vae.config.scaling_factor)
+
+    # Text encoder is always exported in fp32 regardless of the pipeline dtype.
+    # On GPU, ORT runs fp16 text encoders natively in fp16; the 12-layer
+    # transformer accumulates enough error that all prompts produce nearly
+    # identical embeddings (attention collapse), making CFG ineffective.
+    # fp32 export matches what diffusers does in mixed-precision inference.
+    pipe.text_encoder = pipe.text_encoder.float()
 
     exported = []
 

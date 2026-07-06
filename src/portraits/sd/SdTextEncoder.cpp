@@ -159,9 +159,15 @@ std::vector<float> encodeText(const std::string& prompt,
     const std::string plain = weighted ? stripToPlain(segs) : prompt;
 
     auto token_ids = tokenizer.encode(plain);
-    Logger::info("encodeText: " + std::to_string(token_ids.size()) + " tokens"
-                 + (weighted ? "  [weighted]" : "")
-                 + "  prompt=\"" + prompt.substr(0, 80) + (prompt.size() > 80 ? "..." : "") + "\"");
+    {
+        std::string ids_str;
+        for (int k = 0; k < std::min((int)token_ids.size(), 12); ++k)
+            ids_str += std::to_string(token_ids[k]) + " ";
+        Logger::info("encodeText: " + std::to_string(token_ids.size()) + " tokens"
+                     + (weighted ? "  [weighted]" : "")
+                     + "  ids=[" + ids_str + "...]"
+                     + "  prompt=\"" + prompt.substr(0, 60) + (prompt.size() > 60 ? "..." : "") + "\"");
+    }
 
     auto tEnc = Clock::now();
     std::vector<int64_t> token_shape = {1, 77};
