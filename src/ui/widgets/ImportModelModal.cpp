@@ -16,19 +16,6 @@ static std::string fmtClock(double seconds) {
     return std::to_string(m) + ":" + (s < 10 ? "0" : "") + std::to_string(s);
 }
 
-// ── Arch cycle ────────────────────────────────────────────────────────────────
-
-static const char* kArchLabels[] = {"Auto (detect)", "SD 1.5", "SDXL"};
-static const char* kArchArgs[]   = {"auto",          "sd15",   "sdxl"};
-
-void ImportModelModal::cycleArch() {
-    archIndex_ = (archIndex_ + 1) % 3;
-}
-
-std::string ImportModelModal::archArg() const {
-    return kArchArgs[archIndex_];
-}
-
 // ── Sync from importer ────────────────────────────────────────────────────────
 
 void ImportModelModal::syncFrom(const ModelImporter& importer) {
@@ -78,7 +65,11 @@ void ImportModelModal::updateEta() {
             if (per > 0.0)
                 etaUnitTime_ = etaUnitTime_ > 0.0 ? 0.5 * etaUnitTime_ + 0.5 * per : per;
         } else if (etaUnitTime_ <= 0.0) {
-            etaUnitTime_ = elapsed_ / static_cast<double>(done); // bootstrap estimate
+            // Bootstrap from time spent in THIS phase only. Using total elapsed_
+            // would fold in analyze + (first-run) Python-setup time and grossly
+            // overestimate; the per-unit EMA above refines it from the next unit on.
+            const double inPhase = elapsed_ - etaElapsedAtUnit_;
+            if (inPhase > 0.0) etaUnitTime_ = inPhase / static_cast<double>(done);
         }
         etaUnitDone_      = done;
         etaElapsedAtUnit_ = elapsed_;
@@ -323,28 +314,23 @@ void ImportModelModal::render(sf::RenderWindow& win) {
 
     curY += rowH + 10.f;
 
-    // ── Arch row ──────────────────────────────────────────────────────────────
+    // ── Arch row (read-only — architecture is always inferred) ────────────────
     Helpers::drawText(win, font, "Arch", colors.muted,
                       mX + pad, curY + 8.f, type.sectionTitle, false);
 
-    btnArch_ = {mX + pad + labelW, curY, 160.f, rowH};
-    drawButton(win, btnArch_, kArchLabels[archIndex_], colors.panel2, colors.text, false, 12, font);
-    Helpers::drawText(win, font, "▶", colors.muted,
-                      btnArch_.left + btnArch_.width - 18.f, curY + 9.f, 10, false);
+    const sf::FloatRect archField = {mX + pad + labelW, curY, fieldW + 76.f, rowH};
+    Helpers::drawRect(win, archField, colors.surfaceInset, colors.border, 1.f);
 
-    // Detected-arch chip — shown once inspection has run and produced a result.
-    if (inspection_.valid
-            && inspection_.architecture != SafetensorsInfo::Architecture::Unknown) {
-        const std::string chip = std::string("Detected: ")
-                               + inspection_.architectureName()
-                               + "  ·  " + inspection_.dtype;
-        const float chipX = btnArch_.left + btnArch_.width + 12.f;
-        const float chipW = mW - pad - (chipX - mX);
-        Helpers::drawRect(win, {chipX, curY + 3.f, chipW, rowH - 6.f},
-                          colors.panel2, colors.borderHi, 1.f);
-        Helpers::drawText(win, font, chip, colors.goldLt,
-                          chipX + 10.f, curY + 9.f, 12, false);
-    }
+    const bool archDetected =
+        inspection_.valid
+        && inspection_.architecture != SafetensorsInfo::Architecture::Unknown;
+    const std::string archText =
+        archDetected ? (std::string(inspection_.architectureName())
+                        + "  ·  " + inspection_.dtype + "   (auto-detected)")
+                     : "Auto-detected from file on import";
+    Helpers::drawText(win, font, archText,
+                      archDetected ? colors.goldLt : colors.muted,
+                      archField.left + 8.f, curY + 9.f, type.sectionTitle, false);
 
     curY += rowH + 16.f;
 
@@ -413,7 +399,6 @@ bool ImportModelModal::handleEvent(const sf::Event& e, sf::RenderWindow& win) {
     if (!modalRect_.contains(pos)) return false;
 
     if (btnBrowse_.contains(pos))  { browseRequested = true; return true; }
-    if (btnArch_.contains(pos))    { cycleArch(); return true; }
     if (btnClose_.contains(pos))   { closeRequested = true; return true; }
 
     if (btnAction_.contains(pos)) {

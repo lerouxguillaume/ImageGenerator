@@ -143,9 +143,12 @@ void ModelImporter::getExportProgress(int& step, int& total) const {
 }
 
 void ModelImporter::parseExportStep(const std::string& line) {
-    // Export step lines begin with "N/M" (e.g. "1/5  Text encoder"). Parse only
-    // that leading pattern to avoid matching ratios elsewhere in the log.
+    // Export step lines look like "[N/M  Text encoder]" (see export_step() in
+    // scripts/export_common.py). Parse the leading "[N/M" pattern; tolerate the
+    // bracket and surrounding whitespace so we don't match ratios elsewhere.
     size_t i = 0;
+    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+    if (i < line.size() && line[i] == '[') ++i;
     while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
     size_t d0 = i;
     while (i < line.size() && std::isdigit(static_cast<unsigned char>(line[i]))) ++i;

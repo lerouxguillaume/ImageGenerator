@@ -27,19 +27,18 @@ public:
     // Returns true if the event was consumed (prevents menu from handling it).
     bool         handleEvent(const sf::Event& e, sf::RenderWindow& win);
 
-    // Returns the arch argument string for the import script ("auto"/"sd15"/"sdxl")
-    std::string archArg() const;
+    // Arch is always inferred from the file — the import script re-detects when
+    // passed "auto", so the UI never lets the user override it.
+    std::string archArg() const { return "auto"; }
 
 private:
     void  drawProgressBar(sf::RenderWindow& win, float x, float y, float w);
     void  drawChecklist(sf::RenderWindow& win, float x, float y, float w);
     float overallProgress() const;   // 0..1 across all phases
-    void  cycleArch();
 
     // Modal geometry (computed in render, reused in handleEvent)
     sf::FloatRect modalRect_{};
     sf::FloatRect btnBrowse_{};
-    sf::FloatRect btnArch_{};
     sf::FloatRect btnAction_{}; // Import or Cancel
     sf::FloatRect btnClose_{};
     sf::FloatRect fileFieldRect_{};
@@ -63,7 +62,4 @@ private:
     double etaElapsedAtUnit_= 0.0;
     double etaTargetSec_    = 0.0;  // predicted total elapsed at completion
     bool   etaValid_        = false;
-
-    // Arch selection: 0=Auto, 1=SD 1.5, 2=SDXL
-    int archIndex_ = 0;
 };

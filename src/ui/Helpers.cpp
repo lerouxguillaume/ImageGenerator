@@ -1,5 +1,6 @@
 #include <string>
 #include <SFML/Graphics/Color.hpp>
+#include <SFML/System/String.hpp>
 #include <sstream>
 
 #include "Helpers.hpp"
@@ -7,6 +8,14 @@
 #include "../enum/constants.hpp"
 
 namespace Helpers {
+
+// Source strings are UTF-8. sf::Text::setString(const std::string&) interprets
+// bytes as Latin-1, which mojibakes any multi-byte glyph (✓ ▶ • ✗ … · –).
+// Decode explicitly so those render correctly.
+static sf::String toSfString(const std::string& s) {
+    return sf::String::fromUtf8(s.begin(), s.end());
+}
+
 // ─── Drawing helpers ──────────────────────────────────────────────────────────
 void drawRect(sf::RenderTarget& rt, sf::FloatRect r, sf::Color fill, sf::Color border, float bw) {
     sf::RectangleShape s({r.width, r.height});
@@ -36,7 +45,7 @@ void drawText(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
               sf::Color color, float x, float y, unsigned size, bool bold) {
     sf::Text t;
     t.setFont(font);
-    t.setString(str);
+    t.setString(toSfString(str));
     t.setCharacterSize(size);
     t.setFillColor(color);
     t.setStyle(bold ? sf::Text::Bold : sf::Text::Regular);
@@ -47,7 +56,7 @@ void drawText(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
 void drawTextC(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
                sf::Color color, float cx, float y, unsigned size, bool bold) {
     sf::Text t;
-    t.setFont(font); t.setString(str); t.setCharacterSize(size);
+    t.setFont(font); t.setString(toSfString(str)); t.setCharacterSize(size);
     t.setFillColor(color);
     t.setStyle(bold ? sf::Text::Bold : sf::Text::Regular);
     t.setPosition(cx - t.getLocalBounds().width / 2.f, y);
@@ -57,7 +66,7 @@ void drawTextC(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
 void drawTextR(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
                sf::Color color, float rx, float y, unsigned size) {
     sf::Text t;
-    t.setFont(font); t.setString(str); t.setCharacterSize(size);
+    t.setFont(font); t.setString(toSfString(str)); t.setCharacterSize(size);
     t.setFillColor(color);
     t.setPosition(rx - t.getLocalBounds().width, y);
     rt.draw(t);
@@ -72,7 +81,7 @@ float drawWrapped(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
     float lineH = size + 4.f, totalH = 0;
     auto flush = [&]() {
         if (line.empty()) return;
-        t.setString(line);
+        t.setString(toSfString(line));
         t.setPosition(x, y + totalH);
         rt.draw(t);
         totalH += lineH;
@@ -80,7 +89,7 @@ float drawWrapped(sf::RenderTarget& rt, sf::Font& font, const std::string& str,
     };
     while (ss >> word) {
         std::string test = line.empty() ? word : line + " " + word;
-        t.setString(test);
+        t.setString(toSfString(test));
         if (t.getLocalBounds().width > maxW && !line.empty()) { flush(); line = word; }
         else line = test;
     }

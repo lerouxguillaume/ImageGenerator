@@ -129,11 +129,13 @@ def load_single_file_pipeline(pipeline_cls, model_file: str, *, torch_dtype):
 @contextmanager
 def export_step(name: str):
     """Times a named export step and re-raises exceptions with context."""
-    print(f"\n[{name}]")
+    # flush so the C++ parent's step/ETA tracking updates in real time rather
+    # than receiving all "[N/M ...]" lines in one buffered burst at the end.
+    print(f"\n[{name}]", flush=True)
     t0 = time.time()
     try:
         yield
-        print(f"  Done in {time.time() - t0:.1f}s")
+        print(f"  Done in {time.time() - t0:.1f}s", flush=True)
     except MemoryError as e:
         raise MemoryError(
             f"Step '{name}' ran out of memory.\n"
