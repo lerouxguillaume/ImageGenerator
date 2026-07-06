@@ -676,9 +676,8 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         }
     }
 
-    // Populate model list from the imported model registry before applying
-    // model-specific defaults. On first open, this prevents the fallback
-    // "models" path from being cached as the active model.
+    // Populate the model list from the imported-model registry before applying
+    // model-specific defaults, so a valid model is selected on first open.
     if (modelsDirty) {
         sp.models.clear();
         ImportedModelRegistry reg(importedRegistryPath());

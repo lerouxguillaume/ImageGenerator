@@ -111,7 +111,7 @@ Key facts:
 - **Model discovery is registry-only** — `ImageGeneratorController` reads `ImportedModelRegistry` to populate the model list; there is no filesystem scan of a model base directory
 - The registry is watched by mtime in `ImageGeneratorController::update()` — newly imported models appear automatically when the user navigates to the generator screen
 - `ImportedModel` carries `ModelCapabilities` (`vaeEncoderAvailable`, `loraCompatible`) populated from `model.json` at registry load time; defaults to `true` for models without a capabilities block
-- `SettingsPanel` exposes `modelVaeEncoderAvailable` / `modelLoraCompatible` vectors (parallel to `availableModels`) and helpers `currentModelVaeEncoderAvailable()` / `currentModelLoraCompatible()`; the LoRA button is hidden and the strength slider is replaced with a note when the selected model lacks the capability
+- `SettingsPanel` holds a single `std::vector<ModelEntry> models` (id, displayName, path, `ModelType`, `ModelCapabilities`), populated by the controller from `ImportedModelRegistry` in one loop. Access the selection via `currentModel()` (nullptr when empty); the derived helpers `currentModelVaeEncoderAvailable()` / `currentModelLoraCompatible()` / `currentModelType()` are one bounds check + field access over it. The LoRA button is hidden and the strength slider is replaced with a note when the selected model lacks the capability
 
 ## LLM prompt enhancement — `OrtLlmEnhancer` (optional)
 → docs/60_llm/llm_overview.md  
@@ -154,4 +154,5 @@ UI theme facts:
 - Never store a raw prompt string as internal state — use `Prompt` DSL
 - Never replace LLM-enhanced text directly — always merge via `PromptMerge::merge()`
 - Never scan a model base directory for `unet.onnx` — use `ImportedModelRegistry::list()` for all model discovery
-- Never derive model display name from `path.filename()` — use `availableModelNames` from `SettingsPanel` (parallel to `availableModels`)
+- Model display name comes from `SettingsPanel::ModelEntry::displayName` — enforced by construction; never re-derive it from `path.filename()`
+- Persisted model references (presets `modelId`, `AppConfig::modelConfigs` keys) use the stable model id (`ModelEntry::id`), never the display name

@@ -17,7 +17,7 @@ Plain data struct persisted to `presets.json`:
 | `dsl` | `Prompt` | Full prompt DSL — source of truth for prompts |
 | `steps` | `int` | Denoising steps |
 | `cfg` | `float` | CFG / guidance scale |
-| `modelId` | `std::string` | Model folder name (matches `availableModels` entries) |
+| `modelId` | `std::string` | Stable model id (matches `SettingsPanel::ModelEntry::id`) |
 | `width` | `int` | Output width in pixels; 0 = model default |
 | `height` | `int` | Output height in pixels; 0 = model default |
 | `createdAt` | `uint64_t` | Unix seconds at creation |
@@ -126,14 +126,14 @@ Sets:
 - `panel.positiveArea` via `PromptCompiler::compile(preset.dsl, ModelType::SDXL)`
 - `panel.negativeArea` via `PromptCompiler::compileNegative(preset.dsl, ModelType::SDXL)`
 - `panel.generationParams.numSteps`, `guidanceScale`, `width`, `height`
-- `panel.selectedModelIdx` (linear scan of `panel.availableModels` by folder name)
+- `panel.selectedModelIdx` (linear scan of `panel.models` matching `preset.modelId` against `ModelEntry::id`)
 - `panel.activePresetId`
 
 SDXL (neutral) form is used for display. The correct model-specific compilation is
 applied fresh at generation time via `launchGeneration`.
 
-If `modelId` is not found in `availableModels`, `selectedModelIdx` is left unchanged and
-a warning is logged.
+If `modelId` matches no `ModelEntry::id` in `panel.models`, `selectedModelIdx` is left
+unchanged and a warning is logged.
 
 ## Building a GenerationSettings snapshot from the view
 
@@ -142,7 +142,7 @@ The controller's `buildGenerationSettings(view)` helper captures current state:
 ```cpp
 GenerationSettings gs;
 gs.dsl     = PromptParser::parse(sp.positiveArea.getText(), sp.negativeArea.getText());
-gs.modelId = filesystem::path(sp.getSelectedModelDir()).filename().string();
+gs.modelId = sp.currentModel() ? sp.currentModel()->id : std::string{};
 gs.steps   = sp.generationParams.numSteps;
 gs.cfg     = sp.generationParams.guidanceScale;
 gs.width   = sp.generationParams.width;
