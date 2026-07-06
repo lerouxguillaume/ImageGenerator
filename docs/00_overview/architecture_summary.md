@@ -4,7 +4,6 @@ Image generator is structured around a strict separation of:
 
 - UI layer (SFML)
 - Control layer (controllers)
-- Asset layer (artifact paths, post-processing, scoring)
 - Prompt DSL layer (parse / compile / merge)
 - Inference layer (ONNX runtime pipeline)
 - Preset layer (file-backed configuration persistence)
@@ -14,36 +13,23 @@ Image generator is structured around a strict separation of:
 # Component structure
 
 Views:
-- `MenuView` — top-level launcher with `Projects`, `Generate Images`, `Edit Image`, and `Import Model`
-- `ProjectView` — themed asset-pack workspace with embedded generation/results
-- `ImageGeneratorView(Generate)` — prompt-first txt2img composition root
-- `ImageGeneratorView(Edit)` — image-first img2img composition root
-- Each `ImageGeneratorView` remains thin and delegates `render()` to shared panels
+- `MenuView` — top-level launcher with `Generate Images` and `Import Model`
+- `ImageGeneratorView` — the single generate/edit composition root; txt2img by default, img2img when an input image is attached
+- `ImageGeneratorView` remains thin and delegates `render()` to shared panels
 
 Panels (own state + rendering + event handling):
-- `MenuBar` — top bar: Back, title, optional Presets dropdown, Settings
-- `SettingsPanel` — left panel; generate mode shows prompts/preview, edit mode shows source/edit controls
-- `ResultPanel` — right panel: image display, Generate/Cancel, progress, gallery actions
-- `LlmBar` — bottom bar: LLM toggle, instruction, Enhance (generate screen only)
+- `MenuBar` — top bar: Back, title, Presets dropdown, Settings
+- `SettingsPanel` — left panel: prompts/preview, model + LoRA selectors, sliders; shows the input-image/strength controls when an image is attached
+- `ResultPanel` — right panel: image display, Generate/Cancel, progress, gallery actions (incl. **Edit** = attach the shown image as img2img input)
+- `LlmBar` — bottom bar: LLM toggle, instruction, Enhance (shown when a prompt enhancer is loaded)
 - `SettingsModal` — settings overlay modal
 
 Controller (`ImageGeneratorController`):
-- One instance per workflow mode (`Generate`, `Edit`)
+- A single instance drives the one generate/edit screen
 - Thin coordinator: routes events to panels, acts on their action flags
 - Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
-- Updates DSL display state (token chips, compiled preview) every frame in generate mode
+- Updates DSL display state (token chips, compiled preview) every frame
 - Accesses panels directly via `view.panelName.*`
-
-Project workflow:
-- `ProjectController` owns project CRUD, theme/asset authoring, and the embedded project workspace layout
-- `ProjectController` embeds and reuses `ImageGeneratorController` for generation orchestration, settings modal handling, and gallery behavior
-- `ResolvedProjectContext` remains the carrier between project-authored data and generation execution
-
-Asset workflow:
-- `AssetArtifactStore` owns generated asset path conventions, candidate-run layouts, metadata sidecar paths, transparent derivative paths, and gallery discovery
-- `GeneratedAssetProcessor` owns shared raw-output normalization: alpha cutout, standalone transparent derivatives when applicable, post-processing, processed PNG output, and metadata sidecars
-- `CandidateScorer` owns deterministic geometric scoring for candidate-run proposals and gallery ranking
-- `PatronGenerator` creates orientation-specific shape references for candidate-run exploration
 
 Import system:
 - `MenuController` owns `ModelImporter`, `ImportedModelRegistry`, and `ImportModelModal`
@@ -78,10 +64,8 @@ LLM enhancement, per-frame display update). It is not stored as persistent UI st
 # Generation service architecture
 
 `GenerationService` sits between the controller and the pipeline. It owns:
-- Reference normalization (img2img seed from project reference)
 - `PortraitGeneratorAi::generateFromPrompt()` invocation
-- `PostProcessing` and `Done` stage transitions after the pipeline returns
-- `CandidateRunPipeline` orchestration for candidate runs
+- The final `Done` stage transition after the pipeline returns
 - Error handling — exceptions are caught internally and routed through typed callbacks
 
 **Progress** is reported via `GenerationProgress` — three nullable atomic pointers:
@@ -98,14 +82,10 @@ LLM enhancement, per-frame display update). It is not stored as persistent UI st
 |---|---|---|
 | `GenerationCallbacks` | `onResult(GenerationResult)` | generation completed successfully |
 | `GenerationCallbacks` | `onError(std::string)` | exception caught during generation |
-| `CandidateRunCallbacks` | `onResult(CandidateRunResult)` | candidate run completed successfully |
-| `CandidateRunCallbacks` | `onError(std::string)` | exception caught during candidate run |
 
-Both service methods return `void`. The controller registers `onError` to write to `ResultPanel` atomics; `onResult` is optional (gallery refresh is driven by `generationDone` polled in `update()`).
+`GenerationService::run()` returns `void`. The controller registers `onError` to write to `ResultPanel` atomics; `onResult` is optional (gallery refresh is driven by `generationDone` polled in `update()`).
 
-Standard generation stage sequence: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`
-
-Candidate run stage sequence: `Exploring → Scoring → Refining → WritingManifest → Done` — coarser; inner pipeline stages are suppressed (stage not forwarded into `generateFromPrompt`).
+Generation stage sequence: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → Done`
 
 **Controller thread boundary**: `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone` after the task returns. Exception handling and result routing are entirely the service's responsibility.
 

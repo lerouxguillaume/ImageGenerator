@@ -5,8 +5,8 @@ Image generator is a C++20 / SFML application embedding a full Stable Diffusion 
 It supports:
 - Stable Diffusion 1.5
 - Stable Diffusion XL (SDXL)
-- Separate generate and edit screens over a shared inference backend
-- Txt2img and gallery-driven img2img editing (VAE encode → noise → denoise)
+- A single generate/edit screen — txt2img by default, img2img when an optional input image is attached
+- Gallery-driven img2img editing (VAE encode → noise → denoise), attached in-place
 - LoRA injection via external initializer patching
 - Optional LLM prompt transformation via ORT GenAI
 - Structured Prompt DSL with model-specific compilation
@@ -15,11 +15,11 @@ It supports:
 
 # Core runtime flow
 
-1. User chooses either the generate or edit workflow (UI layer)
+1. User authors a prompt, and optionally attaches an input image to edit (UI layer)
 2. `PromptParser::parse()` converts raw text → `Prompt` DSL
 3. Optional LLM transforms the DSL (merge, not replace)
 4. At generation time, `PromptCompiler::compile(dsl, modelType)` produces the final string
-5. If img2img edit mode is active and an edit instruction is present, the controller appends the requested change plus a short preserve clause before inference
+5. If an input image is attached, the pipeline runs img2img (strength controls how far the result drifts from the source); otherwise txt2img
 6. SD pipeline executes:
     - CLIP encoding
     - (img2img) VAE encode input image → posterior mean latent → add noise at start sigma
@@ -62,11 +62,10 @@ The system is fully synchronous per generation request:
 - LoRA system → `LoraInjector`
 - ONNX parsing → external tensor resolution
 - UI system → SFML widgets (resizable window, min 700×550)
-- Workflow split → separate generate/edit views and controllers sharing config and backend state
+- Generate/edit screen → a single `ImageGeneratorView` + `ImageGeneratorController`; txt2img, or img2img when an input image is attached
 - LLM system → optional ORT GenAI wrapper
 - Prompt DSL → `src/prompt/` — parse, compile, merge, JSON serialisation
 - Preset system → `PresetManager`, DSL-backed reusable generation configs
-- Project system → `src/projects/` — asset-pack workspaces with `PackConstraints` / `AssetConstraints` that compile into prompt tokens automatically
 - Import pipeline → `src/import/` — converts `.safetensors` checkpoints to ONNX via a managed Python venv and background subprocess; triggered from the menu
 
 ---

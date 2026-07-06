@@ -11,8 +11,7 @@ static constexpr unsigned MIN_WIN_H = 550u;
 App::App()
     : config(AppConfig::load("config.json"))
     , win(sf::VideoMode(WIN_W, WIN_H), "Image generator", sf::Style::Close | sf::Style::Resize)
-    , imageGenController(config, WorkflowMode::Generate)
-    , imageEditController(config, WorkflowMode::Edit)
+    , imageGenController(config)
 {
     Logger::info("app constructor");
     win.setFramerateLimit(60);
@@ -29,11 +28,8 @@ void App::run() {
 
         if (screen == AppScreen::ImageGenerator)
             imageGenController.update(imageGenScreen);
-        else if (screen == AppScreen::ImageEditor)
-            imageEditController.update(imageEditScreen);
 
         while (win.pollEvent(e)) {
-            const AppScreen screenBeforeEvent = screen;
             if (e.type == sf::Event::Resized) {
                 const unsigned w = std::max(e.size.width,  MIN_WIN_W);
                 const unsigned h = std::max(e.size.height, MIN_WIN_H);
@@ -46,27 +42,12 @@ void App::run() {
             }
             if (screen == AppScreen::ImageGenerator)
                 imageGenController.handleEvent(e, win, imageGenScreen, screen);
-            else if (screen == AppScreen::ImageEditor)
-                imageEditController.handleEvent(e, win, imageEditScreen, screen);
             else
                 menuController.handleEvent(e, win, menuScreen, screen);
-
-            const std::string editTarget = imageGenController.consumePendingEditNavigation();
-            if (!editTarget.empty()) {
-                imageEditBackScreen = AppScreen::ImageGenerator;
-                imageEditController.setBackScreen(imageEditBackScreen);
-                imageEditController.prepareEditSession(imageEditScreen, editTarget);
-                screen = AppScreen::ImageEditor;
-            } else if (screenBeforeEvent == AppScreen::MENU && screen == AppScreen::ImageEditor) {
-                imageEditBackScreen = AppScreen::MENU;
-                imageEditController.setBackScreen(imageEditBackScreen);
-            }
         }
 
         if (screen == AppScreen::ImageGenerator)
             imageGenScreen.render(win);
-        else if (screen == AppScreen::ImageEditor)
-            imageEditScreen.render(win);
         else {
             menuScreen.render(win);
             menuController.renderOverlay(win);

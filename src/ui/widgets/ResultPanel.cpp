@@ -18,7 +18,6 @@ static std::string stageLabelText(GenerationStage stage, int step, int numSteps)
     case GenerationStage::EncodingImage:   return "Encoding image...";
     case GenerationStage::Denoising:       return "Step " + std::to_string(step) + " / " + std::to_string(numSteps);
     case GenerationStage::DecodingImage:   return "Decoding image...";
-    case GenerationStage::PostProcessing:  return "Post-processing...";
     default:
         return numSteps > 0
             ? "Step " + std::to_string(step) + " / " + std::to_string(numSteps)
@@ -371,16 +370,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
                     btnGenerate_ = {curX, y + h - 52.f, actionGenerateW, 38.f};
                 };
 
-                if (mode == WorkflowMode::Generate && showImproveButton)
-                    placeButtons(true);
-                else if (mode == WorkflowMode::Generate)
-                    placeButtons(false);
-                else {
-                    btnImprove_          = {};
-                    const float totalW   = actionAuxW + actionGap + actionGenerateW;
-                    btnDelete_   = {cx - totalW / 2.f, y + h - 49.f, actionAuxW, actionButtonH};
-                    btnGenerate_ = {btnDelete_.left + actionAuxW + actionGap, y + h - 52.f, actionGenerateW, 38.f};
-                }
+                placeButtons(showImproveButton);
                 drawButton(win, btnDelete_, "Delete", colors.panel2, colors.redLt, false, type.body, font);
             } else {
                 btnImprove_          = {};

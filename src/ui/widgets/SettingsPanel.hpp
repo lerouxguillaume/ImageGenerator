@@ -14,10 +14,8 @@
 class SettingsPanel {
 public:
     // ── Prompt fields ─────────────────────────────────────────────────────────
-    WorkflowMode mode = WorkflowMode::Generate;
     MultiLineTextArea positiveArea{2000};
     MultiLineTextArea negativeArea{2000, 3};
-    MultiLineTextArea editInstructionArea{400, 2};
 
     // ── Generation parameters ─────────────────────────────────────────────────
     GenerationParams generationParams;

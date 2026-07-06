@@ -14,14 +14,11 @@ Main entry:
 | Image encoding | `EncodingImage` | img2img only; absent for txt2img |
 | Denoising | `Denoising` | `progressStep` counter is live here |
 | VAE decode | `DecodingImage` | |
-| Post-processing | `PostProcessing` | Alpha cutout, processed PNG, metadata sidecar |
 | Complete | `Done` | Set by `GenerationService::run()` before calling `onResult` |
 
-`runPipeline()` writes `stage` atomically at each transition. `GenerationService::run()` owns `PostProcessing` and `Done` since post-processing happens after the pipeline returns. Callers that don't need stage reporting pass `nullptr`.
+`runPipeline()` writes `stage` atomically at each transition. `GenerationService::run()` owns the final `Done` transition after the pipeline returns. Callers that don't need stage reporting pass `nullptr`.
 
-Exceptions thrown anywhere inside `run()` or `runCandidateRun()` are caught by the service, which calls `onError(message)` instead of propagating. The caller thread is always left in a clean state.
-
-For **candidate runs** `CandidateRunPipeline` owns the stage and sets coarser transitions (`Exploring → Scoring → Refining → WritingManifest → Done`). It does **not** pass the stage into its inner `generateFromPrompt` calls, so fine-grained pipeline stages do not bleed into a candidate run.
+Exceptions thrown anywhere inside `run()` are caught by the service, which calls `onError(message)` instead of propagating. The caller thread is always left in a clean state.
 
 ---
 

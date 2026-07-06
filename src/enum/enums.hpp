@@ -8,11 +8,9 @@
 // and SDXL-specific UNet inputs (text_embeds, time_ids).
 enum class ModelType : std::uint8_t { SD15, SDXL };
 
-enum class WorkflowMode : std::uint8_t { Generate, Edit };
-
 // Stage reported by the generation thread to the UI thread via atomic<GenerationStage>.
-// Standard generation cycles: LoadingModel → EncodingText → (EncodingImage) → Denoising
-//   → DecodingImage → PostProcessing → Done.
+// Generation cycles: LoadingModel → EncodingText → (EncodingImage) → Denoising
+//   → DecodingImage → Done.
 enum class GenerationStage : int {
     Idle = 0,
     LoadingModel,
@@ -20,7 +18,6 @@ enum class GenerationStage : int {
     EncodingImage,    // img2img VAE encode only
     Denoising,        // step counter is meaningful while in this stage
     DecodingImage,
-    PostProcessing,
     Done
 };
 

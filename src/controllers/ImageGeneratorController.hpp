@@ -15,9 +15,8 @@
 
 class ImageGeneratorController {
 public:
-    ImageGeneratorController(AppConfig& cfg, WorkflowMode workflowMode = WorkflowMode::Generate)
+    explicit ImageGeneratorController(AppConfig& cfg)
         : config(cfg)
-        , mode_(workflowMode)
         , enhancer(std::make_shared<NullPromptEnhancer>())
     {
         if (!config.promptEnhancer.modelDir.empty())
@@ -28,9 +27,6 @@ public:
                      ImageGeneratorView& screen, AppScreen& appScreen);
 
     void update(ImageGeneratorView& screen);
-    void prepareEditSession(ImageGeneratorView& screen, const std::string& imagePath);
-    std::string consumePendingEditNavigation();
-    void setBackScreen(AppScreen screen);
     void triggerGeneration(ImageGeneratorView& view);
     void openSettingsDialog(ImageGeneratorView& view);
 
@@ -57,8 +53,6 @@ private:
     AppConfig&                       config;
     PresetManager                    presetManager;
     GenerationService                generationService_;
-    WorkflowMode                     mode_;
-    AppScreen                        backScreen_ = AppScreen::MENU;
     std::shared_ptr<IPromptEnhancer> enhancer;
     bool                             modelsDirty     = true;
     bool                             lorasDirty      = true;
@@ -91,6 +85,5 @@ private:
     };
     std::vector<PendingThumb> pendingThumbs_;
     void flushPendingThumbs(ImageGeneratorView& view);
-    std::string pendingEditNavigationPath_;
 
 };

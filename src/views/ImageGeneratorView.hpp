@@ -12,7 +12,7 @@
 // The controller accesses panels directly via public members.
 class ImageGeneratorView : public Screen {
 public:
-    explicit ImageGeneratorView(WorkflowMode workflowMode = WorkflowMode::Generate);
+    ImageGeneratorView() = default;
 
     MenuBar       menuBar;
     SettingsPanel settingsPanel;
@@ -20,7 +20,6 @@ public:
     LlmBar        llmBar;
     SettingsModal settingsModal;
     bool          showSettings = false;
-    WorkflowMode  mode;
 
     void render(sf::RenderWindow& win) override;
 };

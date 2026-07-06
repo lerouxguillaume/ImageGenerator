@@ -134,7 +134,7 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
 
     constexpr float fieldH    = 86.f;
     constexpr float fieldH_sm = 68.f;
-    if (mode == WorkflowMode::Generate) {
+    {
         drawText(win, font, "Positive prompt:", Col::Muted, x + pad, y, 12);
         y += 18.f;
         positiveArea.setRect({x + pad, y, fw, fieldH});
@@ -222,28 +222,6 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         }
 
         y += pad * 2.f;
-    } else {
-        positiveArea.setRect({});
-        negativeArea.setRect({});
-        drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
-        y += 18.f;
-        constexpr float editFieldH = 60.f;
-        editInstructionArea.setRect({x + pad, y, fw, editFieldH});
-        editInstructionArea.render(win, font);
-        y += editFieldH + 8.f;
-
-        if (!generationParams.initImagePath.empty()) {
-            const std::string stem =
-                std::filesystem::path(generationParams.initImagePath).filename().string();
-            const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
-            drawText(win, font, "Source: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
-            btnClearInit_ = {};
-        } else {
-            drawText(win, font, "Select an image in the gallery to choose a source.",
-                     Col::Border, x + pad, y + 6.f, 11);
-            btnClearInit_ = {};
-        }
-        y += 28.f;
     }
 
     // ── Sliders (always visible) ──────────────────────────────────────────────
@@ -276,24 +254,19 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     btnStrengthMedium_ = {};
     btnStrengthStrong_ = {};
 
-    // ── Img2img edit controls (edit mode or init image set) ──────────────────
+    // ── Img2img edit controls (shown only when an input image is attached) ────
     if (!generationParams.initImagePath.empty()) {
-        // Info row: filename + Clear button
-        if (mode == WorkflowMode::Generate) {
+        // Edit-mode banner: makes it obvious the prompt now edits this image.
+        {
             const std::string stem =
                 std::filesystem::path(generationParams.initImagePath).filename().string();
-            const std::string truncated = stem.size() > 28 ? stem.substr(0, 26) + "\xe2\x80\xa6" : stem;
-            drawText(win, font, "Init: " + truncated, Col::BlueLt, x + pad, y + 6.f, 11);
-            btnClearInit_ = {x + pad + sliderW - 38.f, y + 2.f, 38.f, 18.f};
-            drawButton(win, btnClearInit_, "Clear", Col::Panel2, Col::Muted, false, 10, font);
-            y += 26.f;
-
-            drawText(win, font, "Edit instruction:", Col::Muted, x + pad, y, 12);
-            y += 18.f;
-            constexpr float editFieldH = 46.f;
-            editInstructionArea.setRect({x + pad, y, fw, editFieldH});
-            editInstructionArea.render(win, font);
-            y += editFieldH + 6.f;
+            const std::string truncated = stem.size() > 24 ? stem.substr(0, 22) + "\xe2\x80\xa6" : stem;
+            const sf::FloatRect bannerRect{x + pad, y, sliderW, 24.f};
+            drawRect(win, bannerRect, Col::Panel2, Col::BlueLt, 1.f);
+            drawText(win, font, "\xe2\x9c\x8e Editing: " + truncated, Col::BlueLt, x + pad + 8.f, y + 5.f, 11);
+            btnClearInit_ = {x + pad + sliderW - 40.f, y + 3.f, 34.f, 18.f};
+            drawButton(win, btnClearInit_, "\xc3\x97", Col::Panel, Col::Muted, false, 12, font);
+            y += 32.f;
         }
 
         if (currentModelVaeEncoderAvailable()) {
@@ -326,8 +299,6 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             y += 24.f;
         }
     } else {
-        if (mode == WorkflowMode::Generate)
-            editInstructionArea.setRect({});
         btnClearInit_        = {};
         strengthSliderTrack_ = {};
         y += 10.f;
@@ -479,11 +450,9 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     if (imagesSliderTrack_.contains(pos))   { draggingSlider_ = DraggingSlider::Images;   return true; }
     if (strengthSliderTrack_.contains(pos)) { draggingSlider_ = DraggingSlider::Strength; return true; }
 
-    // Clear init image
+    // Clear init image — return to plain text-to-image
     if (btnClearInit_.contains(pos)) {
         generationParams.initImagePath.clear();
-        editInstructionArea.setText({});
-        editInstructionArea.setActive(false);
         return true;
     }
     if (btnStrengthSubtle_.contains(pos)) {
@@ -503,21 +472,12 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     if (positiveArea.getRect().contains(pos)) {
         positiveArea.handleClick(pos);
         negativeArea.setActive(false);
-        editInstructionArea.setActive(false);
         seedInputActive = false;
         return true;
     }
     if (negativeArea.getRect().contains(pos)) {
         negativeArea.handleClick(pos);
         positiveArea.setActive(false);
-        editInstructionArea.setActive(false);
-        seedInputActive = false;
-        return true;
-    }
-    if (editInstructionArea.getRect().contains(pos)) {
-        editInstructionArea.handleClick(pos);
-        positiveArea.setActive(false);
-        negativeArea.setActive(false);
         seedInputActive = false;
         return true;
     }
@@ -525,7 +485,6 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
         seedInputActive = true;
         positiveArea.setActive(false);
         negativeArea.setActive(false);
-        editInstructionArea.setActive(false);
         return true;
     }
 
@@ -568,7 +527,6 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         const float delta = e.mouseWheelScroll.delta > 0 ? -1.f : 1.f;
         if (positiveArea.getRect().contains(pos)) { positiveArea.handleScroll(delta); return true; }
         if (negativeArea.getRect().contains(pos)) { negativeArea.handleScroll(delta); return true; }
-        if (editInstructionArea.getRect().contains(pos)) { editInstructionArea.handleScroll(delta); return true; }
     }
 
     // Mouse click
@@ -646,28 +604,13 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
         return false;
     }
 
-    // Tab: cycle focus between the active fields for the current workflow.
+    // Tab: cycle focus between the positive and negative prompt fields.
     if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Tab) {
-        if (mode == WorkflowMode::Edit) {
-            if (editInstructionArea.isActive()) {
-                editInstructionArea.setActive(false);
-                seedInputActive = true;
-            } else {
-                editInstructionArea.setActive(true);
-                seedInputActive = false;
-            }
-        } else if (positiveArea.isActive()) {
+        if (positiveArea.isActive()) {
             positiveArea.setActive(false);
             negativeArea.setActive(true);
         } else if (negativeArea.isActive()) {
             negativeArea.setActive(false);
-            if (!generationParams.initImagePath.empty()) {
-                editInstructionArea.setActive(true);
-            } else {
-                positiveArea.setActive(true);
-            }
-        } else if (editInstructionArea.isActive()) {
-            editInstructionArea.setActive(false);
             positiveArea.setActive(true);
         }
         return true;
@@ -676,7 +619,6 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
     // Delegate text input to the active prompt field
     if (positiveArea.isActive() && positiveArea.handleEvent(e)) return true;
     if (negativeArea.isActive() && negativeArea.handleEvent(e)) return true;
-    if (editInstructionArea.isActive() && editInstructionArea.handleEvent(e)) return true;
 
     return false;
 }

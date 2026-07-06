@@ -62,7 +62,7 @@ Key facts:
 - `GenerationCallbacks` carry typed `onResult` / `onError` functors; the service catches all exceptions internally and routes them through `onError` — exceptions never reach the caller thread
 - `ImageGeneratorController::startGenerationTask` is a minimal thread spawner — it owns the `jthread` lifecycle and sets `generationDone`; it has no exception handling or business logic
 - `cachedModelType_` is updated in `update()` on model change; `launchGeneration` and `launchEnhancement` use it — `inferModelType()` is only called from `update()`
-- `GenerationStage` enum is in `src/enum/enums.hpp`; standard generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → PostProcessing → Done`
+- `GenerationStage` enum is in `src/enum/enums.hpp`; generation: `LoadingModel → EncodingText → (EncodingImage) → Denoising → DecodingImage → Done`
 - `GenerationResult` returns raw output paths
 - The gallery is a flat, newest-first scan of `config.outputDir` (`.png`/`.jpg`); generated images are written directly there as `img_<timestamp>.png`
 

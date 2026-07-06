@@ -98,28 +98,6 @@ static ModelType modelTypeFromArch(const std::string& arch) {
     return arch == "sdxl" ? ModelType::SDXL : ModelType::SD15;
 }
 
-static std::string trimCopy(const std::string& value) {
-    const auto first = value.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return {};
-    const auto last = value.find_last_not_of(" \t\r\n");
-    return value.substr(first, last - first + 1);
-}
-
-static std::string buildEditPrompt(const std::string& basePrompt, const ImageGeneratorView& view) {
-    const auto& params = view.settingsPanel.generationParams;
-    if (params.initImagePath.empty()) return basePrompt;
-
-    const std::string instruction = trimCopy(view.settingsPanel.editInstructionArea.getText());
-    if (instruction.empty()) return basePrompt;
-
-    static const std::string preserveClause =
-        "same character identity, same facial features, same pose, same framing, same lighting";
-
-    if (basePrompt.empty())
-        return instruction + ", " + preserveClause;
-    return basePrompt + ", " + instruction + ", " + preserveClause;
-}
-
 static GenerationSettings buildGenerationSettings(const ImageGeneratorView& view) {
     const auto& sp = view.settingsPanel;
     GenerationSettings gs;
@@ -256,11 +234,10 @@ void ImageGeneratorController::applyModelDefaults(ImageGeneratorView& view) {
     }
 
     sp.positiveArea.setText((md && !md->positivePrompt.empty()) ? md->positivePrompt : std::string{});
-    sp.positiveArea.setActive(mode_ == WorkflowMode::Generate);
+    sp.positiveArea.setActive(true);
 
     sp.negativeArea.setText((md && !md->negativePrompt.empty()) ? md->negativePrompt : std::string{});
     sp.negativeArea.setActive(false);
-    sp.editInstructionArea.setActive(mode_ == WorkflowMode::Edit);
 
     sp.generationParams.numSteps = (md && md->numSteps > 0)
         ? md->numSteps : config.defaultNumSteps;
@@ -346,13 +323,6 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     auto& sp = view.settingsPanel;
     auto& rp = view.resultPanel;
 
-    if (mode_ == WorkflowMode::Edit && sp.generationParams.initImagePath.empty()) {
-        rp.generating = false;
-        rp.generationFailed.store(true);
-        rp.generationErrorMsg = "Select an image to edit first.";
-        return;
-    }
-
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
     std::error_code ec;
     std::filesystem::create_directories(config.outputDir, ec);
@@ -381,7 +351,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     if (const auto it = config.modelConfigs.find(modelKey); it != config.modelConfigs.end())
         injectBoosters(dsl, it->second);
 
-    const std::string prompt    = buildEditPrompt(PromptCompiler::compile(dsl, cachedModelType_), view);
+    const std::string prompt    = PromptCompiler::compile(dsl, cachedModelType_);
     const std::string negPrompt = PromptCompiler::compileNegative(dsl);
     const std::string outPath   = rawOutPath.string();
     GenerationParams params = sp.generationParams;
@@ -556,7 +526,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         if (view.showSettings)                { view.showSettings = false;          return; }
         if (view.menuBar.showPresetDropdown)  { view.menuBar.showPresetDropdown = false; return; }
         if (view.settingsPanel.showModelDropdown) { view.settingsPanel.showModelDropdown = false; return; }
-        appScreen = (mode_ == WorkflowMode::Edit) ? backScreen_ : AppScreen::MENU;
+        appScreen = AppScreen::MENU;
         return;
     }
 
@@ -592,7 +562,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     if (view.menuBar.handleEvent(e)) {
         if (view.menuBar.backRequested) {
             view.menuBar.backRequested = false;
-            appScreen = (mode_ == WorkflowMode::Edit) ? backScreen_ : AppScreen::MENU;
+            appScreen = AppScreen::MENU;
         }
         if (view.menuBar.settingsRequested) {
             view.menuBar.settingsRequested = false;
@@ -627,7 +597,6 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
     if (view.settingsPanel.handleEvent(e)) {
         if (view.settingsPanel.positiveArea.isActive() ||
             view.settingsPanel.negativeArea.isActive() ||
-            view.settingsPanel.editInstructionArea.isActive() ||
             view.settingsPanel.seedInputActive) {
             view.llmBar.instructionArea.setActive(false);
         }
@@ -642,17 +611,20 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         const std::string selectedPath = view.resultPanel.getSelectedImagePath();
         if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath) {
             selectGalleryImage(view, view.resultPanel.selectedIndex);
-            if (mode_ == WorkflowMode::Edit)
-                view.settingsPanel.generationParams.initImagePath = selectedPath;
         }
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
             triggerGeneration(view);
         }
+        // "Edit" on a result attaches it as the input image in-place → img2img.
         if (view.resultPanel.improveRequested) {
             view.resultPanel.improveRequested = false;
-            if (mode_ == WorkflowMode::Generate) {
-                pendingEditNavigationPath_ = view.resultPanel.displayedImagePath;
+            const std::string src = view.resultPanel.displayedImagePath;
+            if (!src.empty()) {
+                view.settingsPanel.generationParams.initImagePath = src;
+                if (view.settingsPanel.generationParams.strength <= 0.f
+                    || view.settingsPanel.generationParams.strength >= 1.f)
+                    view.settingsPanel.generationParams.strength = 0.5f;
             }
         }
         if (view.resultPanel.deleteRequested) {
@@ -685,11 +657,10 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         return;
     }
 
-    if (mode_ == WorkflowMode::Generate && view.llmBar.handleEvent(e)) {
+    if (view.llmBar.handleEvent(e)) {
         if (view.llmBar.instructionArea.isActive()) {
             view.settingsPanel.positiveArea.setActive(false);
             view.settingsPanel.negativeArea.setActive(false);
-            view.settingsPanel.editInstructionArea.setActive(false);
             view.settingsPanel.seedInputActive = false;
         }
         if (view.llmBar.enhanceRequested && !view.llmBar.enhancing) {
@@ -818,6 +789,10 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
         }
     }
 
+    // Reflect edit-vs-generate mode on the primary action button.
+    rp.generateButtonLabel =
+        sp.generationParams.initImagePath.empty() ? "Generate" : "Edit Image";
+
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);
 
@@ -843,26 +818,6 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             sp.compiledPreview = std::string{};
         }
     }
-}
-
-void ImageGeneratorController::prepareEditSession(ImageGeneratorView& view, const std::string& imagePath) {
-    view.settingsPanel.generationParams.initImagePath = imagePath;
-    view.settingsPanel.generationParams.strength = 0.5f;
-    view.settingsPanel.editInstructionArea.setActive(true);
-    view.settingsPanel.positiveArea.setActive(false);
-    view.settingsPanel.negativeArea.setActive(false);
-    view.settingsPanel.seedInputActive = false;
-    refreshGallery(view, imagePath);
-}
-
-std::string ImageGeneratorController::consumePendingEditNavigation() {
-    std::string path = pendingEditNavigationPath_;
-    pendingEditNavigationPath_.clear();
-    return path;
-}
-
-void ImageGeneratorController::setBackScreen(AppScreen screen) {
-    backScreen_ = screen;
 }
 
 void ImageGeneratorController::triggerGeneration(ImageGeneratorView& view) {

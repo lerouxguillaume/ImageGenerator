@@ -10,8 +10,6 @@
 // progress bar during generation, and error banner on failure.
 class ResultPanel {
 public:
-    WorkflowMode mode = WorkflowMode::Generate;
-
     struct GalleryItem {
         std::string                 path;
         std::string                 filename;

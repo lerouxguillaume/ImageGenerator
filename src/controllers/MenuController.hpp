@@ -10,7 +10,7 @@
 #include "../import/ImportedModelRegistry.hpp"
 #include "../ui/widgets/ImportModelModal.hpp"
 
-enum class AppScreen : std::uint8_t { MENU, Playing, ImageGenerator, ImageEditor };
+enum class AppScreen : std::uint8_t { MENU, Playing, ImageGenerator };
 
 class MenuController {
 public:
