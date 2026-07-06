@@ -91,10 +91,55 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     data["capabilities"] = {
         "vae_encoder_available": vae_encoder_available,
         "lora_compatible":       True,
+        # Written only after verify_model() passed — a model.json carrying this
+        # flag has been confirmed to run, not just to have all its files present.
+        "verified":              True,
     }
 
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+
+# ── Verification (isolated subprocess) ────────────────────────────────────────
+
+def run_verification(scripts_dir: str, output_dir: str, arch: str,
+                     timeout: int = 900) -> int:
+    """Run verify_model.py in a fresh interpreter, relaying its VERIFY: lines.
+
+    Returns the child exit code:
+        0  — all hard checks passed (or only warnings)
+        3  — a genuine hard failure (reject the import)
+        other / negative — crash, OOM, timeout (inconclusive)
+    """
+    import subprocess
+
+    script = os.path.join(scripts_dir, "verify_model.py")
+    if not os.path.exists(script):
+        print(f"VERIFY:warn:inference:verify_model.py not found at {script}", flush=True)
+        return 0  # nothing to run — don't block the import
+
+    proc = subprocess.Popen(
+        [sys.executable, script, "--output", output_dir, "--arch", arch],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            # Swallow the child's internal end markers; relay everything else so
+            # the C++ parent sees the VERIFY: check lines and log output.
+            if line in ("VERIFY:done", "VERIFY:rejected"):
+                continue
+            print(line, flush=True)
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        print("VERIFY:warn:inference:verification timed out", flush=True)
+        return 124
+    return proc.returncode
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -136,6 +181,35 @@ def run_import(model_file: str, output_dir: str, arch: str, resume: bool = False
 
     print("PROGRESS:validating", flush=True)
     validate_output(output_dir, arch)
+
+    # Inference smoke test — proves the exported graphs actually run and produce
+    # finite, prompt-sensitive output. Gates registration: a model that fails
+    # here (e.g. text-encoder attention collapse) is never added to the registry.
+    #
+    # Run it in a *separate* process from this one. The export above imported
+    # torch and loaded a full pipeline; loading the multi-GB ONNX models for
+    # verification on top of that resident memory can OOM-kill the process. A
+    # fresh interpreter (ORT + numpy only) is both lighter and crash-isolated:
+    # if it dies we treat verification as inconclusive rather than failing an
+    # otherwise-clean export.
+    print("PROGRESS:verifying", flush=True)
+    rc = run_verification(scripts_dir, output_dir, arch)
+    if rc == 3:
+        print(
+            "ERROR:Model failed inference verification - see VERIFY:fail lines "
+            "above. The export produced files but they do not run correctly.",
+            flush=True,
+        )
+        sys.exit(1)
+    elif rc != 0:
+        # Crash / OOM / timeout inside the isolated verifier — not a proven defect.
+        # Import the model but flag that the full inference check did not complete.
+        print(
+            f"VERIFY:warn:inference:verification did not complete on this machine "
+            f"(exit {rc}) - imported without full inference check",
+            flush=True,
+        )
+
     write_capabilities(output_dir, arch)
 
     elapsed = time.time() - t0

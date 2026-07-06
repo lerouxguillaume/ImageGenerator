@@ -5,7 +5,9 @@
 #include "Subprocess.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -42,12 +44,18 @@ void ModelImporter::start(const std::filesystem::path& path,
 
     cancelRequested_ = false;
     state_           = State::Idle;
+    startNs_.store(nowNs());
+    endNs_.store(0);
+    ended_.store(false);
+    exportStep_.store(0);
+    exportTotal_.store(0);
     {
         std::lock_guard lk(dataMutex_);
         statusMsg_.clear();
         logLines_.clear();
         outputDir_.clear();
         modelId_.clear();
+        verifyChecks_.clear();
     }
 
     thread_ = std::thread(&ModelImporter::runThread, this, path, archOverride);
@@ -104,6 +112,56 @@ SafetensorsInfo ModelImporter::getInspectionResult() const {
     return inspectionResult_;
 }
 
+std::vector<ModelImporter::VerifyCheck> ModelImporter::getVerifyChecks() const {
+    std::lock_guard lk(dataMutex_);
+    return verifyChecks_;
+}
+
+int64_t ModelImporter::nowNs() {
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+
+double ModelImporter::getElapsedSeconds() const {
+    const State s = state_.load();
+    if (s == State::Idle) return 0.0;
+
+    const bool terminal = (s == State::Done || s == State::Failed);
+    int64_t end;
+    if (terminal) {
+        // Freeze the clock at the first poll that observes a terminal state.
+        if (!ended_.exchange(true)) endNs_.store(nowNs());
+        end = endNs_.load();
+    } else {
+        end = nowNs();
+    }
+    return static_cast<double>(end - startNs_.load()) / 1e9;
+}
+
+void ModelImporter::getExportProgress(int& step, int& total) const {
+    step  = exportStep_.load();
+    total = exportTotal_.load();
+}
+
+void ModelImporter::parseExportStep(const std::string& line) {
+    // Export step lines begin with "N/M" (e.g. "1/5  Text encoder"). Parse only
+    // that leading pattern to avoid matching ratios elsewhere in the log.
+    size_t i = 0;
+    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+    size_t d0 = i;
+    while (i < line.size() && std::isdigit(static_cast<unsigned char>(line[i]))) ++i;
+    if (i == d0 || i >= line.size() || line[i] != '/') return;
+    const int step = std::atoi(line.substr(d0, i - d0).c_str());
+    ++i;
+    size_t d1 = i;
+    while (i < line.size() && std::isdigit(static_cast<unsigned char>(line[i]))) ++i;
+    if (i == d1) return;
+    const int total = std::atoi(line.substr(d1, i - d1).c_str());
+    if (total > 0 && total <= 12 && step >= 0 && step <= total) {
+        exportStep_.store(step);
+        exportTotal_.store(total);
+    }
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 void ModelImporter::appendLog(const std::string& line) {
@@ -116,6 +174,26 @@ void ModelImporter::appendLog(const std::string& line) {
 void ModelImporter::setStatus(const std::string& msg) {
     std::lock_guard lk(dataMutex_);
     statusMsg_ = msg;
+}
+
+void ModelImporter::recordVerify(const std::string& payload) {
+    // payload is "<status>:<name>:<detail>" where detail may itself contain ':'
+    const auto p1 = payload.find(':');
+    if (p1 == std::string::npos) return;
+    const auto p2 = payload.find(':', p1 + 1);
+    if (p2 == std::string::npos) return;
+
+    const std::string statusStr = payload.substr(0, p1);
+    VerifyCheck check;
+    check.name   = payload.substr(p1 + 1, p2 - p1 - 1);
+    check.detail = payload.substr(p2 + 1);
+    if (statusStr == "fail")      check.status = VerifyCheck::Status::Fail;
+    else if (statusStr == "warn") check.status = VerifyCheck::Status::Warn;
+    else if (statusStr == "skip") check.status = VerifyCheck::Status::Skip;
+    else                          check.status = VerifyCheck::Status::Ok;
+
+    std::lock_guard lk(dataMutex_);
+    verifyChecks_.push_back(std::move(check));
 }
 
 // ── Import thread ─────────────────────────────────────────────────────────────
@@ -286,6 +364,16 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
                 state_ = State::Validating;
                 setStatus("Validating output…");
             }
+            else if (tag == "verifying") {
+                state_ = State::Verifying;
+                setStatus("Verifying model runs correctly…");
+            }
+            continue;
+        }
+
+        // VERIFY: protocol — structured smoke-test results (status:name:detail)
+        if (line.rfind("VERIFY:", 0) == 0) {
+            recordVerify(line.substr(7));
             continue;
         }
 
@@ -293,6 +381,10 @@ void ModelImporter::runThread(std::filesystem::path path, std::string archOverri
         if (line.rfind("ERROR:", 0) == 0) {
             setStatus(line.substr(6));
         }
+
+        // Advance the export sub-progress bar on "N/M" component lines.
+        if (state_.load() == State::Exporting)
+            parseExportStep(line);
 
         appendLog(line);
     }

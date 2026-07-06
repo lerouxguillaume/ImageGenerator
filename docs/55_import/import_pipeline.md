@@ -88,9 +88,15 @@ Orchestrates the full import on a dedicated background thread. All state is acce
 ### State machine
 
 ```
-Idle → Analyzing → SettingUpPython → Exporting → Validating → Done
-                                                             ↘ Failed
+Idle → Analyzing → SettingUpPython → Exporting → Validating → Verifying → Done
+                                                                        ↘ Failed
 ```
+
+`Verifying` runs the inference smoke test (`scripts/verify_model.py`). A hard
+verification failure transitions to `Failed`, so the model is **never registered**
+(`MenuController` only calls `registry_.add()` on `State::Done`). Per-check
+results are parsed from `VERIFY:` lines into `ModelImporter::getVerifyChecks()`
+and rendered as a colour-coded list in the modal.
 
 ### Thread responsibilities
 
@@ -168,9 +174,19 @@ The C++ parent reads stdout line by line and classifies each line:
 | `PROGRESS:analyzing` | State → Analyzing |
 | `PROGRESS:exporting_sd15` or `PROGRESS:exporting_sdxl` | State → Exporting |
 | `PROGRESS:validating` | State → Validating |
+| `PROGRESS:verifying` | State → Verifying |
+| `VERIFY:ok\|warn\|fail:<check>:<detail>` | Parsed into a `VerifyCheck`; not logged |
 | `PROGRESS:done` | State → Done |
 | `ERROR:<msg>` | Sets status message; state → Failed after subprocess exits |
 | (anything else) | Appended to log buffer |
+
+### Verification (`scripts/verify_model.py`)
+
+Between `validating` and `done`, the import runs a real inference smoke test that
+loads the exported ONNX in ORT and gates registration. A hard failure exits the
+script non-zero. See `docs/50_export/export_validation.md` for the full check
+table. This is what catches an export that produces all its files but does not
+actually work (e.g. fp16 text-encoder attention collapse).
 
 ### Architecture detection
 
@@ -187,6 +203,7 @@ After export completes, `import_model.py` extends `model.json` with:
   "capabilities": {
     "vae_encoder_available": true,
     "lora_compatible": true,
+    "verified": true,
     "components": {
       "text_encoder":   { "dtype": "fp32" },
       "text_encoder_2": { "dtype": "fp32" },
@@ -243,6 +260,10 @@ accelerate>=0.21.0
 
 # Invariants
 
+- Never register a model that failed verification — `Verifying` hard-failure →
+  `Failed`, and `add()` is gated on `State::Done`
+- Never treat file/shape validation as proof a model works — `verify_model.py`
+  runs a real forward pass for that
 - Never use `.safetensors` in the inference pipeline — ONNX only
 - Never place the venv on a network or shared drive — use `localDataDir()` which resolves to `%LOCALAPPDATA%` on Windows
 - Never call `ImportedModelRegistry::add()` before `ModelImporter::getState() == Done`

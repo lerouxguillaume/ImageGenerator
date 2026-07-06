@@ -1,8 +1,20 @@
 #include "ImportModelModal.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include "../Buttons.hpp"
 #include "../Helpers.hpp"
 #include "../Theme.h"
+
+// m:ss formatter for elapsed / ETA captions.
+static std::string fmtClock(double seconds) {
+    if (seconds < 0.0) seconds = 0.0;
+    const int total = static_cast<int>(seconds + 0.5);
+    const int m = total / 60;
+    const int s = total % 60;
+    return std::to_string(m) + ":" + (s < 10 ? "0" : "") + std::to_string(s);
+}
 
 // ── Arch cycle ────────────────────────────────────────────────────────────────
 
@@ -22,49 +34,237 @@ std::string ImportModelModal::archArg() const {
 void ImportModelModal::syncFrom(const ModelImporter& importer) {
     importerState_ = importer.getState();
     statusMsg_     = importer.getStatusMsg();
+    inspection_    = importer.getInspectionResult();
+    verifyChecks_  = importer.getVerifyChecks();
+    elapsed_       = importer.getElapsedSeconds();
+    importer.getExportProgress(exportStep_, exportTotal_);
 
     const auto all = importer.getLogLines();
-    if (all.size() > static_cast<size_t>(kVisibleLogLines))
-        logLines_ = std::vector<std::string>(all.end() - kVisibleLogLines, all.end());
-    else
-        logLines_ = all;
+    latestLog_ = all.empty() ? std::string() : all.back();
+
+    updateEta();
 }
 
-// ── Log area renderer ─────────────────────────────────────────────────────────
+// ── ETA: countdown re-based at each completed unit (never climbs) ──────────────
 
-void ImportModelModal::drawLogArea(sf::RenderWindow& win, float x, float y, float w, float h) {
+void ImportModelModal::updateEta() {
+    // Pick the countable unit for the current phase.
+    int done = 0, total = 0, phase = -1;
+    if (importerState_ == ModelImporter::State::Exporting) {
+        done = exportStep_; total = exportTotal_; phase = 2;
+    } else if (importerState_ == ModelImporter::State::Verifying) {
+        done  = static_cast<int>(verifyChecks_.size());
+        total = inspection_.architecture == SafetensorsInfo::Architecture::SDXL ? 4 : 3;
+        phase = 4;
+    }
+
+    // Reset tracking on a new import or when the phase changes.
+    if (importerState_ == ModelImporter::State::Idle || phase != etaPhase_) {
+        etaPhase_        = phase;
+        etaUnitDone_     = -1;
+        etaUnitTime_     = 0.0;
+        etaElapsedAtUnit_= elapsed_;
+        etaValid_        = false;
+    }
+
+    if (total <= 0 || done <= 0 || done > total) return;
+
+    // Re-base only when a unit boundary is crossed; between boundaries the
+    // displayed remaining = etaTargetSec_ - elapsed_ ticks down on its own.
+    if (done != etaUnitDone_) {
+        if (etaUnitDone_ > 0 && done > etaUnitDone_) {
+            const double per = (elapsed_ - etaElapsedAtUnit_)
+                             / static_cast<double>(done - etaUnitDone_);
+            if (per > 0.0)
+                etaUnitTime_ = etaUnitTime_ > 0.0 ? 0.5 * etaUnitTime_ + 0.5 * per : per;
+        } else if (etaUnitTime_ <= 0.0) {
+            etaUnitTime_ = elapsed_ / static_cast<double>(done); // bootstrap estimate
+        }
+        etaUnitDone_      = done;
+        etaElapsedAtUnit_ = elapsed_;
+        etaTargetSec_     = elapsed_ + etaUnitTime_ * static_cast<double>(total - done);
+        etaValid_         = done < total;
+    }
+}
+
+// ── Overall progress fraction (0..1) across all phases ─────────────────────────
+
+float ImportModelModal::overallProgress() const {
+    const int expectedVerify =
+        inspection_.architecture == SafetensorsInfo::Architecture::SDXL ? 4 : 3;
+    switch (importerState_) {
+        case ModelImporter::State::Idle:            return 0.0f;
+        case ModelImporter::State::Analyzing:       return 0.02f;
+        case ModelImporter::State::SettingUpPython: return 0.06f;
+        case ModelImporter::State::Exporting: {
+            float f = exportTotal_ > 0
+                          ? static_cast<float>(exportStep_) / static_cast<float>(exportTotal_)
+                          : 0.25f;
+            return 0.10f + 0.72f * std::min(1.0f, std::max(0.0f, f));
+        }
+        case ModelImporter::State::Validating:      return 0.85f;
+        case ModelImporter::State::Verifying: {
+            float f = static_cast<float>(verifyChecks_.size())
+                    / static_cast<float>(expectedVerify);
+            return 0.88f + 0.11f * std::min(1.0f, f);
+        }
+        case ModelImporter::State::Done:            return 1.0f;
+        case ModelImporter::State::Failed: {
+            // Freeze roughly where it broke: use whatever the last phase implies.
+            if (!verifyChecks_.empty()) return 0.90f;
+            return 0.45f;
+        }
+    }
+    return 0.0f;
+}
+
+// ── Progress bar (with elapsed / ETA and an indeterminate marquee for setup) ──
+
+void ImportModelModal::drawProgressBar(sf::RenderWindow& win, float x, float y, float w) {
     auto& theme        = Theme::instance();
     const auto& colors = theme.colors();
     sf::Font& font     = theme.getFont();
-    const unsigned sz  = theme.typography().compact;
-    const float lineH  = static_cast<float>(sz) + 4.f;
 
-    Helpers::drawRect(win, {x, y, w, h}, colors.surfaceInset, colors.border, 1.f);
+    const bool running = importerState_ != ModelImporter::State::Idle
+                      && importerState_ != ModelImporter::State::Done
+                      && importerState_ != ModelImporter::State::Failed;
+    const bool failed  = importerState_ == ModelImporter::State::Failed;
+    const bool done    = importerState_ == ModelImporter::State::Done;
 
-    // Clip lines to the box via a scissor view
-    const sf::View origView = win.getView();
-    const sf::FloatRect vp  = origView.getViewport();
-    const auto winSz        = win.getSize();
-    const float scaleX      = vp.width  / static_cast<float>(winSz.x);
-    const float scaleY      = vp.height / static_cast<float>(winSz.y);
+    // Phase caption (left) + elapsed / ETA (right).
+    const char* phaseName = "Ready to import";
+    switch (importerState_) {
+        case ModelImporter::State::Analyzing:       phaseName = "Analyzing file";        break;
+        case ModelImporter::State::SettingUpPython: phaseName = "Setting up Python";     break;
+        case ModelImporter::State::Exporting:       phaseName = "Exporting ONNX";        break;
+        case ModelImporter::State::Validating:      phaseName = "Validating files";      break;
+        case ModelImporter::State::Verifying:       phaseName = "Verifying inference";   break;
+        case ModelImporter::State::Done:            phaseName = "Done";                  break;
+        case ModelImporter::State::Failed:          phaseName = "Failed";                break;
+        default: break;
+    }
+    std::string leftCap = phaseName;
+    if (importerState_ == ModelImporter::State::Exporting && exportTotal_ > 0)
+        leftCap += "  (" + std::to_string(exportStep_) + "/" + std::to_string(exportTotal_) + ")";
 
-    sf::View clipView(sf::FloatRect(x, y, w, h));
-    clipView.setViewport({
-        (x * scaleX) / static_cast<float>(winSz.x),
-        (y * scaleY) / static_cast<float>(winSz.y),
-        (w * scaleX) / static_cast<float>(winSz.x),
-        (h * scaleY) / static_cast<float>(winSz.y),
-    });
-    win.setView(clipView);
-
-    const float pad = 6.f;
-    for (size_t i = 0; i < logLines_.size(); ++i) {
-        const float ly = y + pad + static_cast<float>(i) * lineH;
-        Helpers::drawText(win, font, logLines_[i], colors.muted,
-                          x + pad, ly, sz, false);
+    const float frac = overallProgress();
+    std::string rightCap;
+    if (running || done || failed)
+        rightCap = fmtClock(elapsed_) + " elapsed";
+    // Countdown ETA — rebased at each completed unit, so it ticks down.
+    if (etaValid_) {
+        const double remaining = etaTargetSec_ - elapsed_;
+        if (remaining > 0.5)
+            rightCap += "   ~" + fmtClock(remaining) + " left";
     }
 
-    win.setView(origView);
+    Helpers::drawText(win, font, leftCap,
+                      failed ? colors.red : (done ? colors.green : colors.text),
+                      x, y, 13, true);
+    if (!rightCap.empty()) {
+        const float approxW = static_cast<float>(rightCap.size()) * 6.2f;
+        Helpers::drawText(win, font, rightCap, colors.muted,
+                          x + w - approxW, y + 1.f, 12, false);
+    }
+
+    // Bar track + fill.
+    const float barY = y + 22.f;
+    const float barH = 12.f;
+    Helpers::drawRect(win, {x, barY, w, barH}, colors.surfaceInset, colors.border, 1.f);
+
+    const sf::Color fillCol = failed ? colors.red : (done ? colors.green : colors.blue);
+    if (importerState_ == ModelImporter::State::SettingUpPython) {
+        // Unknown duration → indeterminate marquee so it still feels alive.
+        const float segW = w * 0.28f;
+        const float span = w - segW;
+        float t = std::fmod(static_cast<float>(elapsed_) * 90.f, 2.f * span);
+        if (t > span) t = 2.f * span - t;  // ping-pong
+        Helpers::drawRect(win, {x + t + 1.f, barY + 1.f, segW - 2.f, barH - 2.f},
+                          fillCol, fillCol, 0.f);
+    } else if (frac > 0.0f) {
+        const float fw = std::max(2.f, (w - 2.f) * frac);
+        Helpers::drawRect(win, {x + 1.f, barY + 1.f, fw, barH - 2.f}, fillCol, fillCol, 0.f);
+    }
+}
+
+// ── Checklist (green ✓ done · blue ▶ active · red ✗ failed · • pending) ───────
+
+void ImportModelModal::drawChecklist(sf::RenderWindow& win, float x, float y, float w) {
+    auto& theme        = Theme::instance();
+    const auto& colors = theme.colors();
+    sf::Font& font     = theme.getFont();
+
+    static const char* kSteps[] = {
+        "Analyze file", "Set up Python", "Export ONNX", "Validate files", "Verify inference"};
+    constexpr int kN = 5;
+
+    // Current step index and whether we failed.
+    int cur = -1;
+    bool failed = importerState_ == ModelImporter::State::Failed;
+    switch (importerState_) {
+        case ModelImporter::State::Idle:            cur = -1; break;
+        case ModelImporter::State::Analyzing:       cur = 0;  break;
+        case ModelImporter::State::SettingUpPython: cur = 1;  break;
+        case ModelImporter::State::Exporting:       cur = 2;  break;
+        case ModelImporter::State::Validating:      cur = 3;  break;
+        case ModelImporter::State::Verifying:       cur = 4;  break;
+        case ModelImporter::State::Done:            cur = 5;  break;
+        case ModelImporter::State::Failed:
+            // Approximate the failed step: if we produced any verify checks the
+            // break was in Verify, otherwise treat Export as the failing stage.
+            cur = verifyChecks_.empty() ? 2 : 4;
+            break;
+    }
+
+    // Animated ellipsis on the active step for a sense of life.
+    const int dots = static_cast<int>(elapsed_ * 2.0) % 4;
+    const std::string ell(static_cast<size_t>(dots), '.');
+
+    const float rowH = 26.f;
+    float ly = y;
+    for (int i = 0; i < kN; ++i) {
+        const bool isDone   = i < cur;
+        const bool isActive = i == cur && !failed;
+        const bool isFail   = i == cur && failed;
+
+        const char* icon = "•";
+        sf::Color   col  = colors.muted;
+        if (isDone)        { icon = "✓"; col = colors.green; }
+        else if (isFail)   { icon = "✗"; col = colors.red;   }
+        else if (isActive) { icon = "▶"; col = colors.blue;  }
+
+        Helpers::drawText(win, font, icon, col, x, ly, 15, true);
+        std::string label = kSteps[i];
+        if (isActive) label += ell;
+        Helpers::drawText(win, font, label,
+                          (isDone || isActive || isFail) ? colors.text : colors.muted,
+                          x + 24.f, ly + 1.f, 14, isActive || isFail);
+
+        ly += rowH;
+
+        // Verification sub-items nest under "Verify inference".
+        if (i == 4 && !verifyChecks_.empty()) {
+            for (const auto& c : verifyChecks_) {
+                const char* sicon = "✓";
+                sf::Color   scol  = colors.green;
+                if (c.status == ModelImporter::VerifyCheck::Status::Warn) { sicon = "!"; scol = colors.injury; }
+                if (c.status == ModelImporter::VerifyCheck::Status::Fail) { sicon = "✗"; scol = colors.red;    }
+                if (c.status == ModelImporter::VerifyCheck::Status::Skip) { sicon = "–"; scol = colors.muted;  }
+
+                Helpers::drawText(win, font, sicon, scol, x + 26.f, ly, 13, true);
+                Helpers::drawText(win, font, c.name, scol, x + 42.f, ly + 1.f, 12, false);
+
+                // Reason, clipped to the remaining width.
+                const float detailX = x + 42.f + 118.f;
+                const size_t maxCh   = static_cast<size_t>((x + w - detailX) / 6.0f);
+                std::string detail   = c.detail;
+                if (maxCh > 1 && detail.size() > maxCh)
+                    detail = detail.substr(0, maxCh - 1) + "…";
+                Helpers::drawText(win, font, detail, colors.muted, detailX, ly + 1.f, 12, false);
+                ly += 20.f;
+            }
+        }
+    }
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -87,7 +287,7 @@ void ImportModelModal::render(sf::RenderWindow& win) {
 
     // Modal box
     const float mW = 720.f;
-    const float mH = 520.f;
+    const float mH = 540.f;
     const float mX = cx - mW / 2.f;
     const float mY = cy - mH / 2.f;
     modalRect_ = {mX, mY, mW, mH};
@@ -132,14 +332,35 @@ void ImportModelModal::render(sf::RenderWindow& win) {
     Helpers::drawText(win, font, "▶", colors.muted,
                       btnArch_.left + btnArch_.width - 18.f, curY + 9.f, 10, false);
 
-    curY += rowH + 14.f;
+    // Detected-arch chip — shown once inspection has run and produced a result.
+    if (inspection_.valid
+            && inspection_.architecture != SafetensorsInfo::Architecture::Unknown) {
+        const std::string chip = std::string("Detected: ")
+                               + inspection_.architectureName()
+                               + "  ·  " + inspection_.dtype;
+        const float chipX = btnArch_.left + btnArch_.width + 12.f;
+        const float chipW = mW - pad - (chipX - mX);
+        Helpers::drawRect(win, {chipX, curY + 3.f, chipW, rowH - 6.f},
+                          colors.panel2, colors.borderHi, 1.f);
+        Helpers::drawText(win, font, chip, colors.goldLt,
+                          chipX + 10.f, curY + 9.f, 12, false);
+    }
 
-    // ── Log area ──────────────────────────────────────────────────────────────
-    const float logH = static_cast<float>(kVisibleLogLines) * 16.f + 12.f;
-    drawLogArea(win, mX + pad, curY, mW - pad * 2.f, logH);
-    curY += logH + 12.f;
+    curY += rowH + 16.f;
 
-    // ── Status label ──────────────────────────────────────────────────────────
+    // ── Progress bar (phase caption + elapsed/ETA + fill) ─────────────────────
+    drawProgressBar(win, mX + pad, curY, mW - pad * 2.f);
+    curY += 46.f;
+
+    // ── Checklist of pipeline steps ───────────────────────────────────────────
+    drawChecklist(win, mX + pad, curY, mW - pad * 2.f);
+
+    // ── Bottom buttons ────────────────────────────────────────────────────────
+    const float btnW = 100.f;
+    const float btnH = 34.f;
+    const float btnY = mY + mH - btnH - 16.f;
+
+    // ── Live caption above the buttons: status on Done/Failed, else last log ──
     const sf::Color statusColor = [&] {
         switch (importerState_) {
             case ModelImporter::State::Done:   return colors.green;
@@ -147,14 +368,13 @@ void ImportModelModal::render(sf::RenderWindow& win) {
             default:                           return colors.muted;
         }
     }();
-    if (!statusMsg_.empty())
-        Helpers::drawText(win, font, statusMsg_, statusColor,
-                          mX + pad, curY, type.sectionTitle, false);
-
-    // ── Bottom buttons ────────────────────────────────────────────────────────
-    const float btnW = 100.f;
-    const float btnH = 34.f;
-    const float btnY = mY + mH - btnH - 16.f;
+    const bool terminal = importerState_ == ModelImporter::State::Done
+                       || importerState_ == ModelImporter::State::Failed;
+    std::string caption = terminal ? statusMsg_ : latestLog_;
+    if (caption.size() > 92) caption = caption.substr(0, 91) + "…";
+    if (!caption.empty())
+        Helpers::drawText(win, font, caption, statusColor,
+                          mX + pad, btnY - 26.f, type.compact, false);
     btnClose_  = {mX + mW - btnW - pad, btnY, btnW, btnH};
     btnAction_ = {mX + mW - btnW * 2.f - pad - 10.f, btnY, btnW, btnH};
 

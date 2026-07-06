@@ -31,8 +31,10 @@ public:
     std::string archArg() const;
 
 private:
-    void drawLogArea(sf::RenderWindow& win, float x, float y, float w, float h);
-    void cycleArch();
+    void  drawProgressBar(sf::RenderWindow& win, float x, float y, float w);
+    void  drawChecklist(sf::RenderWindow& win, float x, float y, float w);
+    float overallProgress() const;   // 0..1 across all phases
+    void  cycleArch();
 
     // Modal geometry (computed in render, reused in handleEvent)
     sf::FloatRect modalRect_{};
@@ -45,10 +47,23 @@ private:
     // Display state synced from ModelImporter
     ModelImporter::State  importerState_  = ModelImporter::State::Idle;
     std::string           statusMsg_;
-    std::vector<std::string> logLines_;
+    std::string           latestLog_;       // last log line, shown as live caption
+    SafetensorsInfo       inspection_;      // detected arch/dtype (after Analyzing)
+    std::vector<ModelImporter::VerifyCheck> verifyChecks_;
+    double                elapsed_    = 0.0; // seconds since start
+    int                   exportStep_ = 0;
+    int                   exportTotal_= 0;
+
+    // ETA estimate — a countdown re-based each time a discrete unit (export step
+    // or verify check) completes, so it ticks down instead of climbing.
+    void   updateEta();
+    int    etaPhase_        = -1;   // which phase the unit tracking belongs to
+    int    etaUnitDone_     = -1;
+    double etaUnitTime_     = 0.0;  // EMA seconds per unit
+    double etaElapsedAtUnit_= 0.0;
+    double etaTargetSec_    = 0.0;  // predicted total elapsed at completion
+    bool   etaValid_        = false;
 
     // Arch selection: 0=Auto, 1=SD 1.5, 2=SDXL
     int archIndex_ = 0;
-
-    static constexpr int kVisibleLogLines = 14;
 };
