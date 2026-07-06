@@ -378,8 +378,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.outputPath = outPath;
     job.params = params;
     job.modelDir = modelDir;
-    job.vaeEncoderAvailable = sp.currentModelVaeEncoderAvailable();
-    job.loraCompatible      = sp.currentModelLoraCompatible();
+    job.loraCompatible = sp.currentModelLoraCompatible();
     GenerationService* generationService = &generationService_;
 
     GenerationCallbacks callbacks;

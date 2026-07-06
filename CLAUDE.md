@@ -55,7 +55,7 @@ The binary expects `models/vocab.json` and `models/merges.txt` in the working di
 → `src/controllers/GenerationService.hpp` (typed job structs)
 
 Key facts:
-- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, and model capabilities (`vaeEncoderAvailable`, `loraCompatible`)
+- `GenerationJob` carries prompt, negative prompt, output path, params, model dir, and the `loraCompatible` capability flag (VAE-encoder availability is derived inside the pipeline from `model.json`, not passed on the job)
 - `GenerationService::run()` handles single/multi-image generation; it returns `void`
 - `GenerationService` uses `job.loraCompatible` to clear any LoRA entries defensively — it does not silently fall back
 - `GenerationProgress` holds three nullable atomic pointers: `step` (denoising step counter), `currentImage` (1-based image index), and `stage` (`atomic<GenerationStage>*`) — all owned by `ResultPanel`

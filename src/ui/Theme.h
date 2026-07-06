@@ -23,7 +23,6 @@ struct UiColors {
     sf::Color blue     { 74, 127, 214};
     sf::Color blueLt   {146, 188, 255};
     sf::Color purple   {140, 102, 224};
-    sf::Color purpleLt {197, 174, 255};
     sf::Color injury   {224, 121,  74};
 
     sf::Color buttonDisabledBg {40, 46, 57};

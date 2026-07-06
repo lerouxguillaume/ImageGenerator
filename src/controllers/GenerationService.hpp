@@ -15,8 +15,7 @@ struct GenerationJob {
     std::string outputPath;
     GenerationParams params;
     std::string modelDir;
-    bool vaeEncoderAvailable = true;
-    bool loraCompatible      = true;
+    bool loraCompatible = true;
 };
 
 struct GenerationProgress {

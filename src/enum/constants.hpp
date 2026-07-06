@@ -11,7 +11,6 @@ namespace Col {
     inline const sf::Color Bg       = ThemeColors.bg;       // Window background (near-black warm)
     inline const sf::Color Panel    = ThemeColors.panel;    // Primary panel surface
     inline const sf::Color Panel2   = ThemeColors.panel2;   // Raised / secondary panel surface
-    inline const sf::Color Overlay  = ThemeColors.overlay;  // Semi-transparent modal overlay
 
     // Borders
     inline const sf::Color Border   = ThemeColors.border;   // Default border
@@ -26,15 +25,8 @@ namespace Col {
     inline const sf::Color Muted    = ThemeColors.muted; // Disabled / secondary text
 
     // Status colours
-    inline const sf::Color Red      = ThemeColors.red;      // Danger / error
-    inline const sf::Color RedLt    = ThemeColors.redLt;    // Danger highlight
-    inline const sf::Color Green    = ThemeColors.green;    // Success / healthy
-    inline const sf::Color GreenLt  = ThemeColors.greenLt;  // Success highlight
     inline const sf::Color Blue     = ThemeColors.blue;     // Info / selected
     inline const sf::Color BlueLt   = ThemeColors.blueLt;   // Info highlight
-    inline const sf::Color Purple   = ThemeColors.purple;   // Magic / special
-    inline const sf::Color PurpleLt = ThemeColors.purpleLt; // Magic highlight
-    inline const sf::Color Injury   = ThemeColors.injury;   // Injured adventurer badge
 }
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
@@ -69,5 +61,3 @@ constexpr float LLM_BAR_H    = Ui.llmBarHeight;  // Bottom LLM bar height (colla
 constexpr float LLM_EXPANDED_H = Ui.llmExpandedExtraHeight; // Extra height added to LLM bar when expanded
 constexpr float LEFT_PANEL_W = Ui.generatorLeftPanelWidth; // Settings panel width
 constexpr float BODY_Y       = MENU_BAR_H;
-constexpr float BODY_H_FULL  = WIN_H - MENU_BAR_H;             // body when no LLM bar
-constexpr float BODY_H_LLM   = WIN_H - MENU_BAR_H - LLM_BAR_H; // body when LLM bar visible

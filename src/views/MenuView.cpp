@@ -1,7 +1,5 @@
 #include "MenuView.hpp"
 
-#include <filesystem>
-#include "../enum/constants.hpp"
 #include "../ui/Buttons.hpp"
 #include "../ui/Helpers.hpp"
 #include "../ui/Logo.hpp"
