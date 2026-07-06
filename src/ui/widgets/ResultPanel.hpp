@@ -20,12 +20,6 @@ public:
         bool                        near = false;
     };
 
-    struct GalleryTab {
-        std::string name;
-        std::string assetTypeId;
-        std::string outputSubpath;
-    };
-
     // ── Display ───────────────────────────────────────────────────────────────
     sf::Texture resultTexture;
     bool        resultLoaded = false;
@@ -33,13 +27,7 @@ public:
     std::vector<GalleryItem> gallery;
     int                      selectedIndex = -1;
     bool                     showImproveButton = true;
-    bool                     showTabs = true;
-
-    // ── Gallery tabs (asset types, populated by controller) ──────────────────────
-    std::vector<GalleryTab> tabs;
-    int                     activeTabIndex = 0;
-    bool                    tabChanged     = false;
-    std::string             generateButtonLabel = "Generate";
+    std::string              generateButtonLabel = "Generate";
 
     // ── Generation state (shared with background thread via atomics) ──────────
     bool                         generating          = false;
@@ -90,12 +78,9 @@ private:
     sf::FloatRect btnNextThumbs_;
     std::vector<sf::FloatRect> thumbnailRects_;
     std::vector<int> thumbnailIndices_;
-    std::vector<sf::FloatRect> tabRects_;
     int thumbnailScrollOffset_ = 0;
     int lastVisibleSelectedIndex_ = -1;
 
-    void renderTabBar(sf::RenderWindow& win, sf::Font& font,
-                      float barX, float barY, float barW);
     void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
                                float stripX, float stripY, float stripW);
     void ensureSelectedThumbnailVisible(int visibleCount);

@@ -55,33 +55,6 @@ void ResultPanel::ensureSelectedThumbnailVisible(int visibleCount) {
     lastVisibleSelectedIndex_ = selectedIndex;
 }
 
-static constexpr float TAB_H = 28.f;
-
-void ResultPanel::renderTabBar(sf::RenderWindow& win, sf::Font& font,
-                                float barX, float barY, float barW) {
-    tabRects_.clear();
-    if (tabs.empty()) return;
-
-    drawRect(win, {barX, barY, barW, TAB_H}, Col::Panel, Col::Border, 1.f);
-
-    constexpr float tabPadX = 12.f;
-    constexpr float tabGap  =  4.f;
-    float tx = barX + tabGap;
-    for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
-        const float tw = tabPadX * 2.f
-            + static_cast<float>(tabs[static_cast<size_t>(i)].name.size()) * 7.2f;
-        const sf::FloatRect r{tx, barY + 3.f, tw, TAB_H - 6.f};
-        const bool active = (i == activeTabIndex);
-        drawRect(win, r, active ? Col::Blue : Col::Panel2,
-                 active ? Col::GoldLt : Col::Border, 1.f);
-        drawTextC(win, font, tabs[static_cast<size_t>(i)].name,
-                  active ? Col::GoldLt : Col::Muted,
-                  tx + tw / 2.f, barY + 7.f, 11, active);
-        tabRects_.push_back(r);
-        tx += tw + tabGap;
-    }
-}
-
 void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const auto& theme = Theme::instance();
     const auto& colors = theme.colors();
@@ -100,8 +73,6 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
     const float actionGenerateW = 136.f;
     const float actionAuxW = 76.f;
     const float actionGap = 10.f;
-
-    const float tabBarH = (showTabs && !tabs.empty()) ? TAB_H : 0.f;
 
     // Panel background
     drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
@@ -157,7 +128,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         const float galleryH = gallery.empty() ? 0.f : 132.f;
         const float infoH = generationFailed.load() ? 62.f
                           : (!validationChips.empty() ? 30.f : 0.f);
-        const float previewBottom = y + h - galleryH - tabBarH - 72.f - infoH;
+        const float previewBottom = y + h - galleryH - 72.f - infoH;
         const float frameX = x + 16.f;
         const float frameY = y + 16.f;
         const float frameW = w - 32.f;
@@ -258,11 +229,8 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
             const float stripX = x + 12.f;
             const float stripW = w - 24.f;
             const float stripY = y + h - galleryH - 60.f;
-            if (showTabs && !tabs.empty())
-                renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
             renderThumbnailStrip(win, font, stripX, stripY, stripW);
         } else {
-            tabRects_.clear();
             thumbnailRects_.clear();
         }
 
@@ -288,9 +256,7 @@ void ResultPanel::render(sf::RenderWindow& win, sf::Font& font, int numSteps) {
         drawTextC(win, font, "Select an image", colors.borderHi, cx, y + 32.f, type.sectionTitle);
         const float stripX = x + 12.f;
         const float stripW = w - 24.f;
-        const float stripY = y + 56.f + tabBarH;
-        if (showTabs && !tabs.empty())
-            renderTabBar(win, font, stripX, stripY - tabBarH, stripW);
+        const float stripY = y + 56.f;
         renderThumbnailStrip(win, font, stripX, stripY, stripW);
     } else {
         // Placeholder when no image yet
@@ -385,15 +351,6 @@ bool ResultPanel::handleEvent(const sf::Event& e) {
             if (thumbnailRects_[static_cast<size_t>(i)].contains(pos)) {
                 selectedIndex = thumbnailIndices_[static_cast<size_t>(i)];
                 return true;
-            }
-        }
-        if (showTabs) {
-            for (int i = 0; i < static_cast<int>(tabRects_.size()); ++i) {
-                if (tabRects_[static_cast<size_t>(i)].contains(pos) && i != activeTabIndex) {
-                    activeTabIndex = i;
-                    tabChanged     = true;
-                    return true;
-                }
             }
         }
         if (btnGenerate_.contains(pos)) {
