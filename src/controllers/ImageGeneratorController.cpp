@@ -358,7 +358,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         catch (const std::exception&) { params.seed = -1; }
     }
 
-    if (sp.currentModelLoraCompatible()) {
+    if (selected->capabilities.loraCompatible) {
         for (size_t i = 0; i < sp.availableLoras.size(); ++i) {
             if (i < sp.loraSelected.size() && sp.loraSelected[i])
                 params.loras.push_back({sp.availableLoras[i],
@@ -376,7 +376,7 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
     job.outputPath = outPath;
     job.params = params;
     job.modelDir = modelDir;
-    job.loraCompatible = sp.currentModelLoraCompatible();
+    job.loraCompatible = selected->capabilities.loraCompatible;
     GenerationService* generationService = &generationService_;
 
     GenerationCallbacks callbacks;
