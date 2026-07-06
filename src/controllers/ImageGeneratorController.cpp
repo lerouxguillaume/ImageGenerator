@@ -280,8 +280,8 @@ void ImageGeneratorController::saveSettings(ImageGeneratorView& view) {
 
     view.showSettings = false;
 
-    view.settingsPanel.models.clear();
-    view.settingsPanel.selectedModelIdx = 0;
+    // modelsDirty triggers a full model-list repopulation in update()
+    // (which clears the list and resets selectedModelIdx), so no manual reset here.
     modelsDirty = true;
     lorasDirty  = true;
 
@@ -603,7 +603,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
         }
         if (view.resultPanel.generateRequested) {
             view.resultPanel.generateRequested = false;
-            triggerGeneration(view);
+            launchGeneration(view);
         }
         // "Edit" on a result attaches it as the input image in-place → img2img.
         if (view.resultPanel.improveRequested) {
@@ -630,15 +630,15 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             std::error_code ec2;
             const std::filesystem::path outputDir = std::filesystem::weakly_canonical(config.outputDir, ec2);
             const std::filesystem::path canonicalSelected = std::filesystem::weakly_canonical(selected, ec2);
-            // Allow deletion of any image located under outputDir
-            const auto rel = std::filesystem::relative(canonicalSelected, outputDir, ec2);
-            bool hasParentRef = false;
-            for (const auto& part : rel)
-                if (part.string() == "..") { hasParentRef = true; break; }
-            const bool underOutput = !ec2 && !rel.empty() && !hasParentRef;
-            if (underOutput && !selected.empty()) {
+            // The gallery is a flat scan of outputDir; only delete a direct child of it.
+            const bool directChild = !ec2 && !selected.empty()
+                                     && canonicalSelected.parent_path() == outputDir;
+            if (directChild) {
                 std::filesystem::remove(canonicalSelected, ec2);
                 refreshGallery(view, nextSelection);
+            } else {
+                Logger::info("Refusing to delete '" + selected.string()
+                             + "': not a direct child of outputDir");
             }
         }
         if (view.resultPanel.cancelToken.exchange(false))
@@ -803,12 +803,4 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             sp.compiledPreview = std::string{};
         }
     }
-}
-
-void ImageGeneratorController::triggerGeneration(ImageGeneratorView& view) {
-    launchGeneration(view);
-}
-
-void ImageGeneratorController::openSettingsDialog(ImageGeneratorView& view) {
-    openSettings(view);
 }

@@ -27,8 +27,6 @@ public:
                      ImageGeneratorView& screen, AppScreen& appScreen);
 
     void update(ImageGeneratorView& screen);
-    void triggerGeneration(ImageGeneratorView& view);
-    void openSettingsDialog(ImageGeneratorView& view);
 
 private:
     // ── Settings helpers ──────────────────────────────────────────────────────
