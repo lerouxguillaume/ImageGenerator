@@ -2,8 +2,8 @@
 #include "../ui/Theme.h"
 
 Screen::Screen() {
-    if (!font.loadFromFile("arial.ttf") &&
-        // Linux system fonts
+    // Load from system font paths (a local "arial.ttf" is no longer bundled).
+    if (// Linux system fonts
         !font.loadFromFile("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf") &&
         !font.loadFromFile("/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf") &&
         !font.loadFromFile("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf") &&

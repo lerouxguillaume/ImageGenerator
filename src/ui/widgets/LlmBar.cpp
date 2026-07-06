@@ -1,5 +1,4 @@
 #include "LlmBar.hpp"
-#include "../../enum/constants.hpp"
 #include "../../ui/Theme.h"
 #include "../../ui/Buttons.hpp"
 #include "../../ui/Helpers.hpp"

@@ -23,7 +23,12 @@ int visibleLineCapacity(const sf::FloatRect& rect, int configuredVisibleLines) {
 
 MultiLineTextArea::MultiLineTextArea(int charLimit, int visibleLines)
     : charLimit_(charLimit), visibleLines_(visibleLines)
-{}
+{
+    // Theme is a Meyers singleton (constructed on first access), so this is safe
+    // from any construction order. Kept out of the header's member initializer to
+    // avoid pulling Theme.h into the widget header.
+    textColor_ = Theme::instance().colors().text;
+}
 
 // ── Widget interface ──────────────────────────────────────────────────────────
 

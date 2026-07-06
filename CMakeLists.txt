@@ -216,14 +216,3 @@ if(WIN32)
     endforeach()
 endif()
 
-# Copy a bundled font next to the binary so "arial.ttf" resolves on all platforms.
-# On Linux this is a fallback; on Windows it avoids depending on system fonts entirely.
-if(WIN32)
-    # Use a font bundled in the repo; copy it as arial.ttf so Screen.cpp finds it.
-    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/fonts/arial.ttf")
-        add_custom_command(TARGET image_generator POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/assets/fonts/arial.ttf"
-            "$<TARGET_FILE_DIR:image_generator>/arial.ttf")
-    endif()
-endif()

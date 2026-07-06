@@ -22,14 +22,12 @@ struct UiColors {
     sf::Color greenLt  {146, 228, 184};
     sf::Color blue     { 74, 127, 214};
     sf::Color blueLt   {146, 188, 255};
-    sf::Color purple   {140, 102, 224};
     sf::Color injury   {224, 121,  74};
 
     sf::Color buttonDisabledBg {40, 46, 57};
     sf::Color shadow           { 0,  0,  0, 70};
     sf::Color surfaceRaised    {34, 42, 56};
     sf::Color surfaceInset     {17, 22, 31};
-    sf::Color accentSoft       { 94, 234, 212, 36};
 };
 
 struct UiMetrics {

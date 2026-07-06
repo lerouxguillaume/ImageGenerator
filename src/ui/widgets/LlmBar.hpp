@@ -5,7 +5,7 @@
 #include "MultiLineTextArea.hpp"
 
 // Bottom LLM bar (visible only when LLM is available or loading).
-// Collapsed: 44px toggle strip. Expanded: bar grows by LLM_EXPANDED_H, showing
+// Collapsed: 44px toggle strip. Expanded: bar grows by the LLM expanded extra height, showing
 // the instruction textarea below the toggle row.
 class LlmBar {
 public:

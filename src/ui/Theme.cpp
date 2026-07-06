@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "../managers/Logger.hpp"
 #include <filesystem>
 #include <stdexcept>
 
@@ -8,9 +9,9 @@ Theme& Theme::instance() {
 }
 
 Theme::Theme() {
-    // Try to load font with extensive fallbacks
-    if (!font_.loadFromFile("arial.ttf") &&
-        // Linux system fonts - try multiple paths
+    // Load the UI font straight from system font paths. (A local "arial.ttf"
+    // used to be bundled next to the binary; that copy step was removed.)
+    if (// Linux system fonts - try multiple paths
         !font_.loadFromFile("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf") &&
         !font_.loadFromFile("/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf") &&
         !font_.loadFromFile("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf") &&
@@ -28,6 +29,7 @@ Theme::Theme() {
         // If still no font loaded, throw an exception to prevent crashes
         throw std::runtime_error("Failed to load any font. Please install fonts on your system.");
     }
+    Logger::info("Theme: UI font loaded from a system font path");
 }
 
 bool Theme::tryLoadAnyFont(const std::string& directory) {

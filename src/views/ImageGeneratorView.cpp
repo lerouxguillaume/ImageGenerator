@@ -1,5 +1,4 @@
 #include "ImageGeneratorView.hpp"
-#include "../enum/constants.hpp"
 #include "../ui/Helpers.hpp"
 #include "../ui/Theme.h"
 

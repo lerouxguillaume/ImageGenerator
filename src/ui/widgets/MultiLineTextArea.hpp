@@ -51,7 +51,7 @@ private:
     std::vector<VisualLine> lines_;       // rebuilt each render() call
     int                     scrollLine_  = 0;
     sf::FloatRect           rect_;
-    sf::Color               textColor_   = sf::Color(220, 210, 185); // Col::Text default
+    sf::Color               textColor_{}; // initialised from Theme::colors().text in the constructor
     int                     charLimit_;
     int                     visibleLines_;
     sf::Font*               cachedFont_  = nullptr; // set each render(); used by handleClick
