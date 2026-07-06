@@ -1,6 +1,6 @@
 # ImageGenerator
 
-Generate images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required. Includes a project workspace currently focused on candidate-run isometric wall asset generation.
+Generate and edit images locally using Stable Diffusion (SD 1.5 or SDXL) via ONNX Runtime — no cloud API required.
 
 Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceleration via CUDA or DirectML.
 
@@ -10,13 +10,11 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 
 - **Local SD inference** — SD 1.5 and SDXL pipelines implemented from scratch (DPM++ 2M Karras scheduler, CFG, CLIP tokenizer)
 - **GPU acceleration** — CUDA (Linux/Windows) or DirectML (Windows)
-- **Three entry points** — `Projects`, `Generate Images`, and `Edit Image` from the main menu
-- **Project workspace** — build themed asset packs with a project-level theme, per-asset prompts, inline generation controls, and an embedded results gallery
-- **SFML GUI** — centralized theme system, project-native workspace, prompt editor, model selector, edit instruction field, strength controls, live progress overlay
+- **Unified generate/edit screen** — one prompt-first screen; attach an optional input image to switch from txt2img to img2img
+- **SFML GUI** — centralized theme system, prompt editor, model selector, edit instruction field, strength controls, live progress overlay
 - **Multi-image generation** — generate N images in one run with cancellation support
-- **Image editing** — dedicated edit screen plus gallery-driven handoff from generated results
-- **Model hot-swap** — any model exported to ONNX under `models/` is automatically listed in the UI
-- **Preset system** — save/load named generation configurations independent of projects
+- **Model import** — import a `.safetensors` checkpoint through the in-app Import Model flow; imported models are listed from the registry
+- **Preset system** — save/load named generation configurations
 
 ---
 
@@ -24,34 +22,34 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 
 ```
 ├── src/
-│   ├── portraits/          # SD pipeline: tokenizer, prompt builder, ONNX inference
+│   ├── portraits/          # SD pipeline: tokenizer, ONNX inference
+│   ├── import/             # Model import pipeline + ImportedModelRegistry
 │   ├── controllers/        # Input handling (MVC controller layer)
 │   ├── views/              # SFML rendering (MVC view layer)
-│   ├── assets/             # Asset output paths, processing, metadata, scoring
-│   ├── projects/           # Project + AssetType data model and ProjectManager
 │   ├── presets/            # Preset data model and PresetManager
 │   ├── prompt/             # Prompt DSL (parse / compile / merge / JSON)
+│   ├── llm/                # Optional ONNX GenAI prompt enhancer
 │   ├── managers/           # Logger
 │   ├── ui/                 # Shared widgets, theme tokens, helpers
 │   └── enum/               # Enums and compatibility layout/colour constants
 ├── scripts/
-│   ├── export_onnx_models.py       # Export SD 1.5 model → ONNX
-│   ├── sdxl_export_onnx_models.py  # Export SDXL model → ONNX
+│   ├── import_model.py             # Import/export a .safetensors model → ONNX
 │   └── build-windows.sh            # Cross-compile Windows release from Linux
-├── models/                 # ONNX model directories + tokenizer files
+├── models/                 # Tokenizer files + imported models
 │   ├── vocab.json
 │   ├── merges.txt
-│   └── <model_name>/       # One subdirectory per exported model
-│       ├── text_encoder.onnx
-│       ├── unet.onnx
-│       ├── vae_decoder.onnx
-│       ├── vae_encoder.onnx
-│       ├── text_encoder_2.onnx  # SDXL only
-│       └── model.json           # {"type": "sdxl"} or absent → SD 1.5
+│   └── imported/           # Imported models (registry-managed)
+│       ├── registry.json   # Model registry (source of truth for discovery)
+│       └── <id>/           # One directory per imported model
+│           ├── text_encoder.onnx
+│           ├── unet.onnx
+│           ├── vae_decoder.onnx
+│           ├── vae_encoder.onnx      # optional (img2img)
+│           ├── text_encoder_2.onnx   # SDXL only
+│           └── model.json            # arch + capabilities block
 ├── assets/
-│   └── generated/          # Output images (flat or project/assettype/ subfolders)
+│   └── generated/          # Output images (flat, newest-first gallery)
 ├── deps/windows/           # Pre-built Windows dependencies (SFML, ORT, OpenCV)
-├── projects.json           # Saved projects (auto-created)
 ├── presets.json            # Saved presets (auto-created)
 └── CMakeLists.txt
 ```
@@ -65,7 +63,7 @@ Built with C++20, SFML, and ONNX Runtime. Runs on Linux and Windows; GPU acceler
 | SFML | 2.5+ | Window, rendering, input |
 | ONNX Runtime | 1.24+ | Model inference |
 | OpenCV | 4.x | Image encoding (PNG write) |
-| nlohmann/json | 3.x | JSON config / presets / projects |
+| nlohmann/json | 3.x | JSON config / presets / model registry |
 
 ---
 
@@ -156,17 +154,15 @@ A `model.json` sidecar is written automatically so the application detects SDXL 
 ./build/image_generator
 ```
 
-The binary expects `models/vocab.json` and `models/merges.txt` in the working directory (copied automatically by CMake post-build). Model subdirectories are auto-discovered from `models/`.
+The binary expects `models/vocab.json` and `models/merges.txt` in the working directory (copied automatically by CMake post-build). Models are discovered from the registry at `models/imported/registry.json` — populated by the in-app Import Model flow.
 
 Generated images are saved to `assets/generated/`.
 
-The main menu offers three entry points:
+The main menu opens the generate/edit screen and offers an **Import Model** action:
 
-**Projects** — create named projects for asset-pack generation. The supported built-in asset template is currently `Wall Left`. `Generate Candidates` runs an automatic candidate pipeline: create a shape patron, explore a batch, score correctness, refine the top candidates, then show the best proposals first. Outputs are saved to `assets/generated/<project>/<asset_type>/`.
+**Generate / Edit** — a single prompt-first workflow with preset support and the shared dark tool UI. It runs txt2img by default; select a gallery image and click `Edit` (or attach an input image) to switch to img2img, then enter an instruction such as `change hair color to copper red`, adjust the strength slider, and generate.
 
-**Generate Images** — standalone prompt-first txt2img workflow with preset support and the shared dark tool UI.
-
-**Edit Image** — image-first img2img workflow. From the generate screen, select a gallery image and click `Edit` to open it here with the image preselected. Enter an instruction such as `change hair color to copper red`, adjust the strength slider, and generate.
+**Import Model** — import a `.safetensors` checkpoint. A managed Python venv is set up automatically on first use; the model is exported to ONNX under `models/imported/<id>/` and added to the registry.
 
 UI styling is now centralized in `src/ui/Theme.h`:
 - `UiColors` — shared palette and semantic surface colors

@@ -27,7 +27,7 @@ Panels (own state + rendering + event handling):
 Controller (`ImageGeneratorController`):
 - A single instance drives the one generate/edit screen
 - Thin coordinator: routes events to panels, acts on their action flags
-- Owns async operations: model/LoRA scan, LLM load, folder browse, generation thread
+- Owns async operations: model registry read / LoRA scan, LLM load, folder browse, generation thread
 - Updates DSL display state (token chips, compiled preview) every frame
 - Accesses panels directly via `view.panelName.*`
 

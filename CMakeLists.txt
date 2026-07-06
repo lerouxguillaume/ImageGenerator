@@ -162,7 +162,7 @@ add_custom_command(TARGET image_generator POST_BUILD
         -DDST="$<TARGET_FILE_DIR:image_generator>/config.json"
         -P "${CMAKE_SOURCE_DIR}/cmake/copy_default_config.cmake")
 
-# Copy portrait models (ONNX + tokenizer files) next to the binary
+# Copy tokenizer files (models/vocab.json, models/merges.txt) next to the binary
 add_custom_command(TARGET image_generator POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/models"

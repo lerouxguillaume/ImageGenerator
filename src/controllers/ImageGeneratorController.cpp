@@ -637,7 +637,7 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             std::error_code ec2;
             const std::filesystem::path outputDir = std::filesystem::weakly_canonical(config.outputDir, ec2);
             const std::filesystem::path canonicalSelected = std::filesystem::weakly_canonical(selected, ec2);
-            // Allow deletion from any subdirectory under outputDir (e.g. project/assettype/)
+            // Allow deletion of any image located under outputDir
             const auto rel = std::filesystem::relative(canonicalSelected, outputDir, ec2);
             bool hasParentRef = false;
             for (const auto& part : rel)
