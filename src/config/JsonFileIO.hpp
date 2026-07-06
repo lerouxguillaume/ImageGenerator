@@ -34,13 +34,26 @@ inline void atomicWrite(const std::filesystem::path& path,
         }
 
         if (keepBackup && std::filesystem::exists(path)) {
+            // Delete any existing backup first: some Windows shared-folder
+            // filesystems reject copy_file's overwrite_existing and fail with
+            // "File exists", so copy into a guaranteed-absent destination.
+            std::error_code rmec;
+            std::filesystem::remove(bak, rmec);
             std::filesystem::copy_file(
                 path,
                 bak,
                 std::filesystem::copy_options::overwrite_existing);
         }
 
-        std::filesystem::rename(tmp, path);
+        // rename overwrites the target on compliant filesystems; on shared
+        // folders that reject an in-place replace, fall back to remove+rename
+        // (the .bak we just wrote covers the brief window where path is absent).
+        std::error_code mvec;
+        std::filesystem::rename(tmp, path, mvec);
+        if (mvec) {
+            std::filesystem::remove(path);
+            std::filesystem::rename(tmp, path);
+        }
     } catch (...) {
         std::error_code ec;
         std::filesystem::remove(tmp, ec);
