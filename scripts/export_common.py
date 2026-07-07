@@ -344,6 +344,12 @@ class ExportPolicy:
     def vae_dynamic_axes(self) -> dict[str, dict[int, str]] | None:
         raise NotImplementedError
 
+    def vae_encoder_dynamic_axes(self) -> dict[str, dict[int, str]] | None:
+        # Encoders are static by default — img2img only ever encodes at native
+        # resolution. Overridden where pixel-mode hires needs to re-encode an
+        # upscaled image (see SD15).
+        return None
+
     def unet_exporter(self) -> str:
         return "legacy"
 
@@ -409,11 +415,23 @@ class SD15ExportPolicy(ExportPolicy):
         # afterward so runtime still gets a single .onnx.data file.
         return "legacy"
 
+    def vae_encoder_dynamic_axes(self) -> dict[str, dict[int, str]]:
+        # Dynamic H/W so the encoder can re-encode the UPSCALED image in
+        # pixel-mode hires (decode base → bicubic upscale RGB → re-encode larger
+        # than 512). Without this the encoder is static 512 and pixel-mode hires
+        # fails with an input-shape error. Mirrors the decoder: input image
+        # {0:batch,2:H,3:W}, output moments {0:batch,2:H/8,3:W/8} (still dynamic).
+        return {
+            "image":   {0: "batch", 2: "height", 3: "width"},
+            "moments": {0: "batch", 2: "height", 3: "width"},
+        }
+
     def vae_encoder_exporter(self) -> str:
-        # The encoder is static (no dynamic axes), so keep it on the fast dynamo
-        # exporter — the legacy tracer's eager fp16 512x512 conv forward is
-        # pathologically slow on CPU and buys the encoder nothing.
-        return "dynamo"
+        # Dynamic spatial axes (pixel-mode hires) → legacy tracer, same as the
+        # decoder (dynamo cannot express H/W dynamic axes). Traced at a tiny dummy
+        # image (see export_onnx_models.py) so the eager fp16 CPU conv forward
+        # stays cheap — the dynamic graph is trace-size-independent.
+        return "legacy"
 
     def should_fix_resize_fp16(self, component_name: str) -> bool:
         return component_name in {"unet", "vae_decoder", "vae_encoder"}
@@ -1316,6 +1334,7 @@ def make_vae_encoder_spec(
     vae,
     dummy_image: torch.Tensor,
     exporter: str,
+    dynamic_axes: dict[str, dict[int, str]] | None = None,
     fix_fp32_constants: bool = False,
     fix_resize_fp16: bool = False,
     skip_if_complete: bool = False,
@@ -1330,7 +1349,7 @@ def make_vae_encoder_spec(
         dummy_inputs=(dummy_image,),
         input_names=["image"],
         output_names=["moments"],
-        dynamic_axes=None,
+        dynamic_axes=dynamic_axes,
         exporter=exporter,
         fix_fp32_constants=fix_fp32_constants,
         fix_resize_fp16=fix_resize_fp16,

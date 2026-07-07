@@ -511,10 +511,23 @@ void runPipeline(const std::string& prompt,
                             // so pass 2 adds detail. (Latent-space bilinear is off-manifold
                             // and the VAE amplifies it into blur — measurably worse than a
                             // plain bicubic upscale, hence not the default.)
-                            cv::Mat baseImg = decodeLatent(base, c);   // native-res BGR
-                            cv::Mat bigImg;
-                            cv::resize(baseImg, bigImg, {hiresPxW, hiresPxH}, 0, 0, cv::INTER_CUBIC);
-                            up = encodeImage(bigImg, hiresPxW, hiresPxH, c, /*sample=*/false);
+                            // Requires a DYNAMIC-shape VAE encoder. Pre-hires exports have a
+                            // static 512 encoder that rejects the upscaled image — catch that
+                            // and fall back to latent upscale (uncancellable VAE Run() can't
+                            // throw a *cancellation* here, so this only catches shape errors).
+                            try {
+                                cv::Mat baseImg = decodeLatent(base, c);   // native-res BGR
+                                cv::Mat bigImg;
+                                cv::resize(baseImg, bigImg, {hiresPxW, hiresPxH}, 0, 0, cv::INTER_CUBIC);
+                                up = encodeImage(bigImg, hiresPxW, hiresPxH, c, /*sample=*/false);
+                            } catch (const Ort::Exception& e) {
+                                Logger::error("Hires pixel mode: VAE encoder rejected "
+                                    + std::to_string(hiresPxW) + "x" + std::to_string(hiresPxH)
+                                    + " (static-shape encoder — RE-IMPORT this model to enable"
+                                    " sharp pixel hires). Falling back to latent upscale (softer). ORT: "
+                                    + e.what());
+                                up = upscaleLatent(base, hiresLatentW, hiresLatentH, UpscaleMode::Latent);
+                            }
                         } else {
                             // Latent route (no VAE encoder, or explicitly selected).
                             up = upscaleLatent(base, hiresLatentW, hiresLatentH, mode);

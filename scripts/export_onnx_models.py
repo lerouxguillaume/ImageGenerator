@@ -8,7 +8,7 @@ Outputs (under models/<MODEL_NAME>/):
     text_encoder.onnx   — CLIP-L with clip-skip-2, fp32
     unet.onnx           — UNet, fp16, dynamic H/W
     vae_decoder.onnx    — VAE decoder, fp16, dynamic H/W
-    vae_encoder.onnx    — VAE encoder, fp16, static shape
+    vae_encoder.onnx    — VAE encoder, fp16, dynamic H/W (SD15) / static (SDXL)
 """
 import argparse
 import gc
@@ -192,7 +192,13 @@ def export_sd15(model_file: str, output_dir: str, *,
     gc.collect()
 
     # 4. VAE encoder ──────────────────────────────────────────────────────────
-    dummy_image = torch.randn(1, 3, 512, 512, dtype=torch.float16)
+    # When the encoder has dynamic H/W axes (SD15 pixel-mode hires), trace it at a
+    # tiny image so the eager fp16 CPU conv forward stays cheap — the dynamic graph
+    # is trace-size-independent (mirrors the 8x8 decoder trace). A static encoder
+    # must be traced at its real 512x512 input.
+    enc_dynamic_axes = policy.vae_encoder_dynamic_axes()
+    enc_dummy_hw = 64 if enc_dynamic_axes else 512
+    dummy_image = torch.randn(1, 3, enc_dummy_hw, enc_dummy_hw, dtype=torch.float16)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -201,6 +207,7 @@ def export_sd15(model_file: str, output_dir: str, *,
                 exporter=policy.vae_encoder_exporter(),
                 vae=pipe.vae,
                 dummy_image=dummy_image,
+                dynamic_axes=enc_dynamic_axes,
                 fix_resize_fp16=policy.should_fix_resize_fp16("vae_encoder"),
                 skip_if_complete=resume,
                 validate=validate,
