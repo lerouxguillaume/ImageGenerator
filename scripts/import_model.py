@@ -361,3 +361,13 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("ERROR:Import cancelled.", flush=True)
         sys.exit(1)
+    except Exception as e:
+        # Net under the typed handlers: an unexpected exception type must never
+        # reach the C++ modal as a bare traceback. Emit one clean, single-line
+        # ERROR: on stdout (what the modal parses) and send the full traceback to
+        # stderr (captured into the log, not shown as the status message).
+        import traceback
+        msg = str(e).replace("\n", " ").strip() or e.__class__.__name__
+        print(f"ERROR:Unexpected error during import: {msg}", flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
