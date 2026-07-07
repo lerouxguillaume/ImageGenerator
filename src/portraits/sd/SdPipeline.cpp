@@ -627,9 +627,8 @@ void runPipeline(const std::string& prompt,
                 // No retry / auto-step-down in v1 — fail cleanly and name the cause.
                 Logger::error("Out of GPU memory during inference: " + msg);
                 denoiseException = std::make_exception_ptr(std::runtime_error(
-                    "Out of GPU memory. If hires fix is on, lower the hires scale "
-                    "(SDXL is capped at 1.5x) or turn it off; otherwise reduce the image "
-                    "size or image count."));
+                    "Out of GPU memory. If hires fix is on, lower the hires scale or turn "
+                    "it off; otherwise reduce the image size or image count."));
             } else {
                 Logger::error("ORT exception during inference (not a cancellation).");
                 denoiseException = std::current_exception();

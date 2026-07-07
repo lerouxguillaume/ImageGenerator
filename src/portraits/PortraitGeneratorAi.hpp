@@ -21,10 +21,14 @@ struct HiresConfig {
     UpscaleMode mode     = UpscaleMode::Pixel;  // Pixel adds detail; Latent blurs
 };
 
-// Upper bound on the SDXL hires scale. At 1.5× (native 1024 → 1536px, latent 192)
-// the fp16 UNet + VAE peaked at ~12.2 GB on a 12 GB card in GPU-box validation;
-// larger factors OOM. SD1.5 (much smaller activations) keeps the full 1.0–2.0
-// range. Shared by the pipeline clamp and the SettingsPanel scale slider.
+// Upper bound on the SDXL hires scale. 1.5× (1536px) is the validated max where the
+// fp16 UNet + VAE fit *in isolation* (~12.2 GB each). NOTE: in-app the UNet session's
+// CUDA arena stays resident during the VAE decode, so on a ~12 GB card the 1536px
+// mid-block self-attention (O(N²), ~2.7 GB) can OOM — the user then gets a clear
+// "out of GPU memory" error and can lower the scale. A VRAM-aware UI (warn / cap to
+// what fits) and tiled VAE decode are backlogged rather than hard-capping here, which
+// would penalise larger-VRAM cards. SD1.5 keeps the full 1.0–2.0 range. Shared by the
+// pipeline clamp + UI slider.
 inline constexpr float kSdxlMaxHiresScale = 1.5f;
 
 // Parameters shared by all generation entry points.

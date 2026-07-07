@@ -32,6 +32,18 @@
   (4–8 workers), lazy loading for visible items, and an on-disk or in-memory thumbnail cache
   keyed by image path + mtime.
 
+- VRAM-aware SDXL hires: warn/limit instead of OOM-mid-run.
+  SDXL hires at 1.5× (1536px) OOMs the VAE decode on a ~12 GB card — in-app the UNet session's
+  CUDA arena stays resident, leaving no room for the mid-block self-attention buffer (O(N²),
+  ~2.7 GB at 1536px). Today the user gets a clear "out of GPU memory" error only *after* sitting
+  through the (slow, high-res) hires denoise. Improve the UX: surface the VRAM limitation in the
+  SettingsPanel hires controls (e.g. a note that high scales need lots of VRAM, or a soft cap
+  derived from detected VRAM), so the failure is explained up front rather than discovered
+  mid-run. The heavier structural fix — tiled VAE decode (`VaeDecodeStrategy` stub in `SdVae.cpp`)
+  so large decodes never allocate one giant attention buffer — would remove the ceiling entirely;
+  pair it with the arena-shrinkage option (release the UNet arena before decode) if pursued.
+  Related: the "split cached model state from per-run mutable state" high-priority item.
+
 ## Low Priority
 
 - Clean local/project hygiene entries.
