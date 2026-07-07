@@ -29,7 +29,8 @@ The current visual language is a dark desktop-tool style with framed surfaces, c
 
 The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 
-- Default size: 1280 × 800
+- **Opens maximized** — `App` constructor calls `maximizeWindow(win)` (native `ShowWindow(SW_MAXIMIZE)` on Windows; sizes to `getDesktopMode()` elsewhere). The title bar and window controls are kept (this is *not* `sf::Style::Fullscreen`).
+- Default size: 1280 × 800 — this is the **restore** size when the user un-maximizes
 - Minimum enforced size: **700 × 550** (smaller resize attempts are snapped back)
 - On `sf::Event::Resized`: the SFML view is updated so coordinates map directly to pixels
 - `SettingsPanel` stays at fixed width (`metrics.generatorLeftPanelWidth = 460`); `ResultPanel` takes remaining width
@@ -45,17 +46,16 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 ┌─────────────────────────────────────────────────────────────┐  y=0
 │  MenuBar                                                    │  h=40
 ├──────────────────────────┬──────────────────────────────────┤  y=40
-│  SettingsPanel           │  ResultPanel                     │
+│  SettingsPanel (cards)   │  ResultPanel                     │
 │  (460px wide, fixed)     │  (win.width − 460, grows)        │
 │                          │                                  │
-│  model / lora            │  generated image (native size,   │
-│  positive prompt         │   downscaled only if too large)  │
-│  token chips             │                                  │
-│  negative prompt         │  framed action bar               │
-│  compiled preview*       │   [Edit] [Delete] [Generate]     │
-│  steps / cfg / images    │  progress bar / cancel           │
-│  input image + strength**│  error banner                    │
-│  seed                    │  gallery strip                   │
+│  MODEL & LORA            │  preview image [×deselect]       │
+│  PROMPT (pos/chips/neg)  │   (native size, downscaled)      │
+│  (EDITING SOURCE)**      │  caption: file · WxH · N of M    │
+│  SAMPLING (steps/cfg/im) │  progress bar / cancel           │
+│  HIRES FIX               │  error banner                    │
+│  SEED                    │  gallery strip / grid            │
+│  [ Generate / Edit ]     │  action bar [Edit] [Delete]      │
 ├──────────────────────────┴──────────────────────────────────┤  y varies
 │  LlmBar collapsed (visible when LLM available or loading)   │  h=44
 │  LlmBar expanded (instruction area below toggle row)        │  h=124
@@ -63,7 +63,7 @@ The window is **resizable** (`sf::Style::Close | sf::Style::Resize`).
 ```
 
 *compiled preview visible only when SD1.5 model is selected
-**"Editing: `<file>`" banner + strength presets/slider appear only when an input image is attached; the primary button then reads **Edit Image**
+**the `EDITING SOURCE` card (strength presets/slider) appears only when an input image is attached; the rail's primary button then reads **Edit Image**
 
 Layout metrics (`Theme::metrics()` / `UiMetrics`):
 - `menuBarHeight = 40` — top bar height
@@ -102,7 +102,12 @@ The menu bar now renders as a themed header surface rather than a flat strip.
 State: `positiveArea`, `negativeArea`, `generationParams`, model selection, LoRA list, seed, slider drag  
 DSL display state (set by controller each frame): `currentDsl`, `compiledPreview`  
 All params always visible (no Advanced toggle)  
-Renders inside a framed left rail with themed surfaces and token-driven spacing.
+Renders as a stack of **framed cards** inside the left rail, each with an uppercase micro-label header: `MODEL & LORA`, `PROMPT`, (`EDITING SOURCE`), `SAMPLING`, `HIRES FIX`, `SEED`. `render()` uses a local `drawCard(top,h,title)` helper (draws the framed box + header, returns the content-start y) and a `drawSwitch(box,on,enabled)` helper. Card heights are computed per-frame from their content (chip rows, hires on/off, img2img on/off) so a card's box exactly wraps its controls.
+- Model card: **full-width** dropdown styled as an input with an inline `SDXL`/`SD1.5` badge; LoRA button below (or a "No LoRA for this model" note)
+- Sampling card: `Steps` / `CFG scale` / `Images` on one unified slider style (uppercase label left, mono value right, teal track/thumb)
+- Hires card: an on/off **toggle switch** (`drawSwitch`, reusing `btnHiresToggle_` as the hit rect) that reveals the scale/strength sliders + Pixel/Latent segmented control only when enabled
+- The **Generate / Edit Image** primary button is pinned full-width to the **bottom of this rail** (`btnGenerate_` → `generateRequested`, launched by the controller). Its label is derived locally from `generationParams.initImagePath` (empty → `Generate`, else `Edit Image`). It is *not* in the ResultPanel.
+- The rail is fixed-height with no scroll; the always-visible cards + the opt-in expansions (hires-on, img2img) are tuned to fit the maximized window. A vertical scroll is a possible future addition if content overflows at small sizes.
 Tab cycles focus: positive → negative → positive.  
 `positiveArea` shows 4 visible lines (fieldH=86); `negativeArea` shows 3 visible lines (fieldH=68).  
 Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforces this after each handleEvent.
@@ -113,8 +118,8 @@ Focus is mutually exclusive with `LlmBar::instructionArea` — controller enforc
 - negative prompt field
 - compiled preview (SD1.5 only)
 
-**Img2img controls** (shown only when `generationParams.initImagePath` is set):
-- "Editing: `<file>`" banner (blue-outlined) + a `×` button — clicking `×` sets `initImagePath = ""`, returning to txt2img
+**Img2img controls** — an `EDITING SOURCE` card (shown only when `generationParams.initImagePath` is set):
+- The card header shows the source `<file>` name + a `×` button (`btnClearInit_`) — clicking `×` sets `initImagePath = ""`, returning to txt2img
 - Strength presets: `[Subtle]`, `[Medium]`, `[Strong]` map to coarse strength defaults before fine-tuning
 - Strength slider: range 0.05–1.0 in 0.05 steps; stored in `generationParams.strength`
 - The normal positive/negative prompt drives the edit — there is no separate edit-instruction field
@@ -143,16 +148,22 @@ Action flags: `generateRequested`, `improveRequested`, `deleteRequested`, `cance
 Path fields: `lastImagePath` (base output path, set at generation start), `displayedImagePath` (path of the image currently shown).
 
 **Gallery** (`gallery: vector<GalleryItem>`, `selectedIndex: int`):  
-- Populated by `ImageGeneratorController::refreshGallery()` on startup, after each generation, and when the output dir changes in settings
-- Each `GalleryItem` holds `path`, `filename`, and a `shared_ptr<sf::Texture>` thumbnail (null until async load completes)
+- Populated by `ImageGeneratorController::refreshGallery()` on first open, after each generation, and when the output dir changes in settings
+- Each `GalleryItem` holds `path`, `filename`, `score`, and a `shared_ptr<sf::Texture>` thumbnail (null until async load completes). *There are no per-thumbnail rating badges* — the old `recommended`/`usable`/`near` fields and their `BEST`/`OK`/`NEAR` badges were removed.
 - Thumbnails are loaded and resized to ≤92 px on background threads; `flushPendingThumbs()` promotes ready `sf::Image` results to `sf::Texture` each frame in `update()`
 - Sorted newest-first by file modification time
-- Rendered as a 124 px strip at the bottom of the panel; clicking a thumbnail selects it and loads its full image into `resultTexture`
-- The selected preview image is framed inside a dedicated preview surface rather than floating on the panel background
-- The action buttons live inside a dedicated bottom action row sized by the host layout
 
-**Button layout when `resultLoaded`** (left → right, bottom of panel):  
-- `[Edit]` · `[Delete]` · `[Generate / Edit Image]`
+**Single interaction model** (`renderGallery()`): the gallery has one selection gesture — **click a thumbnail** — plus **mouse-wheel scroll** over the gallery region. The old duplicate `< >` arrow pairs (one flanking the preview, one paging the strip) were removed. Two view modes share the same renderer, toggled by the header's **Grid view / Collapse** button (`btnGalleryExpand_`):
+- **Strip** (default, `galleryExpanded_ = false`): a single horizontal row pinned above the action bar; wheel scrolls horizontally. The preview image + a `filename · WxH · N of M` caption sit above it.
+- **Grid** (`galleryExpanded_ = true`): a multi-row wall that takes over the panel body (preview hidden); wheel scrolls vertically.
+- Drawing is clipped to the scroll region via a temporary `sf::View` (viewport = the content rect) so scrolled thumbnails don't overdraw. `galleryScroll_`/`galleryScrollMax_` track the offset; the selection is scrolled into view once when it changes (`lastSelectedIndex_`). A thin scrollbar hint is drawn when content overflows.
+- The selected thumbnail gets a full teal frame + a corner tick badge (not a subtle 1px/2px border difference).
+- Wheel events reach the panel because `SettingsPanel::handleEvent` returns false for wheel not over its text areas, so the controller's routing chain falls through to `resultPanel.handleEvent`.
+
+**Deselect** (`deselectRequested`): two gestures unselect the current image and drop out of img2img edit mode — the `×` button on the preview's top-right corner (`btnDeselect_`), or clicking the already-selected thumbnail again. The controller responds by calling `selectGalleryImage(view, -1)` and clearing `generationParams.initImagePath`.
+
+**Button layout when `resultLoaded`** (bottom-left of panel):  
+- `[Edit]` · `[Delete]` — both act on the selected result. The action bar is hidden when no image is selected. Generate lives at the bottom of the settings rail (see SettingsPanel).
 
 - `[Edit]`: sets `improveRequested`; the controller attaches `displayedImagePath` as the input image **in place** (setting `generationParams.initImagePath`, defaulting strength to 0.5) — no screen switch. The screen is now in img2img mode.
 - `[Delete]`: sets `deleteRequested`; controller canonicalizes the path, verifies it is inside `config.outputDir`, removes the file, then calls `refreshGallery()`

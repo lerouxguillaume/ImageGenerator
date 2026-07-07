@@ -180,7 +180,7 @@ static std::vector<ResultPanel::GalleryItem> buildGalleryItems(
     std::vector<ResultPanel::GalleryItem> gallery;
     gallery.reserve(entries.size());
     for (const auto& entry : entries)
-        gallery.push_back({entry.path, entry.filename, nullptr, -1.f, false, false, false});
+        gallery.push_back({entry.path, entry.filename, nullptr, -1.f});
     return gallery;
 }
 
@@ -605,17 +605,24 @@ void ImageGeneratorController::handleEvent(const sf::Event& e, sf::RenderWindow&
             view.settingsPanel.seedInputActive) {
             view.llmBar.instructionArea.setActive(false);
         }
+        // Generate / Edit Image is the rail's primary action.
+        if (view.settingsPanel.generateRequested) {
+            view.settingsPanel.generateRequested = false;
+            launchGeneration(view);
+        }
         return;
     }
 
     if (view.resultPanel.handleEvent(e)) {
+        // Deselect: unselect the image and drop out of img2img edit mode.
+        if (view.resultPanel.deselectRequested) {
+            view.resultPanel.deselectRequested = false;
+            selectGalleryImage(view, -1);
+            view.settingsPanel.generationParams.initImagePath.clear();
+        }
         const std::string selectedPath = view.resultPanel.getSelectedImagePath();
         if (!selectedPath.empty() && selectedPath != view.resultPanel.displayedImagePath) {
             selectGalleryImage(view, view.resultPanel.selectedIndex);
-        }
-        if (view.resultPanel.generateRequested) {
-            view.resultPanel.generateRequested = false;
-            launchGeneration(view);
         }
         // "Edit" on a result attaches it as the input image in-place → img2img.
         if (view.resultPanel.improveRequested) {
@@ -791,10 +798,6 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
                 refreshGallery(view, rp.lastImagePath);
         }
     }
-
-    // Reflect edit-vs-generate mode on the primary action button.
-    rp.generateButtonLabel =
-        sp.generationParams.initImagePath.empty() ? "Generate" : "Edit Image";
 
     // Sync preset list in menu bar (cheap — only name/id comparison needed)
     view.menuBar.setPresets(presetManager.getAllPresets(), sp.activePresetId);

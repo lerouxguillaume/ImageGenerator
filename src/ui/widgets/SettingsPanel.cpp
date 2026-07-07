@@ -92,220 +92,247 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
     const auto& theme = Theme::instance();
     const auto& colors = theme.colors();
     const auto& metrics = theme.metrics();
-    const auto& type = theme.typography();
     const float x  = rect_.left;
     const float pw = rect_.width;       // panel width
     const float pad  = static_cast<float>(metrics.pad);
-    const float fw = pw - pad * 2.f;    // field width inside padding
 
     // Panel background with right border
     drawRect(win, rect_, colors.panel2, colors.border, metrics.borderWidth);
     drawRect(win, {x + 1.f, rect_.top + 1.f, pw - 2.f, rect_.height - 2.f}, colors.panel, sf::Color::Transparent, 0.f);
 
-    float y = rect_.top + pad * 2.f;
+    // Card geometry: cards are inset from the rail edges; content is inset again.
+    const float cardX = x + pad;
+    const float cardW = pw - pad * 2.f;
+    const float cinX  = cardX + 12.f;   // inner content x
+    const float cinW  = cardW - 24.f;   // inner content width
+    constexpr float cardGap = 10.f;
 
-    // Model selector + LoRA button
+    // Uppercase micro-label + framed body. Returns the content-start y (below header).
+    auto drawCard = [&](float top, float h, const std::string& title) -> float {
+        drawRect(win, {cardX, top, cardW, h}, colors.panel2, colors.border, metrics.borderWidth);
+        drawText(win, font, title, colors.muted, cinX, top + 11.f, 10);
+        return top + 32.f;
+    };
+    // Rectangular pill toggle (SFML has no rounded rects; matches the app's style).
+    auto drawSwitch = [&](const sf::FloatRect& box, bool on, bool enabled) {
+        drawRect(win, box, on ? colors.panel : colors.surfaceInset,
+                 on ? colors.borderHi : colors.border, 1.f);
+        const float knob = box.height - 4.f;
+        const float kx   = on ? box.left + box.width - knob - 2.f : box.left + 2.f;
+        drawRect(win, {kx, box.top + 2.f, knob, knob},
+                 on ? colors.gold : (enabled ? colors.muted : colors.border),
+                 sf::Color::Transparent, 0.f);
+    };
+
+    float y = rect_.top + pad + 2.f;
+
+    // ── Model & LoRA card ─────────────────────────────────────────────────────
     {
+        const float top   = y;
+        const float inner = drawCard(top, 106.f, "MODEL & LORA");
         const ModelEntry* selected = currentModel();
-        const std::string displayName = selected ? selected->displayName : "(no models found)";
-        const std::string label = displayName + (showModelDropdown ? "  ^" : "  v");
-        drawText(win, font, "Model:", colors.muted, x + pad, y + 4.f, type.body);
-        btnModelDropdown_ = {x + pad + 52.f, y, 260.f, 22.f};
-        drawButton(win, btnModelDropdown_, label, colors.panel,
-                   showModelDropdown ? colors.goldLt : colors.text, false, type.body, font);
 
+        // Full-width dropdown styled as an input, with an inline arch badge.
+        btnModelDropdown_ = {cinX, inner, cinW, 30.f};
+        drawRect(win, btnModelDropdown_, colors.surfaceInset,
+                 showModelDropdown ? colors.borderHi : colors.border, 1.f);
+        const std::string dn = selected ? selected->displayName : "(no models found)";
+        drawText(win, font, dn, showModelDropdown ? colors.goldLt : colors.text,
+                 cinX + 10.f, inner + 8.f, 13);
+        drawTextR(win, font, showModelDropdown ? "\xe2\x96\xb4" : "\xe2\x96\xbe",
+                  colors.muted, cinX + cinW - 10.f, inner + 8.f, 11);
+        if (selected) {
+            const std::string badge = selected->type == ModelType::SDXL ? "SDXL" : "SD1.5";
+            drawTextR(win, font, badge, colors.gold, cinX + cinW - 26.f, inner + 8.f, 10);
+        }
+
+        const float ly = inner + 38.f;
         if (currentModelLoraCompatible()) {
             const int numSel = static_cast<int>(std::count(loraSelected.begin(), loraSelected.end(), true));
-            const std::string loraLabel = "LoRA (" + std::to_string(numSel) + ")";
-            btnLoraPanel_ = {x + pad + 324.f, y, 110.f, 22.f};
-            drawButton(win, btnLoraPanel_, loraLabel, colors.panel,
-                       showLoraPanel ? colors.goldLt : colors.text, false, type.body, font);
+            btnLoraPanel_ = {cinX, ly, 150.f, 26.f};
+            drawButton(win, btnLoraPanel_, "LoRA (" + std::to_string(numSel) + ")",
+                       colors.surfaceInset, showLoraPanel ? colors.goldLt : colors.text, false, 12, font);
         } else {
             btnLoraPanel_ = {};
             showLoraPanel = false;
-            drawText(win, font, "No LoRA", colors.muted, x + pad + 336.f, y + 5.f, type.body);
+            drawText(win, font, "No LoRA for this model", colors.muted, cinX, ly + 6.f, 11);
         }
+        y = top + 106.f + cardGap;
     }
-    y += 30.f;
 
-    constexpr float fieldH    = 86.f;
-    constexpr float fieldH_sm = 68.f;
+    // ── Prompt card ───────────────────────────────────────────────────────────
+    constexpr float fieldH    = 82.f;
+    constexpr float fieldH_sm = 56.f;
     {
-        drawText(win, font, "Positive prompt:", colors.muted, x + pad, y, 12);
-        y += 18.f;
-        positiveArea.setRect({x + pad, y, fw, fieldH});
+        // Build the chip list first so the card height can account for it.
+        struct Chip { std::string label; sf::Color border; sf::Color text; };
+        std::vector<Chip> chips;
+        if (currentDsl.subject) {
+            const auto& subj = *currentDsl.subject;
+            std::string lbl  = subj.value;
+            if (std::abs(subj.weight - 1.0f) > 0.01f) {
+                char buf[16]; std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight); lbl += buf;
+            }
+            chips.push_back({lbl, colors.gold, colors.goldLt});
+        }
+        for (const auto& tok : currentDsl.positive) {
+            std::string lbl = tok.value;
+            if (std::abs(tok.weight - 1.0f) > 0.01f) {
+                char buf[16]; std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight); lbl += buf;
+            }
+            const sf::Color border = (tok.weight > 1.f) ? colors.blueLt
+                                   : (tok.weight < 1.f) ? colors.muted : colors.border;
+            chips.push_back({lbl, border, colors.text});
+        }
+
+        constexpr float chipH = 20.f, chipStep = 22.f, chipPadX = 6.f, chipGap = 4.f;
+        sf::Text measure; measure.setFont(font); measure.setCharacterSize(11);
+        int chipRows = 0;
+        if (!chips.empty()) {
+            chipRows = 1;
+            float cxp = cinX;
+            for (const auto& c : chips) {
+                measure.setString(c.label);
+                const float cw = measure.getLocalBounds().width + chipPadX * 2.f;
+                if (cxp + cw > cinX + cinW && cxp > cinX) {
+                    if (++chipRows > 2) { chipRows = 2; break; }
+                    cxp = cinX;
+                }
+                cxp += cw + chipGap;
+            }
+        }
+
+        const float chipsBlockH = (chipRows > 0) ? (6.f + static_cast<float>(chipRows) * chipStep) : 6.f;
+        const bool  hasCompiled = !compiledPreview.empty();
+        const float contentH = 16.f + fieldH + chipsBlockH + 16.f + fieldH_sm + (hasCompiled ? 18.f : 0.f);
+        const float cardH    = 32.f + contentH + 10.f;
+
+        const float top   = y;
+        const float inner = drawCard(top, cardH, "PROMPT");
+
+        float iy = inner;
+        drawText(win, font, "Positive", colors.muted, cinX, iy, 11);
+        iy += 16.f;
+        positiveArea.setRect({cinX, iy, cinW, fieldH});
         positiveArea.render(win, font);
-        y += fieldH + 4.f;
+        iy += fieldH;
 
-        if (currentDsl.subject || !currentDsl.positive.empty()) {
-            constexpr float chipH    = 20.f;
-            constexpr float chipPadX =  6.f;
-            constexpr float chipGap  =  4.f;
-            const float     startY   = y;
-            float cx = x + pad;
-            float cy = startY;
-            int   rows = 1;
-
-            sf::Text measure;
-            measure.setFont(font);
-            measure.setCharacterSize(11);
-
-            struct Chip { std::string label; sf::Color border; sf::Color text; };
-            std::vector<Chip> chips;
-
-            if (currentDsl.subject) {
-                const auto& subj = *currentDsl.subject;
-                std::string lbl  = subj.value;
-                if (std::abs(subj.weight - 1.0f) > 0.01f) {
-                    char buf[16];
-                    std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", subj.weight);
-                    lbl += buf;
-                }
-                chips.push_back({lbl, colors.gold, colors.goldLt});
-            }
-
-            for (const auto& tok : currentDsl.positive) {
-                std::string lbl = tok.value;
-                if (std::abs(tok.weight - 1.0f) > 0.01f) {
-                    char buf[16];
-                    std::snprintf(buf, sizeof(buf), " %.2g\xc3\x97", tok.weight);
-                    lbl += buf;
-                }
-                const sf::Color border = (tok.weight > 1.f) ? colors.blueLt
-                                       : (tok.weight < 1.f) ? colors.muted
-                                                             : colors.border;
-                chips.push_back({lbl, border, colors.text});
-            }
-
+        if (chipRows > 0) {
+            iy += 6.f;
+            float cx = cinX, cy = iy; int rows = 1;
             for (const auto& chip : chips) {
                 measure.setString(chip.label);
                 const float cw = measure.getLocalBounds().width + chipPadX * 2.f;
-                if (cx + cw > x + pad + fw && cx > x + pad) {
-                    cy += chipH + 2.f;
-                    cx  = x + pad;
+                if (cx + cw > cinX + cinW && cx > cinX) {
+                    cy += chipStep; cx = cinX;
                     if (++rows > 2) break;
                 }
-                drawRect(win, {cx, cy, cw, chipH}, colors.panel2, chip.border, 1.f);
+                drawRect(win, {cx, cy, cw, chipH}, colors.panel, chip.border, 1.f);
                 drawText(win, font, chip.label, chip.text, cx + chipPadX, cy + 4.f, 11);
                 cx += cw + chipGap;
             }
-            y = startY + static_cast<float>(rows) * (chipH + 2.f) + 4.f;
+            iy += static_cast<float>(chipRows) * chipStep;
         } else {
-            y += pad * 2.f;
+            iy += 6.f;
         }
 
-        drawText(win, font, "Negative prompt:", colors.muted, x + pad, y, 12);
-        y += 18.f;
-        negativeArea.setRect({x + pad, y, fw, fieldH_sm});
+        drawText(win, font, "Negative", colors.muted, cinX, iy, 11);
+        iy += 16.f;
+        negativeArea.setRect({cinX, iy, cinW, fieldH_sm});
         negativeArea.setTextColor(colors.muted);
         negativeArea.render(win, font);
-        y += fieldH_sm + 4.f;
+        iy += fieldH_sm;
 
-        if (!compiledPreview.empty()) {
-            sf::Text measure;
-            measure.setFont(font);
+        if (hasCompiled) {
             measure.setCharacterSize(10);
-            const float maxW = fw - 4.f;
             std::string txt = compiledPreview;
             measure.setString(txt);
-            while (!txt.empty() && measure.getLocalBounds().width > maxW) {
-                txt.pop_back();
-                measure.setString(txt);
+            while (!txt.empty() && measure.getLocalBounds().width > cinW - 14.f) {
+                txt.pop_back(); measure.setString(txt);
             }
             if (txt.size() < compiledPreview.size()) txt += "\xe2\x80\xa6";
-            drawText(win, font, "\xe2\x86\x92 " + txt, colors.muted, x + pad, y, 10);
-            y += 16.f;
+            drawText(win, font, "\xe2\x86\x92 " + txt, colors.muted, cinX, iy + 2.f, 10);
         }
-
-        y += pad * 2.f;
+        y = top + cardH + cardGap;
     }
 
-    // ── Sliders (always visible) ──────────────────────────────────────────────
-    const float sliderW = fw;
-    const float sliderH = 18.f;
-
-    // Steps slider (range 5–50)
-    stepsSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-    const float stepsNorm = (generationParams.numSteps - 5.f) / 45.f;
-    drawSlider(win, font, stepsSliderTrack_, std::clamp(stepsNorm, 0.f, 1.f),
-               "Steps", std::to_string(generationParams.numSteps));
-    y += 34.f;
-
-    // CFG Scale slider (range 1.0–20.0)
-    cfgSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-    const float cfgNorm = (generationParams.guidanceScale - 1.0f) / 19.0f;
-    char cfgBuf[16];
-    std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", generationParams.guidanceScale);
-    drawSlider(win, font, cfgSliderTrack_, std::clamp(cfgNorm, 0.f, 1.f), "CFG Scale", cfgBuf);
-    y += 34.f;
-
-    // Images slider (range 1–10)
-    imagesSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-    const float imagesNorm = (generationParams.numImages - 1.f) / 9.f;
-    drawSlider(win, font, imagesSliderTrack_, std::clamp(imagesNorm, 0.f, 1.f),
-               "Images", std::to_string(generationParams.numImages));
-    y += 34.f;
+    const float sliderH = 16.f;
 
     btnStrengthSubtle_ = {};
     btnStrengthMedium_ = {};
     btnStrengthStrong_ = {};
 
-    // ── Img2img edit controls (shown only when an input image is attached) ────
+    // ── Editing source card (img2img — shown only with an input image) ────────
     if (!generationParams.initImagePath.empty()) {
-        // Edit-mode banner: makes it obvious the prompt now edits this image.
-        {
-            const std::string stem =
-                std::filesystem::path(generationParams.initImagePath).filename().string();
-            const std::string truncated = stem.size() > 24 ? stem.substr(0, 22) + "\xe2\x80\xa6" : stem;
-            const sf::FloatRect bannerRect{x + pad, y, sliderW, 24.f};
-            drawRect(win, bannerRect, colors.panel2, colors.blueLt, 1.f);
-            drawText(win, font, "\xe2\x9c\x8e Editing: " + truncated, colors.blueLt, x + pad + 8.f, y + 5.f, 11);
-            btnClearInit_ = {x + pad + sliderW - 40.f, y + 3.f, 34.f, 18.f};
-            drawButton(win, btnClearInit_, "\xc3\x97", colors.panel, colors.muted, false, 12, font);
-            y += 32.f;
-        }
+        const bool hasVae = currentModelVaeEncoderAvailable();
+        const float cardH = hasVae ? 32.f + 28.f + 34.f + 10.f : 32.f + 22.f + 10.f;
+        const float top   = y;
+        const float inner = drawCard(top, cardH, "EDITING SOURCE");
 
-        if (currentModelVaeEncoderAvailable()) {
-            drawText(win, font, "Strength presets:", colors.muted, x + pad, y + 4.f, 11);
+        const std::string stem =
+            std::filesystem::path(generationParams.initImagePath).filename().string();
+        const std::string truncated = stem.size() > 20 ? stem.substr(0, 18) + "\xe2\x80\xa6" : stem;
+        btnClearInit_ = {cardX + cardW - 30.f, top + 9.f, 20.f, 18.f};
+        drawButton(win, btnClearInit_, "\xc3\x97", colors.panel, colors.muted, false, 12, font);
+        drawTextR(win, font, truncated, colors.blueLt, btnClearInit_.left - 8.f, top + 11.f, 10);
+
+        if (hasVae) {
             const sf::Color subtleCol = generationParams.strength <= 0.35f ? colors.goldLt : colors.text;
             const sf::Color mediumCol = (generationParams.strength > 0.35f && generationParams.strength < 0.7f)
                 ? colors.goldLt : colors.text;
             const sf::Color strongCol = generationParams.strength >= 0.7f ? colors.goldLt : colors.text;
-            btnStrengthSubtle_ = {x + pad + 110.f, y, 68.f, 22.f};
-            btnStrengthMedium_ = {x + pad + 184.f, y, 72.f, 22.f};
-            btnStrengthStrong_ = {x + pad + 262.f, y, 68.f, 22.f};
-            drawButton(win, btnStrengthSubtle_, "Subtle", colors.panel2, subtleCol, false, 11, font);
-            drawButton(win, btnStrengthMedium_, "Medium", colors.panel2, mediumCol, false, 11, font);
-            drawButton(win, btnStrengthStrong_, "Strong", colors.panel2, strongCol, false, 11, font);
-            y += 28.f;
+            const float segW = (cinW - 16.f) / 3.f;
+            btnStrengthSubtle_ = {cinX,                       inner, segW, 24.f};
+            btnStrengthMedium_ = {cinX + segW + 8.f,          inner, segW, 24.f};
+            btnStrengthStrong_ = {cinX + (segW + 8.f) * 2.f,  inner, segW, 24.f};
+            drawButton(win, btnStrengthSubtle_, "Subtle", colors.surfaceInset, subtleCol, false, 11, font);
+            drawButton(win, btnStrengthMedium_, "Medium", colors.surfaceInset, mediumCol, false, 11, font);
+            drawButton(win, btnStrengthStrong_, "Strong", colors.surfaceInset, strongCol, false, 11, font);
 
-            strengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
+            strengthSliderTrack_ = {cinX, inner + 28.f + 14.f, cinW, sliderH};
             const float strengthNorm = (generationParams.strength - 0.05f) / 0.95f;
-            char strBuf[8];
-            std::snprintf(strBuf, sizeof(strBuf), "%.2f", generationParams.strength);
-            drawSlider(win, font, strengthSliderTrack_, std::clamp(strengthNorm, 0.f, 1.f),
-                       "Strength", strBuf);
-            y += 34.f;
+            char strBuf[8]; std::snprintf(strBuf, sizeof(strBuf), "%.2f", generationParams.strength);
+            drawSlider(win, font, strengthSliderTrack_, std::clamp(strengthNorm, 0.f, 1.f), "Strength", strBuf);
         } else {
-            btnStrengthSubtle_ = {};
-            btnStrengthMedium_ = {};
-            btnStrengthStrong_ = {};
+            btnStrengthSubtle_ = {}; btnStrengthMedium_ = {}; btnStrengthStrong_ = {};
             strengthSliderTrack_ = {};
-            drawText(win, font, "img2img not supported by this model", colors.muted, x + pad, y + 6.f, 11);
-            y += 24.f;
+            drawText(win, font, "img2img not supported by this model", colors.muted, cinX, inner + 4.f, 11);
         }
+        y = top + cardH + cardGap;
     } else {
         btnClearInit_        = {};
         strengthSliderTrack_ = {};
-        y += 10.f;
     }
 
-    // ── Hires fix ─────────────────────────────────────────────────────────────
-    // Shown for any selected model (SD1.5 and SDXL). Gate mirrors the LoRA pattern:
-    // hiresCapable (derived from the model's graphs at import) → live controls; a
-    // model lacking the flag (any pre-dynamic export, either arch) → disabled
-    // toggle + re-import hint. The scale max is per-arch — SDXL is capped at
-    // kSdxlMaxHiresScale (VRAM ceiling), SD1.5 keeps the full 1.0–2.0 range.
+    // ── Sampling card ─────────────────────────────────────────────────────────
+    {
+        const float top   = y;
+        const float inner = drawCard(top, 32.f + 34.f * 3.f + 8.f, "SAMPLING");
+        float sy = inner + 14.f;
+
+        stepsSliderTrack_ = {cinX, sy, cinW, sliderH};
+        drawSlider(win, font, stepsSliderTrack_,
+                   std::clamp((generationParams.numSteps - 5.f) / 45.f, 0.f, 1.f),
+                   "Steps", std::to_string(generationParams.numSteps));
+        sy += 34.f;
+
+        cfgSliderTrack_ = {cinX, sy, cinW, sliderH};
+        char cfgBuf[16]; std::snprintf(cfgBuf, sizeof(cfgBuf), "%.1f", generationParams.guidanceScale);
+        drawSlider(win, font, cfgSliderTrack_,
+                   std::clamp((generationParams.guidanceScale - 1.0f) / 19.0f, 0.f, 1.f), "CFG scale", cfgBuf);
+        sy += 34.f;
+
+        imagesSliderTrack_ = {cinX, sy, cinW, sliderH};
+        drawSlider(win, font, imagesSliderTrack_,
+                   std::clamp((generationParams.numImages - 1.f) / 9.f, 0.f, 1.f),
+                   "Images", std::to_string(generationParams.numImages));
+        y = top + 32.f + 34.f * 3.f + 8.f + cardGap;
+    }
+
+    // ── Hires fix card ────────────────────────────────────────────────────────
+    // Gate mirrors the LoRA pattern: hiresCapable (derived from the model's graphs
+    // at import) → live controls; a model lacking the flag → disabled + re-import
+    // hint. Scale max is per-arch — SDXL capped at kSdxlMaxHiresScale (VRAM ceiling).
     if (currentModel() != nullptr) {
         const bool  capable  = currentModelHiresCapable();
         const bool  isXL     = currentModelType() == ModelType::SDXL;
@@ -313,68 +340,53 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         auto&       hires    = generationParams.hires;
         const bool  on       = capable && hires.enabled;
 
-        constexpr float cbSize = 14.f;
-        btnHiresToggle_ = {x + pad, y, 120.f, 20.f};
-        drawRect(win, {x + pad, y + 2.f, cbSize, cbSize},
-                 on ? colors.goldLt : colors.surfaceInset, colors.border, 1.f);
-        drawText(win, font, "Hires fix", capable ? colors.text : colors.muted,
-                 x + pad + cbSize + 8.f, y + 3.f, 12);
+        const float cardH = on ? 32.f + 24.f + 8.f + 34.f + 34.f + 30.f + 8.f
+                               : 32.f + 24.f + 8.f;
+        const float top   = y;
+        const float inner = drawCard(top, cardH, "HIRES FIX");
+
+        // Whole row is the hit target; switch pill sits on the left.
+        btnHiresToggle_ = {cinX, inner, cinW, 22.f};
+        drawSwitch({cinX, inner, 38.f, 21.f}, on, capable);
+        drawText(win, font, "Upscale after denoise", capable ? colors.text : colors.muted,
+                 cinX + 48.f, inner + 4.f, 12);
         if (!capable)
-            drawText(win, font, "\xe2\x80\x94 re-import this model to enable",
-                     colors.muted, x + pad + cbSize + 78.f, y + 4.f, 10);
-        y += 26.f;
+            drawTextR(win, font, "re-import to enable", colors.muted, cinX + cinW, inner + 5.f, 10);
 
         if (on) {
-            // Scale slider (1.0–scaleMax, step 0.1). Clamp the displayed value to
-            // the per-arch max so a value carried over from an SD1.5 selection (or
-            // a preset) reads consistently on SDXL; the pipeline clamps too.
+            float hy = inner + 24.f + 8.f + 14.f;
             const float shownScale = std::min(hires.scale, scaleMax);
-            hiresScaleSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-            const float scaleNorm = (shownScale - 1.0f) / (scaleMax - 1.0f);
-            char scBuf[16];
-            std::snprintf(scBuf, sizeof(scBuf), "%.1f\xc3\x97", shownScale);
-            drawSlider(win, font, hiresScaleSliderTrack_, std::clamp(scaleNorm, 0.f, 1.f),
-                       "Hires scale", scBuf);
-            y += 34.f;
+            hiresScaleSliderTrack_ = {cinX, hy, cinW, sliderH};
+            char scBuf[16]; std::snprintf(scBuf, sizeof(scBuf), "%.1f\xc3\x97", shownScale);
+            drawSlider(win, font, hiresScaleSliderTrack_,
+                       std::clamp((shownScale - 1.0f) / (scaleMax - 1.0f), 0.f, 1.f), "Hires scale", scBuf);
+            hy += 34.f;
 
-            // Strength slider (0.3–0.7, step 0.05)
-            hiresStrengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-            const float strNorm = (hires.strength - 0.3f) / 0.4f;
-            char hsBuf[8];
-            std::snprintf(hsBuf, sizeof(hsBuf), "%.2f", hires.strength);
-            drawSlider(win, font, hiresStrengthSliderTrack_, std::clamp(strNorm, 0.f, 1.f),
-                       "Hires strength", hsBuf);
-            y += 34.f;
+            hiresStrengthSliderTrack_ = {cinX, hy, cinW, sliderH};
+            char hsBuf[8]; std::snprintf(hsBuf, sizeof(hsBuf), "%.2f", hires.strength);
+            drawSlider(win, font, hiresStrengthSliderTrack_,
+                       std::clamp((hires.strength - 0.3f) / 0.4f, 0.f, 1.f), "Hires strength", hsBuf);
+            hy += 30.f;
 
-            // Upscale mode (Pixel|Latent). Pixel re-encodes the upscaled image via
-            // the VAE encoder (sharp, adds detail) and needs a dynamic-shape encoder;
-            // Latent bilinear-upscales the latent (softer, off-manifold) and works on
-            // any hires-capable model. Gate Pixel on pixelHiresCapable. Display-only,
-            // like the scale slider's clamp: a static-encoder model shows Latent as
-            // the effective mode WITHOUT mutating the stored param — the controller
-            // normalizes the request to Latent at job-build (mirrors the defensive
-            // LoRA-clear), so what runs matches what's shown. The pipeline has NO
-            // silent fallback, so an ungated Pixel request would hard-error there.
             const bool pixelCapable = currentModelPixelHiresCapable();
             const UpscaleMode effMode = pixelCapable ? hires.mode : UpscaleMode::Latent;
-            drawText(win, font, "Upscale:", colors.muted, x + pad, y + 5.f, 11);
-            btnHiresModePixel_  = {x + pad + 62.f,  y, 62.f, 22.f};
-            btnHiresModeLatent_ = {x + pad + 130.f, y, 62.f, 22.f};
+            drawText(win, font, "Upscale", colors.muted, cinX, hy + 5.f, 10);
+            btnHiresModePixel_  = {cinX + 62.f,  hy, 64.f, 22.f};
+            btnHiresModeLatent_ = {cinX + 132.f, hy, 64.f, 22.f};
             const sf::Color pixelCol  = !pixelCapable ? colors.muted
                                         : (effMode == UpscaleMode::Pixel ? colors.goldLt : colors.text);
             const sf::Color latentCol = effMode == UpscaleMode::Latent ? colors.goldLt : colors.text;
-            drawButton(win, btnHiresModePixel_,  "Pixel",  colors.panel2, pixelCol,  !pixelCapable, 11, font);
-            drawButton(win, btnHiresModeLatent_, "Latent", colors.panel2, latentCol, false, 11, font);
+            drawButton(win, btnHiresModePixel_,  "Pixel",  colors.surfaceInset, pixelCol,  !pixelCapable, 11, font);
+            drawButton(win, btnHiresModeLatent_, "Latent", colors.surfaceInset, latentCol, false, 11, font);
             if (!pixelCapable)
-                drawText(win, font, "\xe2\x80\x94 re-import for Pixel",
-                         colors.muted, x + pad + 198.f, y + 5.f, 10);
-            y += 28.f;
+                drawTextR(win, font, "re-import for Pixel", colors.muted, cinX + cinW, hy + 5.f, 10);
         } else {
             hiresScaleSliderTrack_    = {};
             hiresStrengthSliderTrack_ = {};
             btnHiresModePixel_        = {};
             btnHiresModeLatent_       = {};
         }
+        y = top + cardH + cardGap;
     } else {
         btnHiresToggle_           = {};
         hiresScaleSliderTrack_    = {};
@@ -383,14 +395,25 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         btnHiresModeLatent_       = {};
     }
 
-    // Seed input
-    drawText(win, font, "Seed:", colors.muted, x + pad, y + 6.f, 12);
-    drawText(win, font, "(empty = random)", colors.border, x + pad + 44.f, y + 6.f, 11);
-    constexpr float seedFieldW = 160.f;
-    constexpr float seedFieldH = 24.f;
-    seedField_ = {x + pad + sliderW - seedFieldW, y, seedFieldW, seedFieldH};
-    drawSingleLineField(win, font, seedField_, seedInput, seedInputCursor, seedInputActive);
-    y += 34.f;
+    // ── Seed card ─────────────────────────────────────────────────────────────
+    {
+        const float top   = y;
+        const float inner = drawCard(top, 32.f + 30.f + 10.f, "SEED");
+        seedField_ = {cinX, inner, cinW, 30.f};
+        drawSingleLineField(win, font, seedField_, seedInput, seedInputCursor, seedInputActive);
+        if (seedInput.empty() && !seedInputActive)
+            drawText(win, font, "empty = random", colors.muted, cinX + 8.f, inner + 8.f, 12);
+        y = top + 32.f + 30.f + 10.f + cardGap;
+    }
+
+    // ── Primary action: Generate / Edit Image (pinned to the rail bottom) ──────
+    {
+        constexpr float genH = 44.f;
+        const float genY = std::max(y, rect_.top + rect_.height - genH - pad);
+        btnGenerate_ = {cardX, genY, cardW, genH};
+        const char* label = generationParams.initImagePath.empty() ? "Generate" : "Edit Image";
+        drawButton(win, btnGenerate_, label, colors.blue, colors.goldLt, false, 14, font);
+    }
 
     // ── Model dropdown list (overlay, drawn last so it renders on top) ────────
     if (showModelDropdown && !models.empty()) {
@@ -517,6 +540,9 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
             }
         }
     }
+
+    // Primary action button
+    if (btnGenerate_.contains(pos)) { generateRequested = true; return true; }
 
     // Slider tracks — initiate drag
     if (stepsSliderTrack_.contains(pos))    { draggingSlider_ = DraggingSlider::Steps;    return true; }

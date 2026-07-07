@@ -84,6 +84,11 @@ public:
     Prompt      currentDsl;       // parsed DSL — drives token chip display
     std::string compiledPreview;  // non-empty only for SD1.5 (shows compiled positive)
 
+    // ── Primary action ────────────────────────────────────────────────────────
+    // The Generate / Edit Image button lives at the bottom of this rail; the
+    // controller checks generateRequested after handleEvent (mirrors ResultPanel).
+    bool generateRequested = false;
+
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
     void render(sf::RenderWindow& win, sf::Font& font);
@@ -119,6 +124,7 @@ private:
     sf::FloatRect btnStrengthMedium_;
     sf::FloatRect btnStrengthStrong_;
     sf::FloatRect seedField_;
+    sf::FloatRect btnGenerate_;   // primary action, pinned to the rail bottom
 
     // Slider drag state
     DraggingSlider draggingSlider_ = DraggingSlider::None;

@@ -15,9 +15,6 @@ public:
         std::string                 filename;
         std::shared_ptr<sf::Texture> thumbnail;
         float                       score = -1.f;
-        bool                        recommended = false;
-        bool                        usable = false;
-        bool                        near = false;
     };
 
     // ── Display ───────────────────────────────────────────────────────────────
@@ -27,7 +24,6 @@ public:
     std::vector<GalleryItem> gallery;
     int                      selectedIndex = -1;
     bool                     showImproveButton = true;
-    std::string              generateButtonLabel = "Generate";
 
     // ── Generation state (shared with background thread via atomics) ──────────
     bool                         generating          = false;
@@ -52,9 +48,9 @@ public:
     std::vector<ValidationChip> validationChips;
 
     // Action flags — set by handleEvent, cleared by controller
-    bool generateRequested = false;
     bool improveRequested  = false;
     bool deleteRequested   = false;
+    bool deselectRequested = false;  // unselect the current image → exit edit mode
 
     // ── Interface ─────────────────────────────────────────────────────────────
     void setRect(const sf::FloatRect& rect);
@@ -68,20 +64,20 @@ public:
 
 private:
     sf::FloatRect rect_;
-    sf::FloatRect btnGenerate_;
     sf::FloatRect btnCancelGenerate_;
     sf::FloatRect btnImprove_;
     sf::FloatRect btnDelete_;
-    sf::FloatRect btnPrevImage_;
-    sf::FloatRect btnNextImage_;
-    sf::FloatRect btnPrevThumbs_;
-    sf::FloatRect btnNextThumbs_;
-    std::vector<sf::FloatRect> thumbnailRects_;
-    std::vector<int> thumbnailIndices_;
-    int thumbnailScrollOffset_ = 0;
-    int lastVisibleSelectedIndex_ = -1;
+    sf::FloatRect btnDeselect_;                   // × on the preview → unselect
+    sf::FloatRect btnGalleryExpand_;              // strip ⇄ grid toggle
 
-    void renderThumbnailStrip(sf::RenderWindow& win, sf::Font& font,
-                               float stripX, float stripY, float stripW);
-    void ensureSelectedThumbnailVisible(int visibleCount);
+    // Single interaction model: click a thumbnail to select; wheel to scroll.
+    std::vector<sf::FloatRect> thumbnailRects_;   // on-screen rects of visible thumbs
+    std::vector<int> thumbnailIndices_;           // gallery index for each visible thumb
+    sf::FloatRect galleryRegion_;                 // scrollable area (for wheel hit-test)
+    bool  galleryExpanded_ = false;              // false = bottom strip, true = grid wall
+    float galleryScroll_   = 0.f;                 // px; horizontal in strip, vertical in grid
+    float galleryScrollMax_ = 0.f;                // clamp bound computed during render
+    int   lastSelectedIndex_ = -1;                // to auto-scroll selection into view once
+
+    void renderGallery(sf::RenderWindow& win, sf::Font& font, const sf::FloatRect& area);
 };

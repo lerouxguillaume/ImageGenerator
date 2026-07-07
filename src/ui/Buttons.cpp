@@ -23,7 +23,8 @@ void drawButton(sf::RenderTarget& rt, sf::FloatRect r, const std::string& label,
                       sf::Color::Transparent,
                       0.f);
     sf::Text t;
-    t.setFont(font); t.setString(label); t.setCharacterSize(sz);
+    // Labels are UTF-8; decode so multibyte glyphs (×, ▾, …) don't render as tofu.
+    t.setFont(font); t.setString(sf::String::fromUtf8(label.begin(), label.end())); t.setCharacterSize(sz);
     t.setFillColor(disabled ? colors.muted : tc);
     t.setStyle(sf::Text::Bold);
     t.setPosition(r.left + (r.width  - t.getLocalBounds().width)  / 2.f,
