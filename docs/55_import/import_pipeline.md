@@ -204,6 +204,7 @@ After export completes, `import_model.py` extends `model.json` with:
     "vae_encoder_available": true,
     "lora_compatible": true,
     "hires_capable": false,
+    "pixel_hires_capable": false,
     "verified": true,
     "components": {
       "text_encoder":   { "dtype": "fp32" },
@@ -226,6 +227,22 @@ treated as static, unlike `vae_encoder_available` / `lora_compatible` whose
 absent-key default is `true`. The hires feature (pipeline + UI gate) is
 arch-agnostic and keys off this flag; the SDXL pass additionally swaps per-pass
 `time_ids` and caps the scale at 1.5× (VRAM ceiling).
+
+`pixel_hires_capable` is a **second, finer** flag derived from the VAE **encoder**
+graph (`import_model.py::_detect_pixel_hires_capable`, probing the `image` input for
+dynamic H/W). Pixel-mode hires decodes the base, bicubic-upscales in RGB, and
+**re-encodes** — so it needs a dynamic-shape encoder on top of the dynamic UNet +
+decoder that `hires_capable` covers. A model can be `hires_capable` but **not**
+`pixel_hires_capable`: every SDXL export before the dynamic-encoder change (static
+1024 encoder) is exactly that. SD 1.5 (dynamic encoder) derives `true` automatically.
+The C++ side reads it into `ModelCapabilities::pixelHiresCapable` (absent-key default
+`false`); the UI gates the **Pixel** upscale-mode option on it (disabled + "re-import
+for Pixel" hint when absent) and forces the requested mode to **Latent** otherwise.
+The pipeline has **no silent fallback**: a pixel-mode request against a static encoder
+(possible only via preset/headless, since the UI gates it) hard-errors with a named
+cause — "needs a dynamic-shape VAE encoder … re-import … or switch to latent"
+(`SdPipeline.cpp` runPipeline catch), preserving the reproducibility contract that
+output must match the requested mode.
 
 ---
 

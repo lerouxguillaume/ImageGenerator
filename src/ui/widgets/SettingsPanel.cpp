@@ -345,14 +345,42 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
             drawSlider(win, font, hiresStrengthSliderTrack_, std::clamp(strNorm, 0.f, 1.f),
                        "Hires strength", hsBuf);
             y += 34.f;
+
+            // Upscale mode (Pixel|Latent). Pixel re-encodes the upscaled image via
+            // the VAE encoder (sharp, adds detail) and needs a dynamic-shape encoder;
+            // Latent bilinear-upscales the latent (softer, off-manifold) and works on
+            // any hires-capable model. Gate Pixel on pixelHiresCapable. Display-only,
+            // like the scale slider's clamp: a static-encoder model shows Latent as
+            // the effective mode WITHOUT mutating the stored param — the controller
+            // normalizes the request to Latent at job-build (mirrors the defensive
+            // LoRA-clear), so what runs matches what's shown. The pipeline has NO
+            // silent fallback, so an ungated Pixel request would hard-error there.
+            const bool pixelCapable = currentModelPixelHiresCapable();
+            const UpscaleMode effMode = pixelCapable ? hires.mode : UpscaleMode::Latent;
+            drawText(win, font, "Upscale:", colors.muted, x + pad, y + 5.f, 11);
+            btnHiresModePixel_  = {x + pad + 62.f,  y, 62.f, 22.f};
+            btnHiresModeLatent_ = {x + pad + 130.f, y, 62.f, 22.f};
+            const sf::Color pixelCol  = !pixelCapable ? colors.muted
+                                        : (effMode == UpscaleMode::Pixel ? colors.goldLt : colors.text);
+            const sf::Color latentCol = effMode == UpscaleMode::Latent ? colors.goldLt : colors.text;
+            drawButton(win, btnHiresModePixel_,  "Pixel",  colors.panel2, pixelCol,  !pixelCapable, 11, font);
+            drawButton(win, btnHiresModeLatent_, "Latent", colors.panel2, latentCol, false, 11, font);
+            if (!pixelCapable)
+                drawText(win, font, "\xe2\x80\x94 re-import for Pixel",
+                         colors.muted, x + pad + 198.f, y + 5.f, 10);
+            y += 28.f;
         } else {
             hiresScaleSliderTrack_    = {};
             hiresStrengthSliderTrack_ = {};
+            btnHiresModePixel_        = {};
+            btnHiresModeLatent_       = {};
         }
     } else {
         btnHiresToggle_           = {};
         hiresScaleSliderTrack_    = {};
         hiresStrengthSliderTrack_ = {};
+        btnHiresModePixel_        = {};
+        btnHiresModeLatent_       = {};
     }
 
     // Seed input
@@ -502,6 +530,19 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     if (btnHiresToggle_.contains(pos)) {
         if (currentModelHiresCapable())
             generationParams.hires.enabled = !generationParams.hires.enabled;
+        return true;
+    }
+
+    // Upscale-mode toggle. Pixel is selectable only on a pixel-hires-capable model
+    // (dynamic VAE encoder); Latent is always available. Consumes the click either
+    // way so a disabled Pixel press is a no-op, not a fall-through.
+    if (btnHiresModePixel_.contains(pos)) {
+        if (currentModelPixelHiresCapable())
+            generationParams.hires.mode = UpscaleMode::Pixel;
+        return true;
+    }
+    if (btnHiresModeLatent_.contains(pos)) {
+        generationParams.hires.mode = UpscaleMode::Latent;
         return true;
     }
 

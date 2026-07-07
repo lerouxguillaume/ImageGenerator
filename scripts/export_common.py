@@ -452,10 +452,11 @@ class SDXLExportPolicy(ExportPolicy):
         # latent). The standalone CLI still defaults False (static-1024, byte-for-
         # byte the legacy export) unless --dynamic-spatial is passed.
         #
-        # Only the UNet and VAE DECODER change. The VAE encoder stays static 1024
-        # (SDXL hires is latent-mode: decode-larger only; no re-encode of an
-        # upscaled image, unlike SD1.5 pixel-mode). time_ids / text_embeds are
-        # not spatially tied, so they need no axis changes.
+        # The UNet, VAE DECODER *and* VAE ENCODER change. The dynamic encoder
+        # enables PIXEL-mode hires (decode base → bicubic RGB upscale → re-encode
+        # larger than 1024), matching SD1.5; without it SDXL silently degraded to
+        # off-manifold latent upscale. time_ids / text_embeds are not spatially
+        # tied, so they need no axis changes.
         self.dynamic_spatial = dynamic_spatial
 
     def unet_dynamic_axes(self) -> dict[str, dict[int, str]]:
@@ -492,27 +493,46 @@ class SDXLExportPolicy(ExportPolicy):
         # as SD1.5's dynamic VAE decoder).
         return "legacy" if self.dynamic_spatial else "dynamo"
 
+    def vae_encoder_dynamic_axes(self) -> dict[str, dict[int, str]] | None:
+        # Static default (dynamo, batch-only) → None: img2img only ever encodes at
+        # native 1024. In dynamic-spatial mode the encoder gains dynamic H/W so
+        # PIXEL-mode hires can re-encode the UPSCALED image (decode base → bicubic
+        # RGB upscale → re-encode LARGER than 1024). Without this the encoder is
+        # static 1024 and pixel-mode hires fails with an input-shape error, so the
+        # runtime falls back to (blurry, off-manifold) latent upscale. Mirrors the
+        # SD15 encoder and the SDXL decoder: image {0:batch,2:H,3:W}, moments
+        # {0:batch,2:H/8,3:W/8} (still dynamic).
+        if not self.dynamic_spatial:
+            return None
+        return {
+            "image":   {0: "batch", 2: "height", 3: "width"},
+            "moments": {0: "batch", 2: "height", 3: "width"},
+        }
+
     def vae_encoder_exporter(self) -> str:
-        # The VAE ENCODER stays static 1024×1024 even in dynamic-spatial mode, so
-        # keep it on dynamo. Routing a static 1024 encoder through the legacy
-        # tracer would run an eager fp16 conv forward at full resolution — the
-        # ~1000×-slower CPU path the tiny-trace trick exists to avoid. dynamo does
-        # not pay that cost, so the encoder export is left exactly as today.
-        return "dynamo"
+        # Static default: dynamo — fast, batch-only, the proven path; the encoder
+        # only ever sees native 1024. Dynamic-spatial: legacy tracer, because
+        # dynamo cannot express H/W dynamic axes (same finding as the decoder). The
+        # export script traces it at a tiny 64×64 image so the eager fp16-CPU conv
+        # forward stays cheap — the dynamic graph is trace-size-independent, so the
+        # ~1000×-slower full-res forward that motivated keeping it static is avoided.
+        return "legacy" if self.dynamic_spatial else "dynamo"
 
     def should_fix_fp32_constants(self, component_name: str) -> bool:
-        if component_name == "vae_decoder" and self.dynamic_spatial:
-            # The dynamic (legacy-traced) fp16 VAE decoder must NOT run this pass.
-            # It is the same code path SD1.5 uses, and SD1.5 deliberately skips
-            # fix_fp32_constants for its VAE decoder. Running it here blindly
-            # converts an fp32 initializer that feeds an otherwise-fp32 `Div` to
-            # fp16, leaving the Div with one fp16 and one fp32 operand — ORT then
-            # rejects the graph at load with
+        if self.dynamic_spatial and component_name in {"vae_decoder", "vae_encoder"}:
+            # The dynamic (legacy-traced) fp16 VAE decoder AND encoder must NOT run
+            # this pass. It is the same code path SD1.5 uses, and SD1.5 deliberately
+            # skips fix_fp32_constants for BOTH its VAE decoder and encoder. Running
+            # it here blindly converts an fp32 initializer that feeds an otherwise-
+            # fp32 `Div` (GroupNorm variance) to fp16, leaving the Div with one fp16
+            # and one fp32 operand — ORT then rejects the graph at load with
             #   "Type Error: (T) of Optype (Div) bound to different types
             #    (tensor(float16) and tensor(float))".
-            # The fp16 Resize fix (should_fix_resize_fp16) still runs — that is the
-            # one the dynamic decoder actually needs. The STATIC dynamo decoder
-            # keeps the pass (its fp32-contamination fixes are unchanged).
+            # This was verified on the decoder; the encoder shares the same
+            # GroupNorm/ResNet Div pattern, and the SD15 dynamic encoder proves the
+            # skip is correct. The fp16 Resize fix (should_fix_resize_fp16) still
+            # runs — the one the dynamic graphs actually need. The STATIC dynamo
+            # decoder/encoder keep the pass (their fp32-contamination fixes stand).
             return False
         return component_name in {"unet", "vae_decoder", "vae_encoder"}
 

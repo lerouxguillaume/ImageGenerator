@@ -56,6 +56,12 @@ public:
         const auto* m = currentModel();
         return m && m->capabilities.hiresCapable;
     }
+    // Pixel-mode hires needs a dynamic-shape VAE encoder. False when absent, same
+    // as hiresCapable — a static-encoder model must use latent-mode hires.
+    bool currentModelPixelHiresCapable() const {
+        const auto* m = currentModel();
+        return m && m->capabilities.pixelHiresCapable;
+    }
     ModelType currentModelType() const {
         const auto* m = currentModel();
         return m ? m->type : ModelType::SD15;
@@ -106,6 +112,8 @@ private:
     sf::FloatRect btnHiresToggle_;          // hires-fix enable checkbox
     sf::FloatRect hiresScaleSliderTrack_;
     sf::FloatRect hiresStrengthSliderTrack_;
+    sf::FloatRect btnHiresModePixel_;       // upscale-mode segmented toggle (Pixel|Latent)
+    sf::FloatRect btnHiresModeLatent_;
     sf::FloatRect btnClearInit_;
     sf::FloatRect btnStrengthSubtle_;
     sf::FloatRect btnStrengthMedium_;

@@ -62,6 +62,10 @@ static ModelCapabilities loadCapabilities(const std::filesystem::path& onnxPath)
                 // Default false: models imported before this key existed are
                 // not known to have a dynamic-H/W VAE, so treat them as static.
                 caps.hiresCapable        = c.value("hires_capable",         false);
+                // Default false: a static VAE encoder (any pre-dynamic-encoder
+                // export, incl. every earlier SDXL import) cannot re-encode an
+                // upscaled image, so pixel-mode hires is unavailable.
+                caps.pixelHiresCapable   = c.value("pixel_hires_capable",   false);
             }
         } catch (...) {}
     }

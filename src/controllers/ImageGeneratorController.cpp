@@ -366,6 +366,18 @@ void ImageGeneratorController::launchGeneration(ImageGeneratorView& view) {
         }
     }
 
+    // Pixel-mode hires re-encodes the upscaled image, which needs a dynamic-shape
+    // VAE encoder. If this model's encoder is static, normalize the request to
+    // latent here — the single boundary where the job is built, mirroring the
+    // defensive LoRA-clear above — so the pipeline never hits its hard "static
+    // encoder" error. The UI gates the Pixel control on the same capability, so a
+    // Pixel request reaching here is stale/preset state, not a live user choice;
+    // normalizing keeps requested == shown == executed (no silent mode switch).
+    if (params.hires.enabled && params.hires.mode == UpscaleMode::Pixel
+        && !selected->capabilities.pixelHiresCapable) {
+        params.hires.mode = UpscaleMode::Latent;
+    }
+
     GenerationProgress progress;
     progress.step         = &rp.generationStep;
     progress.currentImage = &rp.generationImageNum;
@@ -691,7 +703,8 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             Logger::info("Model '" + entry.displayName + "' capabilities:"
                          " vae_encoder=" + (entry.capabilities.vaeEncoderAvailable ? "yes" : "no")
                          + " lora=" + (entry.capabilities.loraCompatible ? "yes" : "no")
-                         + " hires=" + (entry.capabilities.hiresCapable ? "yes" : "no"));
+                         + " hires=" + (entry.capabilities.hiresCapable ? "yes" : "no")
+                         + " pixel_hires=" + (entry.capabilities.pixelHiresCapable ? "yes" : "no"));
             sp.models.push_back(std::move(entry));
         }
         sp.selectedModelIdx = 0;

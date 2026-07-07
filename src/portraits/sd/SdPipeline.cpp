@@ -548,25 +548,20 @@ void runPipeline(const std::string& prompt,
                             // Pixel route: decode base → sharp bicubic RGB upscale →
                             // re-encode. The re-encoded latent is ON-manifold and sharp,
                             // so pass 2 adds detail. (Latent-space bilinear is off-manifold
-                            // and the VAE amplifies it into blur — measurably worse than a
-                            // plain bicubic upscale, hence not the default.)
-                            // Requires a DYNAMIC-shape VAE encoder. Pre-hires exports have a
-                            // static 512 encoder that rejects the upscaled image — catch that
-                            // and fall back to latent upscale (uncancellable VAE Run() can't
-                            // throw a *cancellation* here, so this only catches shape errors).
-                            try {
-                                cv::Mat baseImg = decodeLatent(base, c);   // native-res BGR
-                                cv::Mat bigImg;
-                                cv::resize(baseImg, bigImg, {hiresPxW, hiresPxH}, 0, 0, cv::INTER_CUBIC);
-                                up = encodeImage(bigImg, hiresPxW, hiresPxH, c, /*sample=*/false);
-                            } catch (const Ort::Exception& e) {
-                                Logger::error("Hires pixel mode: VAE encoder rejected "
-                                    + std::to_string(hiresPxW) + "x" + std::to_string(hiresPxH)
-                                    + " (static-shape encoder — RE-IMPORT this model to enable"
-                                    " sharp pixel hires). Falling back to latent upscale (softer). ORT: "
-                                    + e.what());
-                                up = upscaleLatent(base, hiresLatentW, hiresLatentH, UpscaleMode::Latent);
-                            }
+                            // and the VAE amplifies it into a blocky/blurry grid — measurably
+                            // worse than a plain bicubic upscale, hence not the default.)
+                            // Requires a DYNAMIC-shape VAE encoder. A static-shape encoder
+                            // (any pre-dynamic-encoder export) rejects the upscaled image with
+                            // an ORT input-shape error; that propagates out and becomes a clean,
+                            // named error at the runPipeline catch (see the "static VAE encoder"
+                            // branch) — NO silent fall back to latent, which would violate the
+                            // reproducibility contract (output must match the requested mode).
+                            // In-app this path is unreachable: the UI gates the Pixel option on
+                            // pixel_hires_capable. The guard remains for presets / headless runs.
+                            cv::Mat baseImg = decodeLatent(base, c);   // native-res BGR
+                            cv::Mat bigImg;
+                            cv::resize(baseImg, bigImg, {hiresPxW, hiresPxH}, 0, 0, cv::INTER_CUBIC);
+                            up = encodeImage(bigImg, hiresPxW, hiresPxH, c, /*sample=*/false);
                         } else {
                             // Latent route (no VAE encoder, or explicitly selected).
                             up = upscaleLatent(base, hiresLatentW, hiresLatentH, mode);
@@ -623,12 +618,27 @@ void runPipeline(const std::string& prompt,
                           || msg.find("out of memory")      != std::string::npos
                           || msg.find("CUDA failure 2")     != std::string::npos
                           || msg.find("ALLOC_FAILED")       != std::string::npos;
+            // Pixel-mode hires re-encodes the upscaled image; a static-shape VAE
+            // encoder rejects it with an input-shape error on the "image" input.
+            // Name the cause instead of surfacing a raw ORT message (mirrors OOM).
+            // The refinement pass threw before its ScopedLatentResolution/
+            // ScopedTimeIds were constructed, and generateOneImage's native-res
+            // guard restores ctx as the stack unwinds — the next generation is clean.
+            const bool staticEncoder = msg.find("invalid dimensions for input: image")
+                                       != std::string::npos;
             if (oom) {
                 // No retry / auto-step-down in v1 — fail cleanly and name the cause.
                 Logger::error("Out of GPU memory during inference: " + msg);
                 denoiseException = std::make_exception_ptr(std::runtime_error(
                     "Out of GPU memory. If hires fix is on, lower the hires scale or turn "
                     "it off; otherwise reduce the image size or image count."));
+            } else if (staticEncoder) {
+                Logger::error("Pixel-mode hires: static-shape VAE encoder rejected the "
+                              "upscaled image: " + msg);
+                denoiseException = std::make_exception_ptr(std::runtime_error(
+                    "Pixel-mode hires needs a dynamic-shape VAE encoder, but this model's "
+                    "encoder is static. Re-import the model to enable pixel hires, or switch "
+                    "the hires upscale mode to latent."));
             } else {
                 Logger::error("ORT exception during inference (not a cancellation).");
                 denoiseException = std::current_exception();

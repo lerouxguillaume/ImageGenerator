@@ -7,9 +7,9 @@ Usage:
 Outputs (under models/<MODEL_NAME>/):
     text_encoder.onnx   — CLIP-L penultimate hidden states, fp32
     text_encoder_2.onnx — OpenCLIP-G hidden states + pooled embeds, fp32
-    unet.onnx           — UNet, fp16, batch-dynamic only
-    vae_decoder.onnx    — VAE decoder, fp16, static shape
-    vae_encoder.onnx    — VAE encoder, fp16, static shape
+    unet.onnx           — UNet, fp16, batch-dynamic (dynamic H/W with --dynamic-spatial)
+    vae_decoder.onnx    — VAE decoder, fp16, static shape (dynamic H/W with --dynamic-spatial)
+    vae_encoder.onnx    — VAE encoder, fp16, static shape (dynamic H/W with --dynamic-spatial)
     model.json          — {"type": "sdxl"} for C++ runtime detection
 
 Notes on dtype strategy:
@@ -100,8 +100,9 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 emit_fp32_hedge: bool = False) -> None:
     policy = SDXLExportPolicy(dynamic_spatial=dynamic_spatial)
     if dynamic_spatial:
-        print("  Dynamic-spatial mode: UNet + VAE decoder export with dynamic H/W "
-              "axes (hires-capable; also emits an fp32 decoder hedge)")
+        print("  Dynamic-spatial mode: UNet + VAE decoder + VAE encoder export with "
+              "dynamic H/W axes (hires-capable incl. pixel mode; also emits an fp32 "
+              "decoder hedge)")
     check_dependencies(
         required=[
             "torch", "diffusers", "transformers", "onnx", "onnxscript",
@@ -140,7 +141,8 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     # tracer's eager forward-pass cost. fp16 Conv2d on CPU has no fast kernel
     # (~1000× slower than fp32), so trace those two at a tiny latent (mirrors the
     # SD1.5 8×8 decoder trace): identical dynamic graph, ~cheap forward. The VAE
-    # ENCODER stays static 1024 and is traced at its real size (dynamo, unchanged).
+    # ENCODER follows the same trick (dynamic → legacy tracer at a tiny 64×64 image;
+    # static → dynamo at its real 1024, unchanged) — see the encoder block below.
     # 16 keeps the SDXL UNet's two downsamples well-defined (16→8→4 bottleneck)
     # and stays /8-aligned; the decoder mirrors SD1.5's proven 8.
     unet_trace_hw    = 16 if dynamic_spatial else latent_h
@@ -310,11 +312,19 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     gc.collect()
 
     # 5. VAE encoder ──────────────────────────────────────────────────────────
-    # Always traced at native 1024 and kept static. Use vae_encoder_exporter()
-    # (not vae_exporter()): in dynamic-spatial mode the decoder switches to the
-    # legacy tracer, but the static 1024 encoder must stay on dynamo so it never
-    # pays the legacy tracer's ~1000×-slower eager fp16 CPU conv at full size.
-    dummy_image = torch.randn(1, 3, latent_h * 8, latent_w * 8, dtype=torch.float16)
+    # Static default: traced at native 1024, dynamo, kept static (img2img only
+    # ever encodes at native). Dynamic-spatial: dynamic H/W via the legacy tracer
+    # (dynamo cannot express spatial axes) so PIXEL-mode hires can re-encode the
+    # UPSCALED image (decode → bicubic RGB upscale → re-encode > 1024). Mirrors the
+    # SD15 encoder: trace at a tiny 64×64 image so the eager fp16-CPU conv forward
+    # stays cheap — the dynamic graph is trace-size-independent, so the legacy
+    # tracer's full-res cost (the reason this stayed static) does not apply.
+    # fix_fp32_constants is DELIBERATELY off for the dynamic encoder (the policy
+    # handles it): the legacy-traced fp16 graph hits the same fp32-operand `Div`
+    # mismatch the decoder does; fix_resize still runs.
+    enc_dynamic_axes = policy.vae_encoder_dynamic_axes()
+    enc_dummy_hw = 64 if enc_dynamic_axes else latent_h * 8
+    dummy_image = torch.randn(1, 3, enc_dummy_hw, enc_dummy_hw, dtype=torch.float16)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -323,6 +333,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 exporter=policy.vae_encoder_exporter(),
                 vae=pipe.vae,
                 dummy_image=dummy_image,
+                dynamic_axes=enc_dynamic_axes,
                 fix_fp32_constants=policy.should_fix_fp32_constants("vae_encoder"),
                 fix_resize_fp16=policy.should_fix_resize_fp16("vae_encoder"),
                 skip_if_complete=resume,

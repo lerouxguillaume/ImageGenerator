@@ -137,6 +137,33 @@ def _detect_hires_capable(output_dir: str, arch: str) -> bool:
     return bool(unet_dyn and vae_dyn)
 
 
+def _detect_pixel_hires_capable(output_dir: str) -> bool:
+    """Pixel-mode hires re-encodes an UPSCALED image, so it additionally needs the
+    VAE ENCODER to accept a larger-than-native image (dynamic H/W on its "image"
+    input) — beyond what _detect_hires_capable checks (UNet + decoder).
+
+    Derived from the exported encoder graph (ground truth), same mechanism and
+    fail-closed policy as _detect_hires_capable: SD1.5 (encoder always dynamic) ->
+    True; a static-encoder SDXL export -> False; an SDXL --dynamic-spatial export ->
+    True once the encoder carries the axes. A model can be hires_capable (dynamic
+    UNet + decoder) yet NOT pixel_hires_capable (static encoder): that is exactly
+    the pre-dynamic-encoder SDXL case, which must run latent-mode hires. An
+    unprobeable graph fails CLOSED (False) — a wrong "capable" makes the runtime
+    hard-error at hires time instead of cleanly disabling the Pixel control.
+    """
+    enc_dyn = _graph_has_dynamic_spatial(
+        os.path.join(output_dir, "vae_encoder.onnx"), input_name="image")
+    if enc_dyn is None:
+        print(
+            "VERIFY:warn:capability:could not probe dynamic H/W axes on "
+            "vae_encoder.onnx (missing file, onnx import failure, or parse error) "
+            "- defaulting pixel_hires_capable=False",
+            flush=True,
+        )
+        return False
+    return bool(enc_dyn)
+
+
 def write_capabilities(output_dir: str, arch: str) -> None:
     """Extend model.json with a capabilities block after a successful export.
 
@@ -164,6 +191,11 @@ def write_capabilities(output_dir: str, arch: str) -> None:
         # SD1.5 always exports both dynamic → True. SDXL is True only when exported
         # with --dynamic-spatial; the default static SDXL export → False.
         "hires_capable":         _detect_hires_capable(output_dir, arch),
+        # Pixel-mode hires additionally needs a DYNAMIC-shape VAE encoder (it
+        # re-encodes the upscaled image). Separate from hires_capable: an SDXL model
+        # with a static encoder is hires_capable (latent mode) but NOT
+        # pixel_hires_capable. SD1.5 (dynamic encoder) derives True automatically.
+        "pixel_hires_capable":   _detect_pixel_hires_capable(output_dir),
         # Written only after verify_model() passed — a model.json carrying this
         # flag has been confirmed to run, not just to have all its files present.
         "verified":              True,

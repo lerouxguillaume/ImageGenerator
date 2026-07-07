@@ -9,10 +9,13 @@ model with:
 
 It answers the make-or-break questions the dev box cannot (no torch / no GPU):
 
-  1. STRUCTURE — are the UNet and VAE decoder graphs dynamic in H/W?
-     (onnx.checker + shape inference + symbolic-dim probe)
+  1. STRUCTURE — are the UNet, VAE decoder AND VAE encoder graphs dynamic in H/W?
+     (onnx.checker + shape inference + symbolic-dim probe; the encoder probes its
+     "image" input — dynamic there = pixel_hires_capable, i.e. sharp pixel-mode hires)
   2. RUNTIME  — do they RUN and produce finite, non-degenerate output at the
-     native latent 128 AND larger latents (160, 192 -> 1280 / 1536 px)?
+     native latent 128 AND larger latents (160, 192 -> 1280 / 1536 px)? The encoder
+     is exercised at the matching IMAGE sizes (px = latent*8) — a NEW memory profile,
+     since it was static-1024 before — with the same VRAM sampler.
   3. time_ids — at each size, is time_ids scaled to that resolution
      ({H,W,0,0,H,W}, the diffusers img2img convention) accepted as shape (1,6)
      and does the graph still produce sane output? This is exactly the input the
@@ -190,13 +193,14 @@ def _dim_is_dynamic(dim) -> bool:
     return bool(dim.dim_param) or not dim.HasField("dim_value")
 
 
-def _check_structure(path: str, label: str) -> bool:
-    """checker + shape inference + symbolic-dim probe on the 'latent' input.
+def _check_structure(path: str, label: str, input_name: str = "latent") -> bool:
+    """checker + shape inference + symbolic-dim probe on <input_name> (H/W axes 2,3).
 
-    Returns True iff the graph loaded and its latent H/W (axes 2,3) are dynamic.
-    checker / shape-inference problems are reported as warnings (the ORT forward
-    below is the authoritative proof); a static latent is a hard fail because it
-    means --dynamic-spatial did not take effect.
+    Returns True iff the graph loaded and that input's H/W are dynamic. checker /
+    shape-inference problems are reported as warnings (the ORT forward below is the
+    authoritative proof); static H/W is a hard fail because it means
+    --dynamic-spatial did not take effect. input_name is "latent" for the UNet /
+    VAE decoder and "image" for the VAE encoder (pixel-mode hires re-encode).
     """
     try:
         import onnx
@@ -224,21 +228,21 @@ def _check_structure(path: str, label: str) -> bool:
         _emit("warn", f"{label}.shape_infer", f"shape inference: {str(e)[:200]}")
 
     for inp in model.graph.input:
-        if inp.name != "latent":
+        if inp.name != input_name:
             continue
         dims = inp.type.tensor_type.shape.dim
         if len(dims) < 4:
-            _emit("fail", f"{label}.dynamic", f"latent has {len(dims)} dims, expected 4")
+            _emit("fail", f"{label}.dynamic", f"{input_name} has {len(dims)} dims, expected 4")
             return False
         shp = [(d.dim_param or (d.dim_value if d.HasField("dim_value") else "?")) for d in dims]
         if _dim_is_dynamic(dims[2]) and _dim_is_dynamic(dims[3]):
-            _emit("ok", f"{label}.dynamic", f"latent H/W are dynamic (shape={shp})")
+            _emit("ok", f"{label}.dynamic", f"{input_name} H/W are dynamic (shape={shp})")
             return True
         _emit("fail", f"{label}.dynamic",
-              f"latent H/W are STATIC (shape={shp}) — --dynamic-spatial did not apply")
+              f"{input_name} H/W are STATIC (shape={shp}) — --dynamic-spatial did not apply")
         return False
 
-    _emit("fail", f"{label}.dynamic", "no input named 'latent' found")
+    _emit("fail", f"{label}.dynamic", f"no input named '{input_name}' found")
     return False
 
 
@@ -381,6 +385,60 @@ def _run_vae(model_dir: str, sizes: list[int], filename: str = "vae_decoder.onnx
               f"finite, image shape={tuple(out.shape)}, std={std:.4f}{note}{vram.report()}")
 
 
+def _run_vae_encoder(model_dir: str, sizes: list[int]) -> None:
+    """Forward the VAE ENCODER at hires IMAGE sizes (pixel-mode hires re-encode).
+
+    Unlike the decoder (latent input), the encoder input is the UPSCALED RGB image
+    [1,3,px,px] where px = latent_hw * 8, so a --sizes of 152,192 exercises 1216 and
+    1536 px. This is a NEW memory profile — the encoder was static-1024 before the
+    dynamic-encoder change — so the VRAM sampler matters here. Output is raw moments
+    [1,8,px/8,px/8] (mean+logvar); finite + non-degenerate std confirms the fp16
+    encoder is stable at that size.
+    """
+    path = os.path.join(model_dir, "vae_encoder.onnx")
+    if not os.path.exists(path):
+        _emit("warn", "vae_encoder.load", "vae_encoder.onnx not found — no pixel-mode hires")
+        return
+    try:
+        sess = _session(path)
+    except Exception as e:
+        _emit("fail", "vae_encoder.load", f"could not create session: {str(e)[:200]}")
+        return
+    inp = sess.get_inputs()[0]
+    dt = _np_dtype(inp.type)
+    on_gpu = any(p in sess.get_providers() for p in _GPU_PROVIDERS)
+    if dt == np.float16 and not on_gpu:
+        _emit("skip", "vae_encoder.run",
+              "GPU EP did not load — skipping fp16 encoder forwards (CPU EP too slow/crashy)")
+        return
+    for hw in sizes:
+        px = hw * 8
+        print(f"  >>> vae_encoder encode at image {px}x{px}", flush=True)
+        rng = np.random.default_rng(2)
+        image = rng.standard_normal((1, 3, px, px)).astype(dt)
+        try:
+            with _VramSampler() as vram:
+                out = sess.run(None, {inp.name: image})[0]
+        except Exception as e:
+            if _is_oom(str(e)):
+                _emit("warn", f"vae_encoder.run@{px}",
+                      f"CUDA OUT OF MEMORY at {px}px — VRAM ceiling for the encoder on this "
+                      f"card, not a graph defect")
+            else:
+                _emit("fail", f"vae_encoder.run@{px}", f"encode raised: {str(e)[:200]}")
+            continue
+        if not np.isfinite(out).all():
+            _emit("fail", f"vae_encoder.run@{px}",
+                  f"produced NaN/Inf — fp16 encoder instability at this size{vram.report()}")
+            continue
+        std = float(np.std(out.astype(np.float32)))
+        note = "" if std >= 1e-3 else " (near-constant — check for fp16 encoder collapse)"
+        status = "ok" if std >= 1e-3 else "warn"
+        _emit(status, f"vae_encoder.run@{px}",
+              f"finite, moments shape={tuple(out.shape)} (expect [1,8,{px//8},{px//8}]), "
+              f"std={std:.4f}{note}{vram.report()}")
+
+
 # ── torch reference (numeric fidelity) ──────────────────────────────────────────
 
 def _compare_torch(model_dir: str, ckpt: str) -> None:
@@ -510,6 +568,12 @@ def main() -> int:
     # Structural checks always run — cheap, CPU-safe, and the primary go/no-go.
     unet_ok = _check_structure(os.path.join(args.model, "unet.onnx"), "unet")
     vae_ok = _check_structure(os.path.join(args.model, "vae_decoder.onnx"), "vae_decoder")
+    # Pixel-mode hires: the encoder's "image" input must be dynamic H/W too. Absent
+    # or static → not a hard fail (latent-mode hires still works), but reported so
+    # pixel_hires_capable is confirmed. A present-but-static encoder is the
+    # pre-dynamic-encoder SDXL case this change fixes.
+    enc_path = os.path.join(args.model, "vae_encoder.onnx")
+    enc_ok = os.path.exists(enc_path) and _check_structure(enc_path, "vae_encoder", input_name="image")
     _check_time_ids_input(args.model)
     has_fp32 = os.path.exists(os.path.join(args.model, "vae_decoder_fp32.onnx"))
     if has_fp32:
@@ -528,6 +592,8 @@ def main() -> int:
             _run_vae(args.model, sizes, "vae_decoder.onnx", "vae")
         if has_fp32:
             _run_vae(args.model, sizes, "vae_decoder_fp32.onnx", "vae_fp32")
+        if enc_ok:
+            _run_vae_encoder(args.model, sizes)
         if args.torch_reference:
             _compare_torch(args.model, args.torch_reference)
 
