@@ -300,6 +300,54 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         y += 10.f;
     }
 
+    // ── Hires fix (SD1.5 only) ────────────────────────────────────────────────
+    // Gate mirrors the LoRA pattern. SD1.5 + hiresCapable → live controls.
+    // SD1.5 but NOT hiresCapable (all pre-flag imports) → disabled toggle + hint
+    // to re-import. SDXL → section hidden (hires is an SD1.5-only feature).
+    if (currentModelType() == ModelType::SD15) {
+        const bool  capable = currentModelHiresCapable();
+        auto&       hires   = generationParams.hires;
+        const bool  on      = capable && hires.enabled;
+
+        constexpr float cbSize = 14.f;
+        btnHiresToggle_ = {x + pad, y, 120.f, 20.f};
+        drawRect(win, {x + pad, y + 2.f, cbSize, cbSize},
+                 on ? colors.goldLt : colors.surfaceInset, colors.border, 1.f);
+        drawText(win, font, "Hires fix", capable ? colors.text : colors.muted,
+                 x + pad + cbSize + 8.f, y + 3.f, 12);
+        if (!capable)
+            drawText(win, font, "\xe2\x80\x94 re-import this model to enable",
+                     colors.muted, x + pad + cbSize + 78.f, y + 4.f, 10);
+        y += 26.f;
+
+        if (on) {
+            // Scale slider (1.0–2.0, step 0.1)
+            hiresScaleSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
+            const float scaleNorm = (hires.scale - 1.0f) / 1.0f;
+            char scBuf[16];
+            std::snprintf(scBuf, sizeof(scBuf), "%.1f\xc3\x97", hires.scale);
+            drawSlider(win, font, hiresScaleSliderTrack_, std::clamp(scaleNorm, 0.f, 1.f),
+                       "Hires scale", scBuf);
+            y += 34.f;
+
+            // Strength slider (0.3–0.7, step 0.05)
+            hiresStrengthSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
+            const float strNorm = (hires.strength - 0.3f) / 0.4f;
+            char hsBuf[8];
+            std::snprintf(hsBuf, sizeof(hsBuf), "%.2f", hires.strength);
+            drawSlider(win, font, hiresStrengthSliderTrack_, std::clamp(strNorm, 0.f, 1.f),
+                       "Hires strength", hsBuf);
+            y += 34.f;
+        } else {
+            hiresScaleSliderTrack_    = {};
+            hiresStrengthSliderTrack_ = {};
+        }
+    } else {
+        btnHiresToggle_           = {};
+        hiresScaleSliderTrack_    = {};
+        hiresStrengthSliderTrack_ = {};
+    }
+
     // Seed input
     drawText(win, font, "Seed:", colors.muted, x + pad, y + 6.f, 12);
     drawText(win, font, "(empty = random)", colors.border, x + pad + 44.f, y + 6.f, 11);
@@ -440,6 +488,15 @@ bool SettingsPanel::handleClick(sf::Vector2f pos) {
     if (cfgSliderTrack_.contains(pos))      { draggingSlider_ = DraggingSlider::Cfg;      return true; }
     if (imagesSliderTrack_.contains(pos))   { draggingSlider_ = DraggingSlider::Images;   return true; }
     if (strengthSliderTrack_.contains(pos)) { draggingSlider_ = DraggingSlider::Strength; return true; }
+    if (hiresScaleSliderTrack_.contains(pos))    { draggingSlider_ = DraggingSlider::HiresScale;    return true; }
+    if (hiresStrengthSliderTrack_.contains(pos)) { draggingSlider_ = DraggingSlider::HiresStrength; return true; }
+
+    // Hires-fix toggle (checkbox). Only interactive when the model is hires-capable.
+    if (btnHiresToggle_.contains(pos)) {
+        if (currentModelHiresCapable())
+            generationParams.hires.enabled = !generationParams.hires.enabled;
+        return true;
+    }
 
     // Clear init image — return to plain text-to-image
     if (btnClearInit_.contains(pos)) {
@@ -507,6 +564,14 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
             const float t = std::clamp((mousePos.x - strengthSliderTrack_.left) / strengthSliderTrack_.width, 0.f, 1.f);
             const float raw = 0.05f + t * 0.95f;
             generationParams.strength = std::round(raw / 0.05f) * 0.05f;
+        } else if (draggingSlider_ == DraggingSlider::HiresScale) {
+            const float t = std::clamp((mousePos.x - hiresScaleSliderTrack_.left) / hiresScaleSliderTrack_.width, 0.f, 1.f);
+            const float raw = 1.0f + t * 1.0f;                 // 1.0–2.0
+            generationParams.hires.scale = std::round(raw / 0.1f) * 0.1f;
+        } else if (draggingSlider_ == DraggingSlider::HiresStrength) {
+            const float t = std::clamp((mousePos.x - hiresStrengthSliderTrack_.left) / hiresStrengthSliderTrack_.width, 0.f, 1.f);
+            const float raw = 0.3f + t * 0.4f;                 // 0.3–0.7
+            generationParams.hires.strength = std::round(raw / 0.05f) * 0.05f;
         }
         return true;
     }

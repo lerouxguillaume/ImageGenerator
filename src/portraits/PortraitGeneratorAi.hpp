@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <stop_token>
 #include <string>
@@ -6,6 +7,18 @@
 
 #include "../enum/enums.hpp"
 #include "../config/AppConfig.hpp"   // for LoraEntry
+
+// ── Hires-fix configuration ───────────────────────────────────────────────────
+// SD1.5 "hires fix": after the base pass at native resolution, run a second
+// low-strength denoise at a higher resolution (bilinear latent upscale), then a
+// single decode of the final latent. Off by default; inert when disabled.
+struct HiresConfig {
+    bool        enabled  = false;
+    float       scale    = 1.5f;   // target pixel dims = native * scale, snapped to /64
+    float       strength = 0.5f;   // pass-2 denoise fraction (UI range 0.3–0.7)
+    int         steps    = 0;      // 0 = reuse the base numSteps for pass 2
+    UpscaleMode mode     = UpscaleMode::Latent;
+};
 
 // Parameters shared by all generation entry points.
 struct GenerationParams {
@@ -22,6 +35,24 @@ struct GenerationParams {
     float       strength         = 1.0f; // img2img: denoising strength [0,1]; 1 = full noise (txt2img)
     int         cropTop          = 0;    // SDXL time_ids: crop_y offset in pixels (0 = no crop)
     int         cropLeft         = 0;    // SDXL time_ids: crop_x offset in pixels (0 = no crop)
+    HiresConfig hires;                   // hires-fix pass-2 config; enabled=false → inert
+
+    // ── Hires step accounting (single source of truth for pipeline + UI) ──────
+    // The pipeline uses these to drive the pass-2 denoise; the progress bar uses
+    // totalDenoiseSteps() as its denominator so it spans both passes.
+    int hiresEffectiveSteps() const { return hires.steps > 0 ? hires.steps : numSteps; }
+    // img2img-style truncation: pass 2 starts partway down the schedule.
+    int hiresStartStep() const {
+        const int eff = hiresEffectiveSteps();
+        const int s   = static_cast<int>((1.0f - hires.strength) * static_cast<float>(eff));
+        return std::max(0, std::min(s, eff - 1));
+    }
+    // Steps actually executed in pass 2 (the truncated count, not effectiveSteps).
+    int hiresExtraSteps() const {
+        return hires.enabled ? (hiresEffectiveSteps() - hiresStartStep()) : 0;
+    }
+    // Cumulative denoise-step count across the base pass and the hires pass.
+    int totalDenoiseSteps() const { return numSteps + hiresExtraSteps(); }
 };
 
 // Static facade over the full Stable Diffusion pipeline (text encoding → UNet denoising → VAE decode).

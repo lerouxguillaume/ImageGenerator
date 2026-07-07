@@ -38,6 +38,13 @@ struct ModelConfig {
     // Default true preserves legacy behaviour for models without a capabilities block.
     bool      vaeEncoderAvailable = true;
     bool      loraCompatible      = true;
+    // Default false. True implies the export produced BOTH a dynamic-H/W VAE
+    // decoder AND a spatially-dynamic UNet — the two things the pass-2 denoise at
+    // an enlarged latent needs. Pre-hires exports have a static-shape VAE decoder
+    // (and would also reject a larger UNet latent), so the pipeline refuses hires
+    // unless this is true. A mis-set flag fails safe: the pass-2 Run throws an
+    // Ort::Exception surfaced as an error, and ScopedLatentResolution restores dims.
+    bool      hiresCapable        = false;
 };
 
 // ── Runtime inference context ─────────────────────────────────────────────────

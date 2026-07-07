@@ -16,6 +16,11 @@ static std::string stageLabelText(GenerationStage stage, int step, int numSteps)
     case GenerationStage::EncodingText:    return "Encoding prompt...";
     case GenerationStage::EncodingImage:   return "Encoding image...";
     case GenerationStage::Denoising:       return "Step " + std::to_string(step) + " / " + std::to_string(numSteps);
+    case GenerationStage::HiresDenoising:
+        // The label flips the instant pass 2 begins — i.e. it is already showing
+        // during the one-time per-shape ORT/CUDA setup stall on the first hires
+        // Run (no extra warmup session; the status is the mitigation).
+        return "Hi-res refine — step " + std::to_string(step) + " / " + std::to_string(numSteps);
     case GenerationStage::DecodingImage:   return "Decoding image...";
     default:
         return numSteps > 0

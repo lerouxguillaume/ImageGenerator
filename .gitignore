@@ -10,6 +10,13 @@
 
 /scripts/*.safetensors
 /scripts/*/*
+# Keep the golden-run harness tracked — the broad /scripts/*/* rule above would
+# otherwise swallow it (it silently kept the harness out of git until now). The
+# large/machine-specific golden PNGs stay ignored via scripts/golden/goldens/.gitignore;
+# the committed hashes.txt manifest is what makes goldens verifiable cross-machine.
+!/scripts/golden/golden_harness.sh
+!/scripts/golden/compare.py
+!/scripts/golden/goldens/
 /models/*/*.onnx
 /models/*/*.data
 /models/*/*.safetensors

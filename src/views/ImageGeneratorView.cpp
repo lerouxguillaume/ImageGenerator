@@ -31,7 +31,8 @@ void ImageGeneratorView::render(sf::RenderWindow& win) {
     resultPanel.setRect({resultX, contentY, resultW, contentH});
 
     settingsPanel.render(win, font);
-    resultPanel.render(win, font, settingsPanel.generationParams.numSteps);
+    // Denominator spans both passes so the bar reaches full during the hires pass.
+    resultPanel.render(win, font, settingsPanel.generationParams.totalDenoiseSteps());
     menuBar.render(win, font);
 
     if (hasLlm) {

@@ -1,0 +1,7 @@
+# Golden PNGs are large and machine-specific — do NOT commit them.
+# The committed manifest (hashes.txt) is what makes goldens verifiable
+# cross-machine; see golden_harness.sh (capture writes it, verify falls back to it).
+*.png
+*.jpg
+harness.log
+!hashes.txt

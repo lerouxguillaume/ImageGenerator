@@ -103,6 +103,9 @@ private:
     sf::FloatRect cfgSliderTrack_;
     sf::FloatRect imagesSliderTrack_;
     sf::FloatRect strengthSliderTrack_;
+    sf::FloatRect btnHiresToggle_;          // hires-fix enable checkbox
+    sf::FloatRect hiresScaleSliderTrack_;
+    sf::FloatRect hiresStrengthSliderTrack_;
     sf::FloatRect btnClearInit_;
     sf::FloatRect btnStrengthSubtle_;
     sf::FloatRect btnStrengthMedium_;

@@ -1,2 +1,2 @@
 #pragma once
-enum class DraggingSlider { None, Steps, Cfg, Images, Strength };
+enum class DraggingSlider { None, Steps, Cfg, Images, Strength, HiresScale, HiresStrength };

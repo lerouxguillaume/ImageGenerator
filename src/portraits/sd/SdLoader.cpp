@@ -206,13 +206,15 @@ namespace sd {
                 const auto& caps = j.at("capabilities");
                 cfg.vaeEncoderAvailable = caps.value("vae_encoder_available", cfg.vaeEncoderAvailable);
                 cfg.loraCompatible      = caps.value("lora_compatible",        cfg.loraCompatible);
+                cfg.hiresCapable        = caps.value("hires_capable",          cfg.hiresCapable);
             }
             Logger::info("model.json: type=" + type
                          + "  resolution=" + std::to_string(cfg.image_w)
                          + "x" + std::to_string(cfg.image_h)
                          + "  vae_scaling_factor=" + std::to_string(cfg.vae_scaling_factor)
                          + "  vae_encoder=" + (cfg.vaeEncoderAvailable ? "yes" : "no")
-                         + "  lora=" + (cfg.loraCompatible ? "yes" : "no"));
+                         + "  lora=" + (cfg.loraCompatible ? "yes" : "no")
+                         + "  hires=" + (cfg.hiresCapable ? "yes" : "no"));
         } catch (const std::exception& e) {
             Logger::info(std::string("model.json parse error, defaulting to SD 1.5: ") + e.what());
         }

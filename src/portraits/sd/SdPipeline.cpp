@@ -11,15 +11,24 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <opencv2/opencv.hpp>
 #include <chrono>
+#include <random>
 #include <stop_token>
 
 namespace sd {
 
 namespace {
+
+// Offset added to a per-image seed to source the hires pass-2 noise. Keeps the
+// hires draw stream disjoint from the base/batch stream so toggling hires never
+// shifts the base pass or later batch images. See the seed contract on the hires
+// refinement pass built in runPipeline's per-image loop.
+constexpr int64_t kHiresSeedOffset = 0x9E3779B9;  // fixed constant (golden ratio bits)
 
 // ── ScopedLatentResolution ────────────────────────────────────────────────────
 // The ONLY sanctioned way to point the context at a latent resolution.
@@ -154,6 +163,37 @@ static Latent denoiseSingleLatent(const std::vector<float>& sigmas,
     return Latent{ std::move(x),
                    static_cast<int>(ctx.latent_shape[3]),
                    static_cast<int>(ctx.latent_shape[2]) };
+}
+
+// ── Hires helpers ─────────────────────────────────────────────────────────────
+
+// Snap a target pixel dimension to the nearest multiple of 64, forced strictly
+// greater than the native dimension. /64 (not /8) because the SD1.5 latent must
+// be divisible by 8: the UNet downsamples the latent 3×, and a non-/8 latent
+// makes the skip-connection Concat shapes mismatch. pixels /64 ⇒ latent /8.
+static int snapTo64(int target, int native) {
+    int snapped = ((target + 32) / 64) * 64;
+    if (snapped <= native) snapped = (native / 64 + 1) * 64;
+    return snapped;
+}
+
+// Bilinear per-channel upscale of a [1,4,h,w] latent to a new latent grid.
+// v1 implements UpscaleMode::Latent only; future Pixel/Esrgan modes will decode
+// → upscale in pixel space → re-encode instead, and branch here.
+static Latent upscaleLatent(const Latent& src, int targetW, int targetH, UpscaleMode mode) {
+    (void)mode;  // only UpscaleMode::Latent exists today
+    const int srcPlane = src.w * src.h;
+    const int dstPlane = targetW * targetH;
+    std::vector<float> out(static_cast<size_t>(4) * dstPlane);
+    for (int c = 0; c < 4; ++c) {
+        cv::Mat plane(src.h, src.w, CV_32F,
+                      const_cast<float*>(src.data.data()) + static_cast<size_t>(c) * srcPlane);
+        cv::Mat resized;
+        cv::resize(plane, resized, {targetW, targetH}, 0, 0, cv::INTER_LINEAR);
+        std::memcpy(out.data() + static_cast<size_t>(c) * dstPlane, resized.ptr<float>(),
+                    sizeof(float) * static_cast<size_t>(dstPlane));
+    }
+    return Latent{ std::move(out), targetW, targetH };
 }
 
 // ── Per-image generation ──────────────────────────────────────────────────────
@@ -393,11 +433,46 @@ void runPipeline(const std::string& prompt,
     });
 
     // Native latent grid; passed to each image so the base pass runs at native
-    // resolution. Refinement/post-processor seams are empty in this phase.
+    // resolution. Post-processor seam stays empty (identity) for now.
     const int nativeLatentW = cfg.image_w / 8;
     const int nativeLatentH = cfg.image_h / 8;
-    const std::vector<RefinementPass>     refinements;      // empty in Phase 1
-    const std::vector<ImagePostProcessor> postProcessors;  // empty in Phase 1
+    const std::vector<ImagePostProcessor> postProcessors;  // empty (identity) for now
+
+    // ── Hires-fix setup (SD1.5 only) ──────────────────────────────────────────
+    // Constant across the batch: snapped target dims, the pass-2 sigma schedule,
+    // and the truncated step bounds. Guarded to SD1.5 — the SDXL UNet is
+    // spatially static, so hires there is a separate track (see hires_fix_plan).
+    bool hiresOn = params.hires.enabled;
+    if (hiresOn && cfg.type != ModelType::SD15) {
+        Logger::info("[WARN] Hires fix requested for a non-SD1.5 model — ignoring "
+                     "(SDXL UNet has static spatial dims; hires is an SD1.5-only feature).");
+        hiresOn = false;
+    }
+    if (hiresOn && !cfg.hiresCapable) {
+        // The UI gates on this, but a preset could still carry hires.enabled onto
+        // a pre-hires model whose VAE decoder is static-shape. Refuse rather than
+        // crash the decode on the larger latent.
+        Logger::info("[WARN] Hires fix requested but this model is not hires-capable "
+                     "(static-shape VAE decoder) — ignoring. Re-import to enable hires.");
+        hiresOn = false;
+    }
+    int hiresLatentW = 0, hiresLatentH = 0, hiresEff = 0, hiresStart = 0;
+    std::vector<float> hiresSigmas;
+    if (hiresOn) {
+        const int hiresPxW = snapTo64(static_cast<int>(std::lround(cfg.image_w * params.hires.scale)), cfg.image_w);
+        const int hiresPxH = snapTo64(static_cast<int>(std::lround(cfg.image_h * params.hires.scale)), cfg.image_h);
+        hiresLatentW = hiresPxW / 8;
+        hiresLatentH = hiresPxH / 8;
+        hiresEff     = params.hiresEffectiveSteps();
+        hiresStart   = params.hiresStartStep();
+        hiresSigmas  = buildKarrasSchedule(alphas_cumprod, hiresEff);
+        Logger::info("Hires fix: scale=" + std::to_string(params.hires.scale)
+                     + "  target=" + std::to_string(hiresPxW) + "x" + std::to_string(hiresPxH)
+                     + " (latent " + std::to_string(hiresLatentW) + "x" + std::to_string(hiresLatentH) + ")"
+                     + "  strength=" + std::to_string(params.hires.strength)
+                     + "  pass2 steps=" + std::to_string(hiresEff - hiresStart)
+                     + "/" + std::to_string(hiresEff));
+    }
 
     std::exception_ptr denoiseException;
     try {
@@ -406,8 +481,43 @@ void runPipeline(const std::string& prompt,
 
             if (currentImage) currentImage->store(i + 1);
             if (progressStep) progressStep->store(0);
-            // seed < 0 → random; for multi-image runs use seed+i so each image differs
-            const int64_t imgSeed = (params.seed >= 0) ? params.seed + i : -1;
+            // Resolve the seed concretely per image (seed+i for a fixed seed;
+            // a fresh random_device draw when unset) so the hires pass can derive
+            // its own disjoint stream and random runs stay reproducible from the
+            // logged seed. Base output is unchanged: seedRng() applied the same
+            // value before, just resolved inside instead of here.
+            const int64_t imgSeed = (params.seed >= 0)
+                                        ? params.seed + i
+                                        : static_cast<int64_t>(std::random_device{}());
+
+            // Per-image refinement list. The hires pass owns its noise stream and
+            // resolution (see the seed + ScopedLatentResolution contracts inside).
+            std::vector<RefinementPass> refinements;
+            if (hiresOn) {
+                refinements.push_back(
+                    [&hiresSigmas, &alphas_cumprod, hiresEff, hiresStart,
+                     hiresLatentW, hiresLatentH, imgSeed, progressStep, stopToken, stage,
+                     mode = params.hires.mode](Latent base, GenerationContext& c) -> Latent {
+                        if (stage) stage->store(GenerationStage::HiresDenoising);
+                        // Bilinear latent upscale to the snapped hires grid.
+                        Latent up = upscaleLatent(base, hiresLatentW, hiresLatentH, mode);
+                        // Latent dims MUST be /8 (pixel dims were snapped to /64):
+                        // the SD1.5 UNet downsamples 3× and the skip-connection
+                        // Concat shapes mismatch otherwise.
+                        assert(up.w % 8 == 0 && up.h % 8 == 0);
+                        // Own noise source: seed = imgSeed + fixed offset, disjoint
+                        // from the base/batch RNG stream. The base pass has already
+                        // consumed all its draws, and the next image reseeds at its
+                        // own start, so this reseed shifts neither.
+                        seedRng(imgSeed + kHiresSeedOffset);
+                        // Point ctx at the hires resolution for the pass-2 UNet;
+                        // restored on scope exit incl. exception/cancel. decode reads
+                        // dims from the returned Latent, not ctx, so it follows suit.
+                        ScopedLatentResolution hiresRes(c, up.w, up.h);
+                        return denoiseSingleLatent(hiresSigmas, hiresEff, alphas_cumprod, c,
+                                                   progressStep, stopToken, hiresStart, up);
+                    });
+            }
 
             // Insert _N before the extension for multi-image runs.
             std::string outPath = outputPath;

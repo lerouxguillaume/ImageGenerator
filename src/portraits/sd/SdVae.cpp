@@ -7,6 +7,11 @@
 namespace sd {
 
 cv::Mat decodeLatent(const Latent& x, GenerationContext& ctx) {
+    // Decode-strategy dispatch point. Today this is always the single-shot route:
+    // the dynamic-H/W VAE decodes the whole latent in one Run(). A future tiled
+    // strategy slots in HERE — when large hires targets (≈2×+) OOM a single
+    // decode, branch on x.w/x.h above a threshold to a tile-and-stitch decode.
+    // Kept as a plain function (no strategy interface for one implementation).
     {
         float vMin = 1e9f, vMax = -1e9f, vSum = 0.0f;
         for (float v : x.data) { vMin = std::min(vMin, v); vMax = std::max(vMax, v); vSum += v; }

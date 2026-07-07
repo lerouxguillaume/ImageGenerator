@@ -40,12 +40,14 @@ inline float randNormal() {
 }
 
 // seed < 0 → generate randomly; otherwise use the provided value.
-inline void seedRng(int64_t seed = -1) {
+// Returns the concrete seed applied (useful for logging/reproducing a random run).
+inline uint32_t seedRng(int64_t seed = -1) {
     uint32_t s = (seed < 0)
         ? std::random_device{}()
         : static_cast<uint32_t>(seed);
     srand(s);
     Logger::info("RNG seed: " + std::to_string(s));
+    return s;
 }
 
 // ── Image conversion ──────────────────────────────────────────────────────────

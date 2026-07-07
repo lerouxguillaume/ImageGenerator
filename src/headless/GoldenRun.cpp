@@ -2,11 +2,16 @@
 #include "../portraits/PortraitGeneratorAi.hpp"
 #include "../managers/Logger.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace headless {
 namespace {
@@ -22,6 +27,38 @@ bool hasFlag(int argc, char** argv, std::string_view key) {
     for (int i = 1; i < argc; ++i)
         if (key == argv[i]) return true;
     return false;
+}
+
+// Run one synchronous generation. When `cancelAt` is set, a watcher thread
+// requests cancellation once the pipeline's cumulative step counter reaches it —
+// exercising the exact SetTerminate() cancel path the GUI uses. Returns false on
+// a genuine error (cancellation is NOT an error: the pipeline swallows it).
+bool runOne(const std::string& prompt, const std::string& neg, const std::string& out,
+            const GenerationParams& params, const std::string& model,
+            std::optional<int> cancelAt) {
+    std::atomic<int> progressStep{0};
+    std::stop_source src;
+    std::jthread watcher;
+    if (cancelAt) {
+        watcher = std::jthread([&progressStep, &src, n = *cancelAt](std::stop_token wt) {
+            while (!wt.stop_requested()) {
+                if (progressStep.load() >= n) { src.request_stop(); return; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        });
+    }
+
+    bool ok = true;
+    try {
+        PortraitGeneratorAi::generateFromPrompt(prompt, neg, out, params, model,
+                                                &progressStep, nullptr, src.get_token(), nullptr);
+    } catch (const std::exception& e) {
+        Logger::error(std::string("headless-generate failed: ") + e.what());
+        std::cerr << "headless-generate failed: " << e.what() << "\n";
+        ok = false;
+    }
+    if (watcher.joinable()) { watcher.request_stop(); watcher.join(); }
+    return ok;
 }
 
 } // namespace
@@ -47,26 +84,54 @@ std::optional<int> maybeRunHeadless(int argc, char** argv) {
     if (auto v = argValue(argc, argv, "--init"))        p.initImagePath = v;
     if (auto v = argValue(argc, argv, "--strength"))    p.strength      = std::strtof(v, nullptr);
 
+    // Hires-fix flags (SD1.5 only; no-ops on non-hires-capable models).
+    if (hasFlag(argc, argv, "--hires"))                    p.hires.enabled  = true;
+    if (auto v = argValue(argc, argv, "--hires-scale"))    p.hires.scale    = std::strtof(v, nullptr);
+    if (auto v = argValue(argc, argv, "--hires-strength")) p.hires.strength = std::strtof(v, nullptr);
+    if (auto v = argValue(argc, argv, "--hires-steps"))    p.hires.steps    = std::atoi(v);
+
+    // Cancel-restore harness hook: cancel after N cumulative denoise steps.
+    std::optional<int> cancelAfter;
+    if (auto v = argValue(argc, argv, "--cancel-after-steps")) cancelAfter = std::atoi(v);
+
     Logger::info("=== headless-generate ===");
     Logger::info(std::string("model=") + model + "  out=" + out
                  + "  seed=" + std::to_string(p.seed)
                  + "  steps=" + std::to_string(p.numSteps)
                  + "  images=" + std::to_string(p.numImages)
                  + "  guidance=" + std::to_string(p.guidanceScale)
+                 + (p.hires.enabled
+                        ? ("  hires=on scale=" + std::to_string(p.hires.scale)
+                           + " strength=" + std::to_string(p.hires.strength))
+                        : std::string())
+                 + (cancelAfter ? ("  cancel-after-steps=" + std::to_string(*cancelAfter)) : std::string())
                  + (p.initImagePath.empty()
                         ? std::string()
                         : ("  init=" + p.initImagePath + "  strength=" + std::to_string(p.strength))));
 
-    try {
-        // No progress/stage/stop plumbing: a golden run is synchronous and
-        // uncancelled. This exercises the exact same runPipeline() path the GUI
-        // uses; only the callers of the atomics differ (here they are null).
-        PortraitGeneratorAi::generateFromPrompt(prompt, neg, out, p, model);
-    } catch (const std::exception& e) {
-        Logger::error(std::string("headless-generate failed: ") + e.what());
-        std::cerr << "headless-generate failed: " << e.what() << "\n";
-        return 1;
+    // Cancel-restore mode: run a first generation that self-cancels mid-pass
+    // (pick N inside the hires pass), then — in the SAME process, sharing the
+    // static ModelManager cache — a clean native generation to --out. If
+    // ScopedLatentResolution failed to restore ctx dims on the cancel path, the
+    // second (native) output would be wrong; comparing it to an existing native
+    // golden proves the restore.
+    if (cancelAfter) {
+        const std::string cancelledOut = std::string(out) + ".cancelled.png";
+        Logger::info("cancel-restore: pass 1 self-cancels after "
+                     + std::to_string(*cancelAfter) + " steps → " + cancelledOut);
+        runOne(prompt, neg, cancelledOut, p, model, cancelAfter);   // may abort mid-hires
+
+        GenerationParams nativeParams = p;
+        nativeParams.hires.enabled = false;   // pass 2: native, no hires
+        Logger::info("cancel-restore: pass 2 native generation → " + std::string(out));
+        if (!runOne(prompt, neg, out, nativeParams, model, std::nullopt))
+            return 1;
+        std::cout << "headless-generate OK (cancel-restore): " << out << "\n";
+        return 0;
     }
+
+    if (!runOne(prompt, neg, out, p, model, std::nullopt))
+        return 1;
     std::cout << "headless-generate OK: " << out << "\n";
     return 0;
 }
