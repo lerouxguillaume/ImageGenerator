@@ -8,10 +8,15 @@
 enum class ModelType : std::uint8_t { SD15, SDXL };
 
 // How a hires-fix refinement pass grows the base latent before its second
-// denoise. Latent is the v1 route (bilinear latent upscale + VAE decode of the
-// larger latent). Pixel/Esrgan are future decode-then-upscale-then-re-encode
-// variants; the enum leaves room for them without touching call sites.
-enum class UpscaleMode : std::uint8_t { Latent /*, Pixel, Esrgan (future)*/ };
+// denoise.
+//   Pixel  — decode base → upscale the sharp RGB → re-encode. Anchors pass 2 on
+//            a sharp low-freq structure so it ADDS detail. The good default.
+//   Latent — bilinear upscale of the 4-ch latent directly. Cheaper (no extra
+//            decode+encode) but off-manifold: the VAE amplifies the interpolation
+//            into blur and pass 2 preserves it (measured softer than a plain
+//            bicubic upscale). Kept for models without a VAE encoder / for A/B.
+// Esrgan is a future variant (learned upscaler in place of cv::resize).
+enum class UpscaleMode : std::uint8_t { Pixel, Latent /*, Esrgan (future)*/ };
 
 // Stage reported by the generation thread to the UI thread via atomic<GenerationStage>.
 // Generation cycles: LoadingModel → EncodingText → (EncodingImage) → Denoising

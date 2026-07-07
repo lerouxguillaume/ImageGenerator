@@ -466,7 +466,9 @@ void runPipeline(const std::string& prompt,
         hiresEff     = params.hiresEffectiveSteps();
         hiresStart   = params.hiresStartStep();
         hiresSigmas  = buildKarrasSchedule(alphas_cumprod, hiresEff);
-        Logger::info("Hires fix: scale=" + std::to_string(params.hires.scale)
+        const bool pixelMode = params.hires.mode == UpscaleMode::Pixel && ctx.vaeEncoderAvailable;
+        Logger::info("Hires fix: mode=" + std::string(pixelMode ? "pixel" : "latent")
+                     + "  scale=" + std::to_string(params.hires.scale)
                      + "  target=" + std::to_string(hiresPxW) + "x" + std::to_string(hiresPxH)
                      + " (latent " + std::to_string(hiresLatentW) + "x" + std::to_string(hiresLatentH) + ")"
                      + "  strength=" + std::to_string(params.hires.strength)
@@ -499,8 +501,24 @@ void runPipeline(const std::string& prompt,
                      hiresLatentW, hiresLatentH, imgSeed, progressStep, stopToken, stage,
                      mode = params.hires.mode](Latent base, GenerationContext& c) -> Latent {
                         if (stage) stage->store(GenerationStage::HiresDenoising);
-                        // Bilinear latent upscale to the snapped hires grid.
-                        Latent up = upscaleLatent(base, hiresLatentW, hiresLatentH, mode);
+                        const int hiresPxW = hiresLatentW * 8;
+                        const int hiresPxH = hiresLatentH * 8;
+                        // Grow the base latent to the snapped hires grid.
+                        Latent up;
+                        if (mode == UpscaleMode::Pixel && c.vaeEncoderAvailable) {
+                            // Pixel route: decode base → sharp bicubic RGB upscale →
+                            // re-encode. The re-encoded latent is ON-manifold and sharp,
+                            // so pass 2 adds detail. (Latent-space bilinear is off-manifold
+                            // and the VAE amplifies it into blur — measurably worse than a
+                            // plain bicubic upscale, hence not the default.)
+                            cv::Mat baseImg = decodeLatent(base, c);   // native-res BGR
+                            cv::Mat bigImg;
+                            cv::resize(baseImg, bigImg, {hiresPxW, hiresPxH}, 0, 0, cv::INTER_CUBIC);
+                            up = encodeImage(bigImg, hiresPxW, hiresPxH, c, /*sample=*/false);
+                        } else {
+                            // Latent route (no VAE encoder, or explicitly selected).
+                            up = upscaleLatent(base, hiresLatentW, hiresLatentH, mode);
+                        }
                         // Latent dims MUST be /8 (pixel dims were snapped to /64):
                         // the SD1.5 UNet downsamples 3× and the skip-connection
                         // Concat shapes mismatch otherwise.

@@ -89,6 +89,8 @@ std::optional<int> maybeRunHeadless(int argc, char** argv) {
     if (auto v = argValue(argc, argv, "--hires-scale"))    p.hires.scale    = std::strtof(v, nullptr);
     if (auto v = argValue(argc, argv, "--hires-strength")) p.hires.strength = std::strtof(v, nullptr);
     if (auto v = argValue(argc, argv, "--hires-steps"))    p.hires.steps    = std::atoi(v);
+    if (auto v = argValue(argc, argv, "--hires-mode"))     // "pixel" (default) | "latent"
+        p.hires.mode = (std::string_view(v) == "latent") ? UpscaleMode::Latent : UpscaleMode::Pixel;
 
     // Cancel-restore harness hook: cancel after N cumulative denoise steps.
     std::optional<int> cancelAfter;

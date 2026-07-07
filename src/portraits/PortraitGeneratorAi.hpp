@@ -17,7 +17,7 @@ struct HiresConfig {
     float       scale    = 1.5f;   // target pixel dims = native * scale, snapped to /64
     float       strength = 0.5f;   // pass-2 denoise fraction (UI range 0.3–0.7)
     int         steps    = 0;      // 0 = reuse the base numSteps for pass 2
-    UpscaleMode mode     = UpscaleMode::Latent;
+    UpscaleMode mode     = UpscaleMode::Pixel;  // Pixel adds detail; Latent blurs
 };
 
 // Parameters shared by all generation entry points.
