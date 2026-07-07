@@ -1,10 +1,12 @@
 #include "app.hpp"
+#include "headless/GoldenRun.hpp"
 #include "managers/Logger.hpp"
 
 #include <csignal>
 #include <exception>
 #include <filesystem>
 #include <onnxruntime_cxx_api.h>
+#include <optional>
 #include <string>
 
 #if defined(_WIN32)
@@ -64,7 +66,7 @@ void onTerminate() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::filesystem::current_path(executableDir());
     Logger::init("Image_generator.log");
 
@@ -72,6 +74,12 @@ int main() {
     std::signal(SIGSEGV, onSignal);
     std::signal(SIGABRT, onSignal);
     std::signal(SIGFPE,  onSignal);
+
+    // Golden-run harness: if invoked with --headless-generate, run one scripted
+    // generation and exit without opening the GUI. Returns std::nullopt in the
+    // normal case so the app runs as usual.
+    if (auto code = headless::maybeRunHeadless(argc, argv))
+        return *code;
 
     try {
         App app;
