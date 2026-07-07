@@ -219,8 +219,8 @@ After export completes, `import_model.py` extends `model.json` with:
 
 `hires_capable` is derived from the actual exported graphs
 (`import_model.py::_detect_hires_capable`): `true` only when **both** the UNet and
-VAE decoder carry dynamic H/W axes. SD 1.5 always qualifies; SDXL qualifies only
-when exported with `--dynamic-spatial` (the default static SDXL export is `false`).
+VAE decoder carry dynamic H/W axes. SD 1.5 always qualifies; SDXL qualifies from
+its default (dynamic-spatial) export, while a `--static` SDXL export is `false`.
 The C++ side reads it into `ModelCapabilities::hiresCapable`, which **defaults
 `false`** when the key is absent — models imported before this key existed are
 treated as static, unlike `vae_encoder_available` / `lora_compatible` whose

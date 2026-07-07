@@ -429,11 +429,13 @@ class SDXLExportPolicy(ExportPolicy):
         # than the native 128×128 (1024 px). This is the SDXL analogue of the
         # SD1.5 hires support.
         #
-        # This is the in-app SDXL import default (import_model.py passes True): it
-        # enables hires, produces identical output at native 1024, and is far
-        # faster to export than the static path (the UNet/decoder trace at a tiny
-        # latent). The standalone CLI still defaults False (static-1024, byte-for-
-        # byte the legacy export) unless --dynamic-spatial is passed.
+        # dynamic_spatial=True is the default for BOTH entry points: the in-app
+        # import passes it explicitly, and the standalone CLI now defaults to it
+        # (pass --static to opt out). It enables hires, produces identical output at
+        # native 1024, and is far faster to export than the static path (the
+        # UNet/decoder trace at a tiny latent). The static arm (dynamic_spatial=
+        # False, CLI --static) is the byte-for-byte legacy export, kept as the
+        # proven escape hatch if the legacy-tracer dynamic path ever regresses.
         #
         # The UNet, VAE DECODER *and* VAE ENCODER change. The dynamic encoder
         # enables PIXEL-mode hires (decode base → bicubic RGB upscale → re-encode

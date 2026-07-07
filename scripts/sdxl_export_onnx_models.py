@@ -4,12 +4,15 @@ Export Stable Diffusion XL models to ONNX for use with ONNX Runtime.
 Usage:
     python sdxl_export_onnx_models.py <model.safetensors> [--name MODEL_NAME]
 
+The default export is dynamic-spatial (hires-capable, incl. pixel mode) and also
+emits the fp32 decoder hedge. Pass --static for the legacy static-1024 graph.
+
 Outputs (under models/<MODEL_NAME>/):
     text_encoder.onnx   — CLIP-L penultimate hidden states, fp32
     text_encoder_2.onnx — OpenCLIP-G hidden states + pooled embeds, fp32
-    unet.onnx           — UNet, fp16, batch-dynamic (dynamic H/W with --dynamic-spatial)
-    vae_decoder.onnx    — VAE decoder, fp16, static shape (dynamic H/W with --dynamic-spatial)
-    vae_encoder.onnx    — VAE encoder, fp16, static shape (dynamic H/W with --dynamic-spatial)
+    unet.onnx           — UNet, fp16, dynamic H/W (batch-only static with --static)
+    vae_decoder.onnx    — VAE decoder, fp16, dynamic H/W (static 1024 with --static)
+    vae_encoder.onnx    — VAE encoder, fp16, dynamic H/W (static 1024 with --static)
     model.json          — {"type": "sdxl"} for C++ runtime detection
 
 Notes on dtype strategy:
@@ -256,9 +259,10 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     #     Rationale: SDXL fp16-VAE can produce NaN/washed-out output at >native
     #     latents; shipping the fp32 fallback in the SAME run means the fix is a
     #     file swap, never a second ~hour-long export session. Gated on
-    #     emit_fp32_hedge (CLI --dynamic-spatial only) — the in-app import ships a
-    #     lean fp16-only model, since fp16 was validated stable and there is no
-    #     in-app swap mechanism to make the ~200 MB spare worth its disk.
+    #     emit_fp32_hedge (on for the default CLI export, off under --static) — the
+    #     in-app import ships a lean fp16-only model (emit_fp32_hedge=False), since
+    #     fp16 was validated stable and there is no in-app swap mechanism to make the
+    #     ~200 MB spare worth its disk.
     if dynamic_spatial and emit_fp32_hedge:
         dummy_latent_vae_fp32 = torch.randn(
             1, 4, vae_dec_trace_hw, vae_dec_trace_hw, dtype=torch.float32)
@@ -378,13 +382,15 @@ def parse_args() -> argparse.Namespace:
         help="Run ORT forward pass after each component export to catch runtime errors (slow)",
     )
     parser.add_argument(
-        "--dynamic-spatial",
+        "--static",
         action="store_true",
-        help="Export the UNet + VAE decoder + VAE encoder with dynamic H/W axes so a "
-             "hires/second pass can run at >native resolution (enables both latent- and "
-             "pixel-mode hires; also emits an fp32 decoder hedge). Traces all three at a "
-             "tiny input. This is the in-app import default; the standalone CLI defaults "
-             "to the static export.",
+        help="Export the legacy STATIC SDXL graph: UNet batch-only + VAE decoder/encoder "
+             "fixed at 1024, no hires (latent or pixel), no fp32 decoder hedge. The "
+             "DEFAULT export (no flag) is now dynamic-spatial — UNet + VAE decoder + VAE "
+             "encoder with dynamic H/W axes (hires-capable incl. pixel mode) plus the fp32 "
+             "decoder hedge, all traced at a tiny input. Use --static only as an escape "
+             "hatch if a future torch/ORT release regresses the legacy-tracer dynamic "
+             "export and you need the proven static path.",
     )
     return parser.parse_args()
 
@@ -394,6 +400,11 @@ if __name__ == "__main__":
     name = args.name or os.path.splitext(os.path.basename(args.model_file))[0]
     out  = args.output_dir or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "models", name)
+    # Dynamic-spatial is the default; --static is the escape hatch. The dynamic CLI
+    # run also emits the fp32 decoder hedge (investigation / manual-swap use); the
+    # in-app import calls export_sdxl(dynamic_spatial=True, emit_fp32_hedge=False)
+    # directly, so this flag never affects the in-app path.
+    dynamic = not args.static
     try:
         export_sdxl(
             args.model_file,
@@ -402,10 +413,8 @@ if __name__ == "__main__":
             simplify_vae=args.simplify_vae,
             resume=args.resume,
             validate=args.validate,
-            dynamic_spatial=args.dynamic_spatial,
-            # CLI --dynamic-spatial also emits the fp32 decoder hedge (investigation
-            # / manual-swap use); the in-app import passes emit_fp32_hedge=False.
-            emit_fp32_hedge=args.dynamic_spatial,
+            dynamic_spatial=dynamic,
+            emit_fp32_hedge=dynamic,
         )
     except (FileNotFoundError, ImportError) as e:
         print(f"\n{e}", file=sys.stderr)

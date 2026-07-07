@@ -107,9 +107,9 @@ def _detect_hires_capable(output_dir: str, arch: str) -> bool:
 
     This is derived from the actual exported graphs (ground truth) rather than
     assumed from the architecture, so it is correct for any arch and any export
-    variant: SD1.5 (always dynamic) reports True; a static SDXL export reports
-    False; an SDXL export produced with --dynamic-spatial reports True
-    automatically once both graphs carry the axes.
+    variant: SD1.5 (always dynamic) reports True; a --static SDXL export reports
+    False; the default (dynamic-spatial) SDXL export reports True automatically
+    once both graphs carry the axes.
 
     If a graph cannot be probed, fail CLOSED (return False) and warn loudly. The
     old behaviour fell back to the arch heuristic (SD1.5 -> True), which would
@@ -144,8 +144,9 @@ def _detect_pixel_hires_capable(output_dir: str) -> bool:
 
     Derived from the exported encoder graph (ground truth), same mechanism and
     fail-closed policy as _detect_hires_capable: SD1.5 (encoder always dynamic) ->
-    True; a static-encoder SDXL export -> False; an SDXL --dynamic-spatial export ->
-    True once the encoder carries the axes. A model can be hires_capable (dynamic
+    True; a --static (static-encoder) SDXL export -> False; the default dynamic-
+    spatial SDXL export -> True once the encoder carries the axes. A model can be
+    hires_capable (dynamic
     UNet + decoder) yet NOT pixel_hires_capable (static encoder): that is exactly
     the pre-dynamic-encoder SDXL case, which must run latent-mode hires. An
     unprobeable graph fails CLOSED (False) — a wrong "capable" makes the runtime
@@ -188,8 +189,8 @@ def write_capabilities(output_dir: str, arch: str) -> None:
         "lora_compatible":       True,
         # Derived from the exported graphs, not the arch: hires needs the UNet AND
         # VAE decoder to both accept a larger-than-native latent (dynamic H/W).
-        # SD1.5 always exports both dynamic → True. SDXL is True only when exported
-        # with --dynamic-spatial; the default static SDXL export → False.
+        # SD1.5 always exports both dynamic → True. SDXL derives True from its
+        # default (dynamic-spatial) export; a --static SDXL export → False.
         "hires_capable":         _detect_hires_capable(output_dir, arch),
         # Pixel-mode hires additionally needs a DYNAMIC-shape VAE encoder (it
         # re-encodes the upscaled image). Separate from hires_capable: an SDXL model

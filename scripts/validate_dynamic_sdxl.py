@@ -2,10 +2,9 @@
 Validate a dynamic-spatial SDXL export (the hires-capable SDXL export).
 
 Run this on a machine with `onnxruntime-gpu` (ideally CUDA) after exporting a
-model with:
+model with (dynamic-spatial is the default now — no flag needed):
 
-    python scripts/sdxl_export_onnx_models.py <sdxl.safetensors> \
-        --name my_sdxl_dyn --dynamic-spatial
+    python scripts/sdxl_export_onnx_models.py <sdxl.safetensors> --name my_sdxl_dyn
 
 It answers the make-or-break questions the dev box cannot (no torch / no GPU):
 
@@ -164,9 +163,10 @@ def _check_structure(path: str, label: str, input_name: str = "latent") -> bool:
 
     Returns True iff the graph loaded and that input's H/W are dynamic. checker /
     shape-inference problems are reported as warnings (the ORT forward below is the
-    authoritative proof); static H/W is a hard fail because it means
-    --dynamic-spatial did not take effect. input_name is "latent" for the UNet /
-    VAE decoder and "image" for the VAE encoder (pixel-mode hires re-encode).
+    authoritative proof); static H/W is a hard fail because it means the
+    dynamic-spatial export did not take effect (e.g. the model was exported with
+    --static). input_name is "latent" for the UNet / VAE decoder and "image" for
+    the VAE encoder (pixel-mode hires re-encode).
     """
     try:
         import onnx
@@ -205,7 +205,8 @@ def _check_structure(path: str, label: str, input_name: str = "latent") -> bool:
             _emit("ok", f"{label}.dynamic", f"{input_name} H/W are dynamic (shape={shp})")
             return True
         _emit("fail", f"{label}.dynamic",
-              f"{input_name} H/W are STATIC (shape={shp}) — --dynamic-spatial did not apply")
+              f"{input_name} H/W are STATIC (shape={shp}) — dynamic-spatial export did "
+              f"not apply (was it exported with --static?)")
         return False
 
     _emit("fail", f"{label}.dynamic", f"no input named '{input_name}' found")
