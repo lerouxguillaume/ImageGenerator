@@ -49,6 +49,21 @@ The script auto-detects SD1.5 vs SDXL from `model.json`.  All other files in the
 
 ---
 
+# Additional CLI knobs (standalone export scripts)
+
+These flags exist on `export_onnx_models.py` / `sdxl_export_onnx_models.py` for
+manual/standalone use. The in-app import never passes them (it calls the export
+functions directly), so they are documented here rather than in the import flow:
+
+| Flag | Script(s) | Effect |
+|---|---|---|
+| `--optimize-memory` | SDXL | Turns on attention slicing — lower peak RAM, slower export. For machines that OOM on the default fast path. |
+| `--simplify-vae` | SDXL | Runs `onnxsim` on `vae_decoder.onnx` after export (slower; rarely needed). |
+| `--output-dir` | both | Override the output directory path (default: `../models/<name>`). |
+| `--validate` | both | Run a full ORT CPU forward pass after **each** component export to catch dtype/shape errors early. Slow on large models; a debugging aid. |
+
+---
+
 # Rules
 
 - SD 1.5 VAE **decoder** *and* **encoder** export with dynamic H/W axes (`{0:batch, 2:height, 3:width}`, legacy tracer — dynamo cannot express spatial axes) so the decoder can decode hires latents larger than native and the encoder can re-encode the upscaled image for **pixel-mode** hires. The SDXL VAE decoder/encoder are static 1024×1024 **by default** (dynamo), dynamic only under `--dynamic-spatial`.

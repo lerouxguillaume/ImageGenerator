@@ -393,13 +393,9 @@ class SD15ExportPolicy(ExportPolicy):
         # Mirrors unet_dynamic_axes(): the decoder input is a latent
         # {0:batch, 2:height, 3:width}; the output image scales 8× spatially.
         #
-        # HISTORICAL NOTE: an older comment here warned that dynamic H/W caused
-        # torch.onnx.export to hang 1+ hour (shape-propagation overhead in the
-        # legacy tracer).  Re-tested on torch 2.11.0 (2026-07): a legacy-tracer
-        # export of the SD1.5 VAE decoder with dynamic H/W axes completes in
-        # ~19s (vs ~29s static) — the hang is gone, fixed upstream.  Dynamo
-        # cannot express spatial axes (batch-only), so this must go via the
-        # legacy tracer (see vae_exporter below).
+        # A dynamic-H/W legacy-tracer export no longer hangs (an old torch bug;
+        # re-tested clean on torch 2.11.0, 2026-07). Dynamo cannot express spatial
+        # axes (batch-only), so this must go via the legacy tracer (see vae_exporter).
         return {
             "latent": {0: "batch", 2: "height", 3: "width"},
             "image":  {0: "batch", 2: "height", 3: "width"},

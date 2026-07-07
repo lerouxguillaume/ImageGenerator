@@ -380,10 +380,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dynamic-spatial",
         action="store_true",
-        help="Export UNet + VAE decoder with dynamic H/W axes so a hires/second pass "
-             "can run at >native resolution (and emit an fp32 decoder hedge). Traces "
-             "those two at a tiny latent; encoder stays static 1024. This is the "
-             "in-app import default; the standalone CLI defaults to the static export.",
+        help="Export the UNet + VAE decoder + VAE encoder with dynamic H/W axes so a "
+             "hires/second pass can run at >native resolution (enables both latent- and "
+             "pixel-mode hires; also emits an fp32 decoder hedge). Traces all three at a "
+             "tiny input. This is the in-app import default; the standalone CLI defaults "
+             "to the static export.",
     )
     return parser.parse_args()
 

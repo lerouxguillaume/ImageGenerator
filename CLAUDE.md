@@ -134,7 +134,8 @@ UI theme facts:
 
 ## Debugging
 → docs/90_debug/common_failures.md  
-→ docs/90_debug/performance.md
+→ docs/90_debug/performance.md  
+→ docs/90_debug/golden_harness.md
 
 ---
 

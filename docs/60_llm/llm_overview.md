@@ -41,6 +41,26 @@ at enhancement launch so the merge base is always pre-LLM state.
 
 ---
 
+# Producing the model
+
+The runtime consumes an **ort-genai** model directory (`model.onnx` +
+`genai_config.json` + tokenizer files), pointed at by
+`config.json → promptEnhancer.modelDir`. `scripts/export_llm_onnx.py` is the
+**only** producer of that directory — it wraps the ort-genai model builder and
+patches `tokenizer_config.json` so `OgaTokenizer` accepts it. It is a standalone,
+manually-run tool (never invoked by the app or the import pipeline):
+
+```bash
+# CPU int4 (smallest, recommended for prompt enhancement)
+python scripts/export_llm_onnx.py <hf_model_id_or_local_path> --output models/my-llm-onnx
+```
+
+"Uncensored" behaviour, if wanted, comes entirely from the chosen HuggingFace
+weights — no safety layer is added or removed by the script. See the script's
+docstring for the DirectML/CUDA and precision variants.
+
+---
+
 # Rules
 
 - Do NOT add an `enhance()` method to `IPromptEnhancer` — `transform()` is the only mode
