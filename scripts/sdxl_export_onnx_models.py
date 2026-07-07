@@ -302,7 +302,7 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
                 exporter=policy.vae_exporter(),
                 fix_fp32_constants=policy.should_fix_fp32_constants("vae_decoder"),
                 fix_resize_fp16=policy.should_fix_resize_fp16("vae_decoder"),
-                simplify=policy.should_simplify_vae(simplify_vae),
+                simplify=simplify_vae,
                 skip_if_complete=resume,
                 validate=validate,
             ),

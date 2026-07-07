@@ -328,16 +328,6 @@ class ExportPolicy:
 
     model_type = "base"
 
-    def text_encoder_dynamic_axes(
-        self,
-        input_name: str,
-        output_names: list[str],
-    ) -> dict[str, dict[int, str]]:
-        axes = {input_name: {0: "batch"}}
-        for name in output_names:
-            axes[name] = {0: "batch"}
-        return axes
-
     def unet_dynamic_axes(self) -> dict[str, dict[int, str]]:
         raise NotImplementedError
 
@@ -370,9 +360,6 @@ class ExportPolicy:
 
     def should_fix_resize_fp16(self, component_name: str) -> bool:
         return False
-
-    def should_simplify_vae(self, requested: bool) -> bool:
-        return requested
 
 
 class SD15ExportPolicy(ExportPolicy):
@@ -538,9 +525,6 @@ class SDXLExportPolicy(ExportPolicy):
     def should_fix_resize_fp16(self, component_name: str) -> bool:
         return True  # VAE decoder also has fp16 Resize nodes at runtime
 
-    def should_simplify_vae(self, requested: bool) -> bool:
-        return requested
-
 
 def _normalize_dummy_inputs(dummy_inputs: Any) -> tuple[Any, ...]:
     if isinstance(dummy_inputs, tuple):
@@ -659,37 +643,34 @@ def onnx_export(
     dummy_inputs = _normalize_dummy_inputs(dummy_inputs)
     print(f"  Exporting {name} ...")
 
-    if exporter not in {"legacy", "dynamo", "auto"}:
+    if exporter not in {"legacy", "dynamo"}:
         raise ValueError(f"Unknown exporter '{exporter}'")
 
-    if exporter in {"dynamo", "auto"}:
+    if exporter == "dynamo":
         can_use_dynamo = dynamic_axes is None or _supports_batch_only_dynamic_shapes(
             input_names,
             dynamic_axes,
         )
-        if can_use_dynamo:
-            try:
-                _dynamo_export(
-                    model,
-                    dummy_inputs,
-                    path,
-                    input_names=input_names,
-                    output_names=output_names,
-                    dynamic_axes=dynamic_axes,
-                    do_constant_folding=do_constant_folding,
-                )
-                size_mb = os.path.getsize(path) / 1e6
-                print(f"  Saved {name}  ({size_mb:.0f} MB) via dynamo exporter")
-                return
-            except Exception as e:
-                if exporter == "dynamo":
-                    raise
-                print(f"  Dynamo export failed ({e}); falling back to legacy tracer")
-        elif exporter == "dynamo":
+        if not can_use_dynamo:
             raise ValueError(
                 "Dynamo exporter only supports fully static graphs or batch-only dynamic axes "
                 "in this project"
             )
+        # No silent fallback: a dynamo failure propagates (the caller asked for
+        # dynamo explicitly). Falling back to the legacy tracer here would mask a
+        # real export problem — banned in this codebase.
+        _dynamo_export(
+            model,
+            dummy_inputs,
+            path,
+            input_names=input_names,
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
+            do_constant_folding=do_constant_folding,
+        )
+        size_mb = os.path.getsize(path) / 1e6
+        print(f"  Saved {name}  ({size_mb:.0f} MB) via dynamo exporter")
+        return
 
     _legacy_export(
         model,
