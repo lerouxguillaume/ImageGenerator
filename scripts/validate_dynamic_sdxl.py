@@ -42,6 +42,15 @@ import sys
 
 import numpy as np
 
+# Shared ORT primitives (see scripts/ort_probe.py). This validator runs GPU-first:
+# it preloads CUDA/cuDNN DLLs and caps graph-opt at BASIC — both wired through the
+# thin _session/_gpu_providers wrappers below.
+from ort_probe import GPU_PROVIDERS as _GPU_PROVIDERS
+from ort_probe import dim_is_dynamic as _dim_is_dynamic
+from ort_probe import gpu_providers as _gpu_providers_base
+from ort_probe import make_session
+from ort_probe import np_dtype as _np_dtype
+
 SEQ_LEN = 77
 HIDDEN_DIM = 2048   # SDXL concat(CLIP-L 768, OpenCLIP-G 1280)
 POOLED_DIM = 1280
@@ -53,15 +62,6 @@ POOLED_DIM = 1280
 _UNET_REL_MEAN_FAIL = 0.05
 _VAE_REL_MEAN_FAIL = 0.05
 
-_ORT_TO_NP = {
-    "tensor(float16)": np.float16,
-    "tensor(float)": np.float32,
-    "tensor(double)": np.float64,
-    "tensor(bfloat16)": np.float32,
-    "tensor(int64)": np.int64,
-    "tensor(int32)": np.int32,
-}
-
 _hard_failures: list[str] = []
 
 
@@ -71,10 +71,6 @@ def _emit(status: str, check: str, detail: str) -> None:
         _hard_failures.append(check)
 
 
-def _np_dtype(ort_type: str):
-    return _ORT_TO_NP.get(ort_type, np.float32)
-
-
 def _is_oom(msg: str) -> bool:
     """True if an ORT exception is a GPU out-of-memory (a VRAM ceiling, not a defect)."""
     m = msg.lower()
@@ -82,41 +78,15 @@ def _is_oom(msg: str) -> bool:
             or "cuda failure 2" in m or "cudnn_status_alloc_failed" in m)
 
 
-_GPU_PROVIDERS = ("CUDAExecutionProvider", "DmlExecutionProvider", "ROCMExecutionProvider")
-
-
-def _import_ort():
-    import onnxruntime as ort
-    # ORT >= 1.19 can preload CUDA/cuDNN DLLs from installed nvidia-*-cu1x pip
-    # wheels, so a matching `pip install nvidia-cublas-cuXX nvidia-cudnn-cuXX ...`
-    # is enough — no system CUDA toolkit needed. No-op on older ORT.
-    preload = getattr(ort, "preload_dlls", None)
-    if preload is not None:
-        try:
-            preload()
-        except Exception:
-            pass
-    return ort
-
-
+# GPU-box validator: preload CUDA/cuDNN DLLs (no system toolkit needed) and cap
+# the graph optimizer at BASIC (ORT's full optimizer can segfault the CPU EP on
+# the fp16 Resize graphs this export wraps). Both wrap the shared ort_probe core.
 def _gpu_providers() -> list:
-    ort = _import_ort()
-    avail = set(ort.get_available_providers())
-    return [p for p in _GPU_PROVIDERS if p in avail]
+    return _gpu_providers_base(preload=True)
 
 
 def _session(path: str, prefer_gpu: bool = True):
-    ort = _import_ort()
-    so = ort.SessionOptions()
-    so.log_severity_level = 3
-    so.enable_cpu_mem_arena = False
-    # ORT's full graph optimizer can segfault the CPU EP on fp16 Resize graphs
-    # (the exact nodes this export wraps). Cap at BASIC — safe on every EP and
-    # plenty for a validation forward.
-    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-    providers = (_gpu_providers() + ["CPUExecutionProvider"]) if prefer_gpu \
-        else ["CPUExecutionProvider"]
-    return ort.InferenceSession(path, so, providers=providers)
+    return make_session(path, prefer_gpu=prefer_gpu, preload=True, basic_opt=True)
 
 
 class _VramSampler:
@@ -188,10 +158,6 @@ def _rel_stats(onnx_out: np.ndarray, ref: np.ndarray) -> tuple[float, float, flo
 
 
 # ── structural checks ─────────────────────────────────────────────────────────
-
-def _dim_is_dynamic(dim) -> bool:
-    return bool(dim.dim_param) or not dim.HasField("dim_value")
-
 
 def _check_structure(path: str, label: str, input_name: str = "latent") -> bool:
     """checker + shape inference + symbolic-dim probe on <input_name> (H/W axes 2,3).

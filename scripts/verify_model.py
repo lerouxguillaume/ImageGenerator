@@ -32,9 +32,14 @@ import os
 
 import numpy as np
 
-# onnxruntime is imported lazily inside _session() so this module can be imported
-# (and its pure helpers unit-tested) on a host without ORT. In the import venv ORT
-# is always present.
+# Shared ORT primitives (dtype map, provider discovery, session, dim resolver).
+# ort_probe imports onnxruntime lazily inside its functions, so importing it here
+# does not require ORT at module-import time — this module (and its pure helpers)
+# can still be imported on a host without ORT. In the import venv ORT is present.
+from ort_probe import fixed_dim as _fixed
+from ort_probe import gpu_providers as _gpu_providers
+from ort_probe import make_session
+from ort_probe import np_dtype as _np_dtype
 
 # CLIP special tokens (shared by SD1.5 CLIP-L and SDXL's two encoders).
 BOS = 49406
@@ -67,51 +72,13 @@ def _emit(status: str, check: str, detail: str) -> None:
 
 
 # ── ORT helpers ───────────────────────────────────────────────────────────────
-
-_ORT_TO_NP = {
-    "tensor(float16)": np.float16,
-    "tensor(float)": np.float32,
-    "tensor(double)": np.float64,
-    "tensor(bfloat16)": np.float32,  # ORT has no numpy bf16; fp32 feed is accepted
-    "tensor(int64)": np.int64,
-    "tensor(int32)": np.int32,
-}
-
-
-def _np_dtype(ort_type: str):
-    return _ORT_TO_NP.get(ort_type, np.float32)
-
-
-_GPU_PROVIDERS = ("CUDAExecutionProvider", "DmlExecutionProvider", "ROCMExecutionProvider")
-
-
-def _gpu_providers() -> list:
-    """GPU execution providers available in this ORT build (empty on CPU-only)."""
-    import onnxruntime as ort
-    avail = set(ort.get_available_providers())
-    return [p for p in _GPU_PROVIDERS if p in avail]
+# _np_dtype / _gpu_providers / _fixed come from ort_probe (imported above).
+# verify_model runs on the CPU EP by default: no CUDA-DLL preload, and it keeps
+# ORT's default graph-opt level, so it takes make_session's defaults.
 
 
 def _session(path: str, prefer_gpu: bool = False):
-    import onnxruntime as ort
-    so = ort.SessionOptions()
-    so.log_severity_level = 3  # errors only — keep the import log readable
-    # Disable the CPU memory arena: the arena pre-reserves a large pool that
-    # inflates peak RSS when loading multi-GB fp16 models, which is exactly what
-    # OOM-kills verification on memory-constrained machines.
-    so.enable_cpu_mem_arena = False
-    providers = (_gpu_providers() + ["CPUExecutionProvider"]) if prefer_gpu \
-        else ["CPUExecutionProvider"]
-    return ort.InferenceSession(path, so, providers=providers)
-
-
-def _fixed(dim, fallback: int) -> int:
-    """Resolve one ONNX shape dim to a concrete size.
-
-    Static graphs (SDXL) report ints and must be honoured exactly; dynamic graphs
-    (SD1.5) report strings/None where we substitute a small test size.
-    """
-    return dim if isinstance(dim, int) and dim > 0 else fallback
+    return make_session(path, prefer_gpu=prefer_gpu)
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
