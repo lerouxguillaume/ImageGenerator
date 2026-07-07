@@ -350,6 +350,12 @@ class ExportPolicy:
     def vae_exporter(self) -> str:
         return "legacy"
 
+    def vae_encoder_exporter(self) -> str:
+        # VAE encoders are always static-shape, so by default they use whatever
+        # the decoder uses. Overridden where the decoder needs the legacy tracer
+        # (for dynamic axes) but the static encoder should not pay its cost.
+        return self.vae_exporter()
+
     def should_fix_fp32_constants(self, component_name: str) -> bool:
         return False
 
@@ -394,11 +400,20 @@ class SD15ExportPolicy(ExportPolicy):
         }
 
     def vae_exporter(self) -> str:
-        # Legacy tracer: dynamo cannot express spatial (H/W) dynamic axes, only
-        # batch. The ~19s dynamic-H/W legacy export re-validated on torch 2.11.0
-        # is the path this uses; consolidate_external_data() folds the per-tensor
-        # sidecars afterward so runtime still gets a single .onnx.data file.
+        # Decoder only: dynamo cannot express spatial (H/W) dynamic axes, so the
+        # dynamic decoder must use the legacy tracer. The legacy tracer runs the
+        # model forward eagerly, and fp16 Conv2d on CPU has no fast kernel
+        # (~1000x slower than fp32), so the decoder is traced at a tiny 8x8 latent
+        # (see export_onnx_models.py) — the dynamic graph is identical, only the
+        # forward is ~64x cheaper. consolidate_external_data() folds the sidecars
+        # afterward so runtime still gets a single .onnx.data file.
         return "legacy"
+
+    def vae_encoder_exporter(self) -> str:
+        # The encoder is static (no dynamic axes), so keep it on the fast dynamo
+        # exporter — the legacy tracer's eager fp16 512x512 conv forward is
+        # pathologically slow on CPU and buys the encoder nothing.
+        return "dynamo"
 
     def should_fix_resize_fp16(self, component_name: str) -> bool:
         return component_name in {"unet", "vae_decoder", "vae_encoder"}

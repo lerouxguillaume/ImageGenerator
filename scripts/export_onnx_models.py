@@ -161,7 +161,13 @@ def export_sd15(model_file: str, output_dir: str, *,
 
     # 3. VAE decoder ──────────────────────────────────────────────────────────
     pipe.vae.to(torch.float16)
-    dummy_latent_vae = torch.randn(1, 4, 64, 64, dtype=torch.float16)
+    # The decoder exports with dynamic H/W axes, so the traced spatial size does
+    # not change the output graph — only the legacy tracer's (eager) forward-pass
+    # cost. fp16 Conv2d on CPU has no fast kernel (~1000x slower than fp32), so
+    # tracing at the native 64x64 latent (512x512 image) makes the tracer run for
+    # many minutes. Trace at a tiny 8x8 latent instead: identical dynamic graph,
+    # ~64x cheaper forward. (Validated to decode identically at native/hires.)
+    dummy_latent_vae = torch.randn(1, 4, 8, 8, dtype=torch.float16)
     exported.append(
         export_component_to_dir(
             output_dir,
@@ -192,7 +198,7 @@ def export_sd15(model_file: str, output_dir: str, *,
             output_dir,
             make_vae_encoder_spec(
                 step_name="4/4  VAE encoder",
-                exporter=policy.vae_exporter(),
+                exporter=policy.vae_encoder_exporter(),
                 vae=pipe.vae,
                 dummy_image=dummy_image,
                 fix_resize_fp16=policy.should_fix_resize_fp16("vae_encoder"),
