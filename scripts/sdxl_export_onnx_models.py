@@ -96,11 +96,12 @@ class UNetWrapper(torch.nn.Module):
 
 def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = False,
                 simplify_vae: bool = False, resume: bool = False,
-                validate: bool = False, dynamic_spatial: bool = False) -> None:
+                validate: bool = False, dynamic_spatial: bool = False,
+                emit_fp32_hedge: bool = False) -> None:
     policy = SDXLExportPolicy(dynamic_spatial=dynamic_spatial)
     if dynamic_spatial:
-        print("  DYNAMIC-SPATIAL mode: UNet + VAE decoder export with dynamic H/W "
-              "axes (EXPERIMENTAL — SDXL hires groundwork)")
+        print("  Dynamic-spatial mode: UNet + VAE decoder export with dynamic H/W "
+              "axes (hires-capable; also emits an fp32 decoder hedge)")
     check_dependencies(
         required=[
             "torch", "diffusers", "transformers", "onnx", "onnxscript",
@@ -252,8 +253,11 @@ def export_sdxl(model_file: str, output_dir: str, *, optimize_memory: bool = Fal
     #     components block and inert to the C++ runtime until swapped in.
     #     Rationale: SDXL fp16-VAE can produce NaN/washed-out output at >native
     #     latents; shipping the fp32 fallback in the SAME run means the fix is a
-    #     file swap, never a second ~hour-long export session.
-    if dynamic_spatial:
+    #     file swap, never a second ~hour-long export session. Gated on
+    #     emit_fp32_hedge (CLI --dynamic-spatial only) — the in-app import ships a
+    #     lean fp16-only model, since fp16 was validated stable and there is no
+    #     in-app swap mechanism to make the ~200 MB spare worth its disk.
+    if dynamic_spatial and emit_fp32_hedge:
         dummy_latent_vae_fp32 = torch.randn(
             1, 4, vae_dec_trace_hw, vae_dec_trace_hw, dtype=torch.float32)
         export_component_to_dir(
@@ -365,9 +369,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dynamic-spatial",
         action="store_true",
-        help="EXPERIMENTAL: export UNet + VAE decoder with dynamic H/W axes so a "
-             "hires/second pass can run at >native resolution (SDXL hires groundwork). "
-             "Traces those two at a tiny latent; encoder stays static 1024.",
+        help="Export UNet + VAE decoder with dynamic H/W axes so a hires/second pass "
+             "can run at >native resolution (and emit an fp32 decoder hedge). Traces "
+             "those two at a tiny latent; encoder stays static 1024. This is the "
+             "in-app import default; the standalone CLI defaults to the static export.",
     )
     return parser.parse_args()
 
@@ -386,6 +391,9 @@ if __name__ == "__main__":
             resume=args.resume,
             validate=args.validate,
             dynamic_spatial=args.dynamic_spatial,
+            # CLI --dynamic-spatial also emits the fp32 decoder hedge (investigation
+            # / manual-swap use); the in-app import passes emit_fp32_hedge=False.
+            emit_fp32_hedge=args.dynamic_spatial,
         )
     except (FileNotFoundError, ImportError) as e:
         print(f"\n{e}", file=sys.stderr)

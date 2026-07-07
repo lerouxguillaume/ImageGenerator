@@ -247,7 +247,15 @@ def run_import(model_file: str, output_dir: str, arch: str, resume: bool = False
     elif arch == "sdxl":
         print(f"PROGRESS:exporting_sdxl", flush=True)
         from sdxl_export_onnx_models import export_sdxl
-        export_sdxl(model_file, output_dir, resume=resume, validate=False)
+        # dynamic_spatial=True is the in-app default for SDXL: it exports the UNet +
+        # VAE decoder with dynamic H/W axes (enabling hires), is far faster than the
+        # static export (~2-3 min vs ~1 h — the UNet/decoder trace at a tiny latent
+        # instead of full 1024), and produces identical output at native 1024.
+        # hires_capable is then derived true from the graphs. emit_fp32_hedge=False:
+        # the in-app model is lean fp16-only (fp16 validated stable; no in-app swap
+        # mechanism to use the ~200 MB spare). See docs/50_export/export_overview.md.
+        export_sdxl(model_file, output_dir, resume=resume, validate=False,
+                    dynamic_spatial=True, emit_fp32_hedge=False)
     else:
         print(f"ERROR:Unknown architecture '{arch}'", flush=True)
         sys.exit(1)

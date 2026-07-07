@@ -9,9 +9,10 @@
 #include "../config/AppConfig.hpp"   // for LoraEntry
 
 // ── Hires-fix configuration ───────────────────────────────────────────────────
-// SD1.5 "hires fix": after the base pass at native resolution, run a second
-// low-strength denoise at a higher resolution (bilinear latent upscale), then a
-// single decode of the final latent. Off by default; inert when disabled.
+// "Hires fix": after the base pass at native resolution, run a second
+// low-strength denoise at a higher resolution, then a single decode of the final
+// latent. Supported for SD1.5 and (with the dynamic-spatial export) SDXL. Off by
+// default; inert when disabled.
 struct HiresConfig {
     bool        enabled  = false;
     float       scale    = 1.5f;   // target pixel dims = native * scale, snapped to /64
@@ -19,6 +20,12 @@ struct HiresConfig {
     int         steps    = 0;      // 0 = reuse the base numSteps for pass 2
     UpscaleMode mode     = UpscaleMode::Pixel;  // Pixel adds detail; Latent blurs
 };
+
+// Upper bound on the SDXL hires scale. At 1.5× (native 1024 → 1536px, latent 192)
+// the fp16 UNet + VAE peaked at ~12.2 GB on a 12 GB card in GPU-box validation;
+// larger factors OOM. SD1.5 (much smaller activations) keeps the full 1.0–2.0
+// range. Shared by the pipeline clamp and the SettingsPanel scale slider.
+inline constexpr float kSdxlMaxHiresScale = 1.5f;
 
 // Parameters shared by all generation entry points.
 struct GenerationParams {

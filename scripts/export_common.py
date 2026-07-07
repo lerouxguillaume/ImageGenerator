@@ -444,12 +444,13 @@ class SDXLExportPolicy(ExportPolicy):
         # dynamic_spatial=True exports the UNet + VAE decoder with dynamic H/W
         # axes so a hires / second pass can denoise and decode a latent LARGER
         # than the native 128×128 (1024 px). This is the SDXL analogue of the
-        # SD1.5 hires groundwork.
+        # SD1.5 hires support.
         #
-        # EXPERIMENTAL / opt-in (see sdxl_export_onnx_models.py --dynamic-spatial).
-        # Default False reproduces the proven static-1024 SDXL export byte-for-
-        # byte, so the in-app import path is unaffected until this is validated on
-        # a GPU box and promoted to the default.
+        # This is the in-app SDXL import default (import_model.py passes True): it
+        # enables hires, produces identical output at native 1024, and is far
+        # faster to export than the static path (the UNet/decoder trace at a tiny
+        # latent). The standalone CLI still defaults False (static-1024, byte-for-
+        # byte the legacy export) unless --dynamic-spatial is passed.
         #
         # Only the UNet and VAE DECODER change. The VAE encoder stays static 1024
         # (SDXL hires is latent-mode: decode-larger only; no re-encode of an

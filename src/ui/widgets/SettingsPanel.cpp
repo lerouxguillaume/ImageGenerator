@@ -300,14 +300,18 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         y += 10.f;
     }
 
-    // ── Hires fix (SD1.5 only) ────────────────────────────────────────────────
-    // Gate mirrors the LoRA pattern. SD1.5 + hiresCapable → live controls.
-    // SD1.5 but NOT hiresCapable (all pre-flag imports) → disabled toggle + hint
-    // to re-import. SDXL → section hidden (hires is an SD1.5-only feature).
-    if (currentModelType() == ModelType::SD15) {
-        const bool  capable = currentModelHiresCapable();
-        auto&       hires   = generationParams.hires;
-        const bool  on      = capable && hires.enabled;
+    // ── Hires fix ─────────────────────────────────────────────────────────────
+    // Shown for any selected model (SD1.5 and SDXL). Gate mirrors the LoRA pattern:
+    // hiresCapable (derived from the model's graphs at import) → live controls; a
+    // model lacking the flag (any pre-dynamic export, either arch) → disabled
+    // toggle + re-import hint. The scale max is per-arch — SDXL is capped at
+    // kSdxlMaxHiresScale (VRAM ceiling), SD1.5 keeps the full 1.0–2.0 range.
+    if (currentModel() != nullptr) {
+        const bool  capable  = currentModelHiresCapable();
+        const bool  isXL     = currentModelType() == ModelType::SDXL;
+        const float scaleMax = isXL ? kSdxlMaxHiresScale : 2.0f;
+        auto&       hires    = generationParams.hires;
+        const bool  on       = capable && hires.enabled;
 
         constexpr float cbSize = 14.f;
         btnHiresToggle_ = {x + pad, y, 120.f, 20.f};
@@ -321,11 +325,14 @@ void SettingsPanel::render(sf::RenderWindow& win, sf::Font& font) {
         y += 26.f;
 
         if (on) {
-            // Scale slider (1.0–2.0, step 0.1)
+            // Scale slider (1.0–scaleMax, step 0.1). Clamp the displayed value to
+            // the per-arch max so a value carried over from an SD1.5 selection (or
+            // a preset) reads consistently on SDXL; the pipeline clamps too.
+            const float shownScale = std::min(hires.scale, scaleMax);
             hiresScaleSliderTrack_ = {x + pad, y + 14.f, sliderW, sliderH};
-            const float scaleNorm = (hires.scale - 1.0f) / 1.0f;
+            const float scaleNorm = (shownScale - 1.0f) / (scaleMax - 1.0f);
             char scBuf[16];
-            std::snprintf(scBuf, sizeof(scBuf), "%.1f\xc3\x97", hires.scale);
+            std::snprintf(scBuf, sizeof(scBuf), "%.1f\xc3\x97", shownScale);
             drawSlider(win, font, hiresScaleSliderTrack_, std::clamp(scaleNorm, 0.f, 1.f),
                        "Hires scale", scBuf);
             y += 34.f;
@@ -566,7 +573,9 @@ bool SettingsPanel::handleEvent(const sf::Event& e) {
             generationParams.strength = std::round(raw / 0.05f) * 0.05f;
         } else if (draggingSlider_ == DraggingSlider::HiresScale) {
             const float t = std::clamp((mousePos.x - hiresScaleSliderTrack_.left) / hiresScaleSliderTrack_.width, 0.f, 1.f);
-            const float raw = 1.0f + t * 1.0f;                 // 1.0–2.0
+            // Per-arch max: SDXL capped at kSdxlMaxHiresScale (VRAM), SD1.5 up to 2.0.
+            const float scaleMax = currentModelType() == ModelType::SDXL ? kSdxlMaxHiresScale : 2.0f;
+            const float raw = 1.0f + t * (scaleMax - 1.0f);
             generationParams.hires.scale = std::round(raw / 0.1f) * 0.1f;
         } else if (draggingSlider_ == DraggingSlider::HiresStrength) {
             const float t = std::clamp((mousePos.x - hiresStrengthSliderTrack_.left) / hiresStrengthSliderTrack_.width, 0.f, 1.f);

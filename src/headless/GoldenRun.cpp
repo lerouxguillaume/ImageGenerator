@@ -84,7 +84,7 @@ std::optional<int> maybeRunHeadless(int argc, char** argv) {
     if (auto v = argValue(argc, argv, "--init"))        p.initImagePath = v;
     if (auto v = argValue(argc, argv, "--strength"))    p.strength      = std::strtof(v, nullptr);
 
-    // Hires-fix flags (SD1.5 only; no-ops on non-hires-capable models).
+    // Hires-fix flags (SD1.5 + dynamic-spatial SDXL; no-ops on non-hires-capable models).
     if (hasFlag(argc, argv, "--hires"))                    p.hires.enabled  = true;
     if (auto v = argValue(argc, argv, "--hires-scale"))    p.hires.scale    = std::strtof(v, nullptr);
     if (auto v = argValue(argc, argv, "--hires-strength")) p.hires.strength = std::strtof(v, nullptr);

@@ -1,5 +1,5 @@
 """
-Validate an EXPERIMENTAL dynamic-spatial SDXL export (SDXL hires groundwork).
+Validate a dynamic-spatial SDXL export (the hires-capable SDXL export).
 
 Run this on a machine with `onnxruntime-gpu` (ideally CUDA) after exporting a
 model with:

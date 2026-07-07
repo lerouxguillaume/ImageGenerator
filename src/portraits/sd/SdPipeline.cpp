@@ -58,6 +58,36 @@ private:
     int                  savedSize_;
 };
 
+// ── ScopedTimeIds (SDXL only) ──────────────────────────────────────────────────
+// The SDXL analogue of ScopedLatentResolution for the one extra piece of
+// resolution-dependent state SDXL carries: ctx.time_ids. The UNet's time_ids
+// conditioning must match the resolution actually being denoised, so a hires
+// pass must swap it to the upscaled pixel resolution and restore on scope exit
+// (normal, exception, and cancel) — ctx is cache-owned, so an unrestored
+// time_ids would corrupt the NEXT generation. No-op for SD1.5 (time_ids unused).
+class ScopedTimeIds {
+public:
+    // pxW/pxH are the PIXEL dims of the pass being denoised. Convention (diffusers
+    // SDXL img2img default): original_size == target_size == that resolution,
+    // crop (0,0). Layout matches SdPipeline's native computation:
+    // {orig_h, orig_w, crop_top, crop_left, target_h, target_w}.
+    ScopedTimeIds(GenerationContext& ctx, bool isXL, int pxW, int pxH)
+        : ctx_(ctx), active_(isXL), saved_(ctx.time_ids) {
+        if (!active_) return;
+        const float w = static_cast<float>(pxW);
+        const float h = static_cast<float>(pxH);
+        ctx_.time_ids = { h, w, 0.0f, 0.0f, h, w };
+    }
+    ~ScopedTimeIds() { if (active_) ctx_.time_ids = std::move(saved_); }
+    ScopedTimeIds(const ScopedTimeIds&)            = delete;
+    ScopedTimeIds& operator=(const ScopedTimeIds&) = delete;
+
+private:
+    GenerationContext& ctx_;
+    bool               active_;
+    std::vector<float> saved_;
+};
+
 // Per-image pipeline seams. Both lists are empty in Phase 1; later phases push
 // a hires refinement pass / image post-processor without touching the control
 // flow in generateOneImage(). A refinement pass maps a latent to a latent (at a
@@ -168,9 +198,12 @@ static Latent denoiseSingleLatent(const std::vector<float>& sigmas,
 // ── Hires helpers ─────────────────────────────────────────────────────────────
 
 // Snap a target pixel dimension to the nearest multiple of 64, forced strictly
-// greater than the native dimension. /64 (not /8) because the SD1.5 latent must
-// be divisible by 8: the UNet downsamples the latent 3×, and a non-/8 latent
-// makes the skip-connection Concat shapes mismatch. pixels /64 ⇒ latent /8.
+// greater than the native dimension. We snap /64 for BOTH archs as a validated
+// superset: it guarantees a latent divisible by 8 (pixels /64 ⇒ latent /8), which
+// covers each arch's actual requirement for skip-connection Concat shapes to line
+// up — SD1.5 downsamples the latent 3× and structurally needs latent /8, while
+// SDXL downsamples 2× and needs only latent /4 (pixels /32). /64 satisfies both,
+// and every GPU-validated SDXL hires size (1280→160, 1536→192) is /64-aligned.
 static int snapTo64(int target, int native) {
     int snapped = ((target + 32) / 64) * 64;
     if (snapped <= native) snapped = (native / 64 + 1) * 64;
@@ -438,29 +471,35 @@ void runPipeline(const std::string& prompt,
     const int nativeLatentH = cfg.image_h / 8;
     const std::vector<ImagePostProcessor> postProcessors;  // empty (identity) for now
 
-    // ── Hires-fix setup (SD1.5 only) ──────────────────────────────────────────
+    // ── Hires-fix setup ───────────────────────────────────────────────────────
     // Constant across the batch: snapped target dims, the pass-2 sigma schedule,
-    // and the truncated step bounds. Guarded to SD1.5 — the SDXL UNet is
-    // spatially static, so hires there is a separate track (see hires_fix_plan).
+    // and the truncated step bounds. Arch-agnostic — gated only on hiresCapable
+    // (true for SD1.5 and for the dynamic-spatial SDXL export). SDXL adds one
+    // thing over SD1.5: per-pass time_ids (see ScopedTimeIds in the pass below).
     bool hiresOn = params.hires.enabled;
-    if (hiresOn && cfg.type != ModelType::SD15) {
-        Logger::info("[WARN] Hires fix requested for a non-SD1.5 model — ignoring "
-                     "(SDXL UNet has static spatial dims; hires is an SD1.5-only feature).");
-        hiresOn = false;
-    }
     if (hiresOn && !cfg.hiresCapable) {
         // The UI gates on this, but a preset could still carry hires.enabled onto
-        // a pre-hires model whose VAE decoder is static-shape. Refuse rather than
-        // crash the decode on the larger latent.
+        // a model whose UNet/VAE decoder is static-shape (any pre-dynamic export,
+        // SD1.5 or SDXL). Refuse rather than crash the UNet/decode on the larger
+        // latent. hiresCapable is derived from the actual graphs at import time.
         Logger::info("[WARN] Hires fix requested but this model is not hires-capable "
-                     "(static-shape VAE decoder) — ignoring. Re-import to enable hires.");
+                     "(static-shape UNet/VAE) — ignoring. Re-import to enable hires.");
         hiresOn = false;
+    }
+    // Clamp the SDXL hires scale to the VRAM-validated ceiling (see kSdxlMaxHiresScale).
+    // The UI slider maxes here too, but a preset could carry a larger factor.
+    float hiresScale = params.hires.scale;
+    if (hiresOn && cfg.type == ModelType::SDXL && hiresScale > kSdxlMaxHiresScale) {
+        Logger::info("[WARN] SDXL hires scale " + std::to_string(hiresScale)
+                     + " exceeds the " + std::to_string(kSdxlMaxHiresScale)
+                     + " ceiling (measured ~12.2 GB VRAM peak at 1536px on a 12 GB card) — clamping.");
+        hiresScale = kSdxlMaxHiresScale;
     }
     int hiresLatentW = 0, hiresLatentH = 0, hiresEff = 0, hiresStart = 0;
     std::vector<float> hiresSigmas;
     if (hiresOn) {
-        const int hiresPxW = snapTo64(static_cast<int>(std::lround(cfg.image_w * params.hires.scale)), cfg.image_w);
-        const int hiresPxH = snapTo64(static_cast<int>(std::lround(cfg.image_h * params.hires.scale)), cfg.image_h);
+        const int hiresPxW = snapTo64(static_cast<int>(std::lround(cfg.image_w * hiresScale)), cfg.image_w);
+        const int hiresPxH = snapTo64(static_cast<int>(std::lround(cfg.image_h * hiresScale)), cfg.image_h);
         hiresLatentW = hiresPxW / 8;
         hiresLatentH = hiresPxH / 8;
         hiresEff     = params.hiresEffectiveSteps();
@@ -468,7 +507,7 @@ void runPipeline(const std::string& prompt,
         hiresSigmas  = buildKarrasSchedule(alphas_cumprod, hiresEff);
         const bool pixelMode = params.hires.mode == UpscaleMode::Pixel && ctx.vaeEncoderAvailable;
         Logger::info("Hires fix: mode=" + std::string(pixelMode ? "pixel" : "latent")
-                     + "  scale=" + std::to_string(params.hires.scale)
+                     + "  scale=" + std::to_string(hiresScale)
                      + "  target=" + std::to_string(hiresPxW) + "x" + std::to_string(hiresPxH)
                      + " (latent " + std::to_string(hiresLatentW) + "x" + std::to_string(hiresLatentH) + ")"
                      + "  strength=" + std::to_string(params.hires.strength)
@@ -545,6 +584,11 @@ void runPipeline(const std::string& prompt,
                         // restored on scope exit incl. exception/cancel. decode reads
                         // dims from the returned Latent, not ctx, so it follows suit.
                         ScopedLatentResolution hiresRes(c, up.w, up.h);
+                        // SDXL: the pass-2 UNet also needs time_ids matching the
+                        // upscaled resolution; swapped + restored the same way.
+                        // No-op for SD1.5. (up.w/up.h are latent dims → ×8 = pixels.)
+                        ScopedTimeIds hiresTimeIds(c, c.model_type == ModelType::SDXL,
+                                                   up.w * 8, up.h * 8);
                         return denoiseSingleLatent(hiresSigmas, hiresEff, alphas_cumprod, c,
                                                    progressStep, stopToken, hiresStart, up);
                     });
@@ -568,12 +612,28 @@ void runPipeline(const std::string& prompt,
             if (!produced) break;  // cancelled or aborted
         }
         Logger::info("=== Pipeline complete in " + fmtMs(tTotal) + " ===");
-    } catch (const Ort::Exception&) {
+    } catch (const Ort::Exception& e) {
         if (stopToken.stop_requested()) {
             Logger::info("Generation cancelled mid-step (ORT terminated).");
         } else {
-            Logger::error("ORT exception during inference (not a cancellation).");
-            denoiseException = std::current_exception();
+            // ScopedLatentResolution + ScopedTimeIds have already restored ctx as
+            // this exception unwound the stack, so the NEXT generation is clean.
+            const std::string msg = e.what();
+            const bool oom = msg.find("Failed to allocate") != std::string::npos
+                          || msg.find("out of memory")      != std::string::npos
+                          || msg.find("CUDA failure 2")     != std::string::npos
+                          || msg.find("ALLOC_FAILED")       != std::string::npos;
+            if (oom) {
+                // No retry / auto-step-down in v1 — fail cleanly and name the cause.
+                Logger::error("Out of GPU memory during inference: " + msg);
+                denoiseException = std::make_exception_ptr(std::runtime_error(
+                    "Out of GPU memory. If hires fix is on, lower the hires scale "
+                    "(SDXL is capped at 1.5x) or turn it off; otherwise reduce the image "
+                    "size or image count."));
+            } else {
+                Logger::error("ORT exception during inference (not a cancellation).");
+                denoiseException = std::current_exception();
+            }
         }
     }
 
