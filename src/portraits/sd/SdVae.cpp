@@ -6,29 +6,32 @@
 
 namespace sd {
 
-cv::Mat decodeLatent(const std::vector<float>& x, GenerationContext& ctx) {
+cv::Mat decodeLatent(const Latent& x, GenerationContext& ctx) {
     {
         float vMin = 1e9f, vMax = -1e9f, vSum = 0.0f;
-        for (float v : x) { vMin = std::min(vMin, v); vMax = std::max(vMax, v); vSum += v; }
+        for (float v : x.data) { vMin = std::min(vMin, v); vMax = std::max(vMax, v); vSum += v; }
         Logger::info("VAE input latent — min: " + std::to_string(vMin)
                      + "  max: " + std::to_string(vMax)
-                     + "  mean: " + std::to_string(vSum / static_cast<float>(x.size())));
+                     + "  mean: " + std::to_string(vSum / static_cast<float>(x.data.size())));
     }
+
+    // Input shape follows the latent's own resolution (not shared ctx state).
+    const std::vector<int64_t> input_shape = {1, 4, x.h, x.w};
 
     // Select dtype based on what the exported VAE expects (do not hard-code fp16).
     std::vector<Ort::Float16_t> vae_latent_fp16;
     std::vector<float>          vae_latent_fp32;
     Ort::Value vae_input{nullptr};
     if (ctx.vaeExpectsFp32) {
-        vae_latent_fp32 = x;
+        vae_latent_fp32 = x.data;
         vae_input = Ort::Value::CreateTensor<float>(
             ctx.memory_info, vae_latent_fp32.data(), vae_latent_fp32.size(),
-            ctx.latent_shape.data(), ctx.latent_shape.size());
+            input_shape.data(), input_shape.size());
     } else {
-        vae_latent_fp16 = toFp16(x);
+        vae_latent_fp16 = toFp16(x.data);
         vae_input = Ort::Value::CreateTensor<Ort::Float16_t>(
             ctx.memory_info, vae_latent_fp16.data(), vae_latent_fp16.size(),
-            ctx.latent_shape.data(), ctx.latent_shape.size());
+            input_shape.data(), input_shape.size());
     }
 
     const char* vae_in_names[]  = {ctx.vae_in.c_str()};
@@ -73,10 +76,10 @@ cv::Mat decodeLatent(const std::vector<float>& x, GenerationContext& ctx) {
 }
 
 
-std::vector<float> encodeImage(const cv::Mat& img,
-                                int cfg_w, int cfg_h,
-                                GenerationContext& ctx,
-                                bool sample) {
+Latent encodeImage(const cv::Mat& img,
+                   int cfg_w, int cfg_h,
+                   GenerationContext& ctx,
+                   bool sample) {
     // Resize and convert BGR→RGB
     cv::Mat resized;
     cv::resize(img, resized, {cfg_w, cfg_h}, 0, 0, cv::INTER_LINEAR);
@@ -153,7 +156,7 @@ std::vector<float> encodeImage(const cv::Mat& img,
                      + "  max: " + std::to_string(mx)
                      + "  mean: " + std::to_string(sum / static_cast<float>(latent_size)));
     }
-    return latent;
+    return Latent{ std::move(latent), cfg_w / 8, cfg_h / 8 };
 }
 
 } // namespace sd

@@ -7,6 +7,20 @@
 
 namespace sd {
 
+// ── Latent value type ─────────────────────────────────────────────────────────
+// A latent tensor that carries its own resolution, used at pipeline-pass
+// boundaries so a pass knows the geometry of the latent it receives without
+// reading shared GenerationContext state. w/h are LATENT-GRID dimensions
+// (image pixels / 8); data is the [1, 4, h, w] latent, so data.size()==4*w*h.
+// Internal denoise loops still use ctx.latent_size; Latent is the boundary type.
+struct Latent {
+    std::vector<float> data;
+    int                w = 0;   // latent grid width  (image_w / 8)
+    int                h = 0;   // latent grid height (image_h / 8)
+
+    bool empty() const { return data.empty(); }
+};
+
 // ── Model configuration ───────────────────────────────────────────────────────
 // Loaded once from model.json and used to drive resolution, encoder choice, etc.
 // Add a new ModelType value and a branch in SdLoader::loadModelConfig() to

@@ -12,22 +12,62 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <opencv2/opencv.hpp>
 #include <chrono>
 #include <stop_token>
 
 namespace sd {
 
+namespace {
+
+// ── ScopedLatentResolution ────────────────────────────────────────────────────
+// The ONLY sanctioned way to point the context at a latent resolution.
+// `ctx` is cache-owned — ModelManager::get() returns a reference into the model
+// cache — so any mutation of latent_shape/latent_size MUST be restored, even on
+// the exception and cancel paths, or the NEXT generation inherits these dims.
+// The destructor guarantees the restore; never set those fields directly.
+// In Phase 1 this always sets the native resolution (a no-op re-set); it exists
+// so a later hires pass can point ctx at a larger resolution safely.
+class ScopedLatentResolution {
+public:
+    ScopedLatentResolution(GenerationContext& ctx, int latentW, int latentH)
+        : ctx_(ctx), savedShape_(ctx.latent_shape), savedSize_(ctx.latent_size) {
+        ctx_.latent_shape = {1, 4, latentH, latentW};
+        ctx_.latent_size  = 4 * latentW * latentH;
+    }
+    ~ScopedLatentResolution() {
+        ctx_.latent_shape = savedShape_;
+        ctx_.latent_size  = savedSize_;
+    }
+    ScopedLatentResolution(const ScopedLatentResolution&)            = delete;
+    ScopedLatentResolution& operator=(const ScopedLatentResolution&) = delete;
+
+private:
+    GenerationContext&   ctx_;
+    std::vector<int64_t> savedShape_;
+    int                  savedSize_;
+};
+
+// Per-image pipeline seams. Both lists are empty in Phase 1; later phases push
+// a hires refinement pass / image post-processor without touching the control
+// flow in generateOneImage(). A refinement pass maps a latent to a latent (at a
+// possibly different resolution); a post-processor maps a decoded image.
+using RefinementPass     = std::function<Latent(Latent, GenerationContext&)>;
+using ImagePostProcessor = std::function<cv::Mat(cv::Mat)>;
+
+} // namespace
+
 // ── DPM++ 2M Karras denoising loop ───────────────────────────────────────────
 
-static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
-                                              int num_steps,
-                                              const std::vector<float>& alphas_cumprod,
-                                              GenerationContext& ctx,
-                                              std::atomic<int>*  progressStep,
-                                              std::stop_token    stopToken,
-                                              int                startStep = 0,
-                                              const std::vector<float>& initLatent = {}) {
+static Latent denoiseSingleLatent(const std::vector<float>& sigmas,
+                                  int num_steps,
+                                  const std::vector<float>& alphas_cumprod,
+                                  GenerationContext& ctx,
+                                  std::atomic<int>*  progressStep,
+                                  std::stop_token    stopToken,
+                                  int                startStep = 0,
+                                  const Latent&      initLatent = {}) {
     std::vector<float> x(ctx.latent_size);
     if (initLatent.empty() || startStep == 0) {
         // txt2img: pure noise at sigmas[0]
@@ -36,7 +76,7 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
         // img2img: init latent + noise at the truncated start sigma
         const float sigma0 = sigmas[startStep];
         for (int j = 0; j < ctx.latent_size; ++j)
-            x[j] = initLatent[j] + randNormal() * sigma0;
+            x[j] = initLatent.data[j] + randNormal() * sigma0;
     }
 
     std::vector<float> prev_denoised;
@@ -109,7 +149,89 @@ static std::vector<float> denoiseSingleLatent(const std::vector<float>& sigmas,
     }
 
     Logger::info("Denoising complete in " + fmtMs(tDenoise));
-    return x;
+    // Carry the latent's resolution out with its data. Read from ctx.latent_shape
+    // (the active source of truth, set by ScopedLatentResolution for this pass).
+    return Latent{ std::move(x),
+                   static_cast<int>(ctx.latent_shape[3]),
+                   static_cast<int>(ctx.latent_shape[2]) };
+}
+
+// ── Per-image generation ──────────────────────────────────────────────────────
+// One image of a batch, as an explicit pass sequence:
+//   seed → base denoise pass → refinement passes → decode → post-processors → save
+// Returns false when the run was cancelled/aborted (caller breaks the batch).
+// Ort::Exception is NOT caught here — it propagates to runPipeline's handler so
+// cancellation via SetTerminate() is classified there exactly as before.
+static bool generateOneImage(GenerationContext& ctx,
+                             const std::vector<float>& sigmas,
+                             const std::vector<float>& alphas_cumprod,
+                             int                num_steps,
+                             int                startStep,
+                             int64_t            imgSeed,
+                             int                nativeLatentW,
+                             int                nativeLatentH,
+                             const Latent&      initLatent,
+                             const std::string& outPath,
+                             const std::vector<RefinementPass>&     refinements,
+                             const std::vector<ImagePostProcessor>& postProcessors,
+                             std::atomic<int>*             progressStep,
+                             std::stop_token               stopToken,
+                             std::atomic<GenerationStage>* stage) {
+    // Seed immediately before the base pass. Nothing between here and the first
+    // randNormal() draw inside denoiseSingleLatent consumes the RNG, so the draw
+    // sequence (and thus the output) is identical to the pre-refactor loop.
+    seedRng(imgSeed);
+
+    // Point ctx at this pass's resolution (native in Phase 1) for the whole
+    // UNet + decode sequence; restored on scope exit incl. exception/cancel.
+    ScopedLatentResolution res(ctx, nativeLatentW, nativeLatentH);
+
+    // ── base pass ──
+    if (stage) stage->store(GenerationStage::Denoising);
+    Latent latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx,
+                                        progressStep, stopToken, startStep, initLatent);
+    if (latent.empty()) return false;             // cancelled/aborted inside denoising
+    if (stopToken.stop_requested()) return false;
+
+    {
+        float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;
+        for (float v : latent.data) {
+            lat_min = std::min(lat_min, v);
+            lat_max = std::max(lat_max, v);
+            lat_sum += v;
+        }
+        Logger::info("Latent stats — min: " + std::to_string(lat_min)
+                     + "  max: " + std::to_string(lat_max)
+                     + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.data.size())));
+    }
+
+    // ── refinement passes (empty in Phase 1) ──
+    for (const auto& pass : refinements) {
+        latent = pass(std::move(latent), ctx);
+        if (latent.empty() || stopToken.stop_requested()) return false;
+    }
+
+    // ── decode ──
+    if (stage) stage->store(GenerationStage::DecodingImage);
+    cv::Mat img = decodeLatent(latent, ctx);
+
+    // ── image post-processors (empty in Phase 1) ──
+    for (const auto& pp : postProcessors) img = pp(std::move(img));
+
+    // ── save ──
+    // Normalise separators so cv::imwrite gets a consistent path on Windows.
+    std::string normPath = outPath;
+    std::replace(normPath.begin(), normPath.end(), '\\', '/');
+    std::vector<uchar> encBuf;
+    if (cv::imencode(".png", img, encBuf)) {
+        std::ofstream ofs(normPath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(encBuf.data()),
+                  static_cast<std::streamsize>(encBuf.size()));
+        Logger::info("Image saved: " + normPath);
+    } else {
+        Logger::error("cv::imencode failed for: " + normPath);
+    }
+    return true;
 }
 
 // ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -242,7 +364,7 @@ void runPipeline(const std::string& prompt,
     // img2img: encode the input image once before the per-image loop.
     // sample=false (posterior mean) is deterministic, so the latent is identical
     // across all N images — no need to re-encode per iteration.
-    std::vector<float> initLatent;
+    Latent initLatent;
     int startStep = 0;
     if (!params.initImagePath.empty()) {
         if (!ctx.vaeEncoderAvailable) {
@@ -270,6 +392,13 @@ void runPipeline(const std::string& prompt,
         ctx.run_opts.SetTerminate();
     });
 
+    // Native latent grid; passed to each image so the base pass runs at native
+    // resolution. Refinement/post-processor seams are empty in this phase.
+    const int nativeLatentW = cfg.image_w / 8;
+    const int nativeLatentH = cfg.image_h / 8;
+    const std::vector<RefinementPass>     refinements;      // empty in Phase 1
+    const std::vector<ImagePostProcessor> postProcessors;  // empty in Phase 1
+
     std::exception_ptr denoiseException;
     try {
         for (int i = 0; i < num_images; ++i) {
@@ -279,7 +408,6 @@ void runPipeline(const std::string& prompt,
             if (progressStep) progressStep->store(0);
             // seed < 0 → random; for multi-image runs use seed+i so each image differs
             const int64_t imgSeed = (params.seed >= 0) ? params.seed + i : -1;
-            seedRng(imgSeed);
 
             // Insert _N before the extension for multi-image runs.
             std::string outPath = outputPath;
@@ -292,38 +420,11 @@ void runPipeline(const std::string& prompt,
             }
 
             Logger::info("--- Image " + std::to_string(i + 1) + "/" + std::to_string(num_images) + " ---");
-            if (stage) stage->store(GenerationStage::Denoising);
-            auto latent = denoiseSingleLatent(sigmas, num_steps, alphas_cumprod, ctx,
-                                              progressStep, stopToken, startStep, initLatent);
-
-            if (latent.empty()) break;  // cancelled or aborted inside denoising
-            if (stopToken.stop_requested()) break;
-
-            float lat_min = 1e9f, lat_max = -1e9f, lat_sum = 0.0f;
-            for (float v : latent) {
-                lat_min = std::min(lat_min, v);
-                lat_max = std::max(lat_max, v);
-                lat_sum += v;
-            }
-            Logger::info("Latent stats — min: " + std::to_string(lat_min)
-                         + "  max: " + std::to_string(lat_max)
-                         + "  mean: " + std::to_string(lat_sum / static_cast<float>(latent.size())));
-
-            if (stage) stage->store(GenerationStage::DecodingImage);
-            auto img = decodeLatent(latent, ctx);
-            // Normalise separators so cv::imwrite gets a consistent path on Windows.
-            std::string normPath = outPath;
-            std::replace(normPath.begin(), normPath.end(), '\\', '/');
-            std::vector<uchar> encBuf;
-            bool encOk = cv::imencode(".png", img, encBuf);
-            if (encOk) {
-                std::ofstream ofs(normPath, std::ios::binary);
-                ofs.write(reinterpret_cast<const char*>(encBuf.data()),
-                          static_cast<std::streamsize>(encBuf.size()));
-                Logger::info("Image saved: " + normPath);
-            } else {
-                Logger::error("cv::imencode failed for: " + normPath);
-            }
+            const bool produced = generateOneImage(
+                ctx, sigmas, alphas_cumprod, num_steps, startStep, imgSeed,
+                nativeLatentW, nativeLatentH, initLatent, outPath,
+                refinements, postProcessors, progressStep, stopToken, stage);
+            if (!produced) break;  // cancelled or aborted
         }
         Logger::info("=== Pipeline complete in " + fmtMs(tTotal) + " ===");
     } catch (const Ort::Exception&) {
