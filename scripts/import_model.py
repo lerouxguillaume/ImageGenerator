@@ -69,6 +69,74 @@ def validate_output(output_dir: str, arch: str) -> None:
 
 # ── Capabilities block ────────────────────────────────────────────────────────
 
+def _graph_has_dynamic_spatial(onnx_path: str, input_name: str = "latent") -> bool | None:
+    """Return True iff <input_name>'s H/W dims (axes 2, 3) are dynamic in the graph.
+
+    A dim is dynamic when it is symbolic (dim_param set) or unset; a concrete
+    dim_value is static. Loads graph structure only (no tensor bytes). Returns
+    None when the graph cannot be inspected (onnx missing / parse error / file
+    absent); the caller (`_detect_hires_capable`) treats None as fail-closed.
+    """
+    if not os.path.exists(onnx_path):
+        return None
+    try:
+        import onnx
+    except ImportError:
+        return None
+    try:
+        model = onnx.load_model(onnx_path, load_external_data=False)
+    except Exception:
+        return None
+
+    def _is_dynamic(dim) -> bool:
+        return bool(dim.dim_param) or not dim.HasField("dim_value")
+
+    for inp in model.graph.input:
+        if inp.name != input_name:
+            continue
+        dims = inp.type.tensor_type.shape.dim
+        if len(dims) < 4:
+            return False
+        return _is_dynamic(dims[2]) and _is_dynamic(dims[3])
+    return False
+
+
+def _detect_hires_capable(output_dir: str, arch: str) -> bool:
+    """Hires needs BOTH the UNet and VAE decoder to accept a larger-than-native
+    latent, i.e. both exported with dynamic H/W axes.
+
+    This is derived from the actual exported graphs (ground truth) rather than
+    assumed from the architecture, so it is correct for any arch and any export
+    variant: SD1.5 (always dynamic) reports True; a static SDXL export reports
+    False; an SDXL export produced with --dynamic-spatial reports True
+    automatically once both graphs carry the axes.
+
+    If a graph cannot be probed, fail CLOSED (return False) and warn loudly. The
+    old behaviour fell back to the arch heuristic (SD1.5 -> True), which would
+    mislabel a pre-dynamic *static-VAE* SD1.5 import as hires-capable — the
+    runtime would then hit a VAE input-shape error at hires time instead of
+    presenting a cleanly disabled control. A wrong "capable" is far worse than a
+    wrong "not capable", so an unprobeable graph is treated as not capable.
+    """
+    unet_dyn = _graph_has_dynamic_spatial(os.path.join(output_dir, "unet.onnx"))
+    vae_dyn = _graph_has_dynamic_spatial(os.path.join(output_dir, "vae_decoder.onnx"))
+    if unet_dyn is None or vae_dyn is None:
+        unprobeable = []
+        if unet_dyn is None:
+            unprobeable.append("unet.onnx")
+        if vae_dyn is None:
+            unprobeable.append("vae_decoder.onnx")
+        print(
+            "VERIFY:warn:capability:could not probe dynamic H/W axes on "
+            f"{', '.join(unprobeable)} (missing file, onnx import failure, or "
+            "parse error) - defaulting hires_capable=False to avoid mislabelling "
+            "a static-VAE model as hires-capable",
+            flush=True,
+        )
+        return False
+    return bool(unet_dyn and vae_dyn)
+
+
 def write_capabilities(output_dir: str, arch: str) -> None:
     """Extend model.json with a capabilities block after a successful export.
 
@@ -91,10 +159,11 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     data["capabilities"] = {
         "vae_encoder_available": vae_encoder_available,
         "lora_compatible":       True,
-        # SD1.5 exports BOTH the VAE decoder and encoder with dynamic H/W axes, so
-        # the hires/second-pass can decode a larger latent AND re-encode the
-        # upscaled image (pixel-mode hires). SDXL VAE stays static.
-        "hires_capable":         (arch == "sd15"),
+        # Derived from the exported graphs, not the arch: hires needs the UNet AND
+        # VAE decoder to both accept a larger-than-native latent (dynamic H/W).
+        # SD1.5 always exports both dynamic → True. SDXL is True only when exported
+        # with --dynamic-spatial; the default static SDXL export → False.
+        "hires_capable":         _detect_hires_capable(output_dir, arch),
         # Written only after verify_model() passed — a model.json carrying this
         # flag has been confirmed to run, not just to have all its files present.
         "verified":              True,

@@ -440,23 +440,79 @@ class SD15ExportPolicy(ExportPolicy):
 class SDXLExportPolicy(ExportPolicy):
     model_type = "sdxl"
 
+    def __init__(self, dynamic_spatial: bool = False) -> None:
+        # dynamic_spatial=True exports the UNet + VAE decoder with dynamic H/W
+        # axes so a hires / second pass can denoise and decode a latent LARGER
+        # than the native 128×128 (1024 px). This is the SDXL analogue of the
+        # SD1.5 hires groundwork.
+        #
+        # EXPERIMENTAL / opt-in (see sdxl_export_onnx_models.py --dynamic-spatial).
+        # Default False reproduces the proven static-1024 SDXL export byte-for-
+        # byte, so the in-app import path is unaffected until this is validated on
+        # a GPU box and promoted to the default.
+        #
+        # Only the UNet and VAE DECODER change. The VAE encoder stays static 1024
+        # (SDXL hires is latent-mode: decode-larger only; no re-encode of an
+        # upscaled image, unlike SD1.5 pixel-mode). time_ids / text_embeds are
+        # not spatially tied, so they need no axis changes.
+        self.dynamic_spatial = dynamic_spatial
+
     def unet_dynamic_axes(self) -> dict[str, dict[int, str]]:
+        latent_axes = (
+            {0: "batch", 2: "height", 3: "width"}
+            if self.dynamic_spatial
+            else {0: "batch"}
+        )
         return {
-            "latent": {0: "batch"},
+            "latent": dict(latent_axes),
             "timestep": {0: "batch"},
             "encoder_hidden_states": {0: "batch"},
             "text_embeds": {0: "batch"},
             "time_ids": {0: "batch"},
-            "latent_out": {0: "batch"},
+            "latent_out": dict(latent_axes),
         }
 
-    def vae_dynamic_axes(self) -> None:
-        return None
+    def vae_dynamic_axes(self) -> dict[str, dict[int, str]] | None:
+        if not self.dynamic_spatial:
+            return None
+        # Mirror SD15: dynamic H/W so the decoder accepts a larger-than-native
+        # latent. Dynamo cannot express spatial axes, so this forces the legacy
+        # tracer (see vae_exporter); the decoder is traced at a tiny latent to
+        # keep the eager fp16-CPU conv forward cheap (see the export script).
+        return {
+            "latent": {0: "batch", 2: "height", 3: "width"},
+            "image":  {0: "batch", 2: "height", 3: "width"},
+        }
 
     def vae_exporter(self) -> str:
+        # Static default: dynamo (fast, batch-only, current proven path).
+        # Dynamic-spatial decoder: legacy tracer — dynamo can only express
+        # batch-dynamic shapes, so H/W axes require the legacy path (same finding
+        # as SD1.5's dynamic VAE decoder).
+        return "legacy" if self.dynamic_spatial else "dynamo"
+
+    def vae_encoder_exporter(self) -> str:
+        # The VAE ENCODER stays static 1024×1024 even in dynamic-spatial mode, so
+        # keep it on dynamo. Routing a static 1024 encoder through the legacy
+        # tracer would run an eager fp16 conv forward at full resolution — the
+        # ~1000×-slower CPU path the tiny-trace trick exists to avoid. dynamo does
+        # not pay that cost, so the encoder export is left exactly as today.
         return "dynamo"
 
     def should_fix_fp32_constants(self, component_name: str) -> bool:
+        if component_name == "vae_decoder" and self.dynamic_spatial:
+            # The dynamic (legacy-traced) fp16 VAE decoder must NOT run this pass.
+            # It is the same code path SD1.5 uses, and SD1.5 deliberately skips
+            # fix_fp32_constants for its VAE decoder. Running it here blindly
+            # converts an fp32 initializer that feeds an otherwise-fp32 `Div` to
+            # fp16, leaving the Div with one fp16 and one fp32 operand — ORT then
+            # rejects the graph at load with
+            #   "Type Error: (T) of Optype (Div) bound to different types
+            #    (tensor(float16) and tensor(float))".
+            # The fp16 Resize fix (should_fix_resize_fp16) still runs — that is the
+            # one the dynamic decoder actually needs. The STATIC dynamo decoder
+            # keeps the pass (its fp32-contamination fixes are unchanged).
+            return False
         return component_name in {"unet", "vae_decoder", "vae_encoder"}
 
     def should_fix_attention_sqrt_cast(self, component_name: str) -> bool:
