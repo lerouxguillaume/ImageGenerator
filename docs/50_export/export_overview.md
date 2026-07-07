@@ -50,7 +50,7 @@ The script auto-detects SD1.5 vs SDXL from `model.json`.  All other files in the
 
 # Rules
 
-- VAE encoder uses the same static-shape policy as the VAE decoder (no dynamic axes)
-- SD 1.5 VAE decoder/encoder use static 512×512 shapes; SDXL VAE decoder/encoder use static 1024×1024 shapes
-- fp16 Resize patching is applied by default to fp16 UNet/VAE components; `patch_unet_resize.py` is only for older exports
+- SD 1.5 VAE **decoder** exports with dynamic H/W axes (`{0:batch, 2:height, 3:width}`, legacy tracer — dynamo cannot express spatial axes) so it can decode hires/second-pass latents larger than native; the VAE **encoder** stays static, as does the SDXL VAE decoder/encoder (static 1024×1024)
+- SD 1.5 VAE encoder uses static 512×512 shapes; SDXL VAE decoder/encoder use static 1024×1024 shapes
+- fp16 Resize patching is applied by default to fp16 UNet/VAE components (the dynamic SD 1.5 VAE decoder's Resize nodes are exactly what it targets); `patch_unet_resize.py` is only for older exports
 - SDXL VAE decoder/encoder require the same fp32-constant and fp16-Resize fixes as the UNet (all applied in a single `fix_fp16_graph` pass)

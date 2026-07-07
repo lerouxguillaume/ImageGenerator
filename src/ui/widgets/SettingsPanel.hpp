@@ -50,6 +50,12 @@ public:
         const auto* m = currentModel();
         return !m || m->capabilities.loraCompatible;
     }
+    // No model selected → not hires-capable (unlike the flags above, whose
+    // "true when absent" default is the legacy-preserving choice).
+    bool currentModelHiresCapable() const {
+        const auto* m = currentModel();
+        return m && m->capabilities.hiresCapable;
+    }
     ModelType currentModelType() const {
         const auto* m = currentModel();
         return m ? m->type : ModelType::SD15;

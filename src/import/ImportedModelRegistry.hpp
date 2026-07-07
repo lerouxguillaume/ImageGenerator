@@ -4,8 +4,9 @@
 #include <vector>
 
 struct ModelCapabilities {
-    bool vaeEncoderAvailable = true; // false → img2img / reference not supported
-    bool loraCompatible      = true; // false → LoRA injection not supported
+    bool vaeEncoderAvailable = true;  // false → img2img / reference not supported
+    bool loraCompatible      = true;  // false → LoRA injection not supported
+    bool hiresCapable        = false; // true → VAE decoder has dynamic H/W (hires pass)
 };
 
 struct ImportedModel {

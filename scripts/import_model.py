@@ -91,6 +91,9 @@ def write_capabilities(output_dir: str, arch: str) -> None:
     data["capabilities"] = {
         "vae_encoder_available": vae_encoder_available,
         "lora_compatible":       True,
+        # SD1.5 VAE decoder is exported with dynamic H/W axes, so it can decode
+        # a hires/second-pass latent larger than native. SDXL VAE stays static.
+        "hires_capable":         (arch == "sd15"),
         # Written only after verify_model() passed — a model.json carrying this
         # flag has been confirmed to run, not just to have all its files present.
         "verified":              True,

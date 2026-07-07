@@ -374,17 +374,31 @@ class SD15ExportPolicy(ExportPolicy):
             "latent_out": {0: "batch", 2: "height", 3: "width"},
         }
 
-    def vae_dynamic_axes(self) -> None:
-        # Static shape (1, 4, 64, 64) → (1, 3, 512, 512).
-        # Dynamic H/W caused torch.onnx.export to hang for 1+ hour due to the
-        # shape-propagation overhead of the many upsampling ops in the legacy
-        # tracer.  SD 1.5 is fixed at 512×512 in the C++ config anyway.
-        return None
+    def vae_dynamic_axes(self) -> dict[str, dict[int, str]]:
+        # Dynamic H/W so the VAE decoder can decode latents at arbitrary
+        # /8-aligned resolutions — required by the hires/second-pass feature,
+        # which upscales the base latent and re-decodes it larger than 64×64.
+        # Mirrors unet_dynamic_axes(): the decoder input is a latent
+        # {0:batch, 2:height, 3:width}; the output image scales 8× spatially.
+        #
+        # HISTORICAL NOTE: an older comment here warned that dynamic H/W caused
+        # torch.onnx.export to hang 1+ hour (shape-propagation overhead in the
+        # legacy tracer).  Re-tested on torch 2.11.0 (2026-07): a legacy-tracer
+        # export of the SD1.5 VAE decoder with dynamic H/W axes completes in
+        # ~19s (vs ~29s static) — the hang is gone, fixed upstream.  Dynamo
+        # cannot express spatial axes (batch-only), so this must go via the
+        # legacy tracer (see vae_exporter below).
+        return {
+            "latent": {0: "batch", 2: "height", 3: "width"},
+            "image":  {0: "batch", 2: "height", 3: "width"},
+        }
 
     def vae_exporter(self) -> str:
-        # Dynamo writes external_data=True during export, bypassing the slow
-        # inline-protobuf consolidation round-trip that legacy requires.
-        return "dynamo"
+        # Legacy tracer: dynamo cannot express spatial (H/W) dynamic axes, only
+        # batch. The ~19s dynamic-H/W legacy export re-validated on torch 2.11.0
+        # is the path this uses; consolidate_external_data() folds the per-tensor
+        # sidecars afterward so runtime still gets a single .onnx.data file.
+        return "legacy"
 
     def should_fix_resize_fp16(self, component_name: str) -> bool:
         return component_name in {"unet", "vae_decoder", "vae_encoder"}

@@ -59,6 +59,9 @@ static ModelCapabilities loadCapabilities(const std::filesystem::path& onnxPath)
                 const auto& c = j["capabilities"];
                 caps.vaeEncoderAvailable = c.value("vae_encoder_available", true);
                 caps.loraCompatible      = c.value("lora_compatible",       true);
+                // Default false: models imported before this key existed are
+                // not known to have a dynamic-H/W VAE, so treat them as static.
+                caps.hiresCapable        = c.value("hires_capable",         false);
             }
         } catch (...) {}
     }

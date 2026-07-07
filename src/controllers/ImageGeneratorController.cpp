@@ -688,6 +688,10 @@ void ImageGeneratorController::update(ImageGeneratorView& view) {
             entry.path         = model.onnxPath.string();
             entry.type         = modelTypeFromArch(model.arch);
             entry.capabilities = model.capabilities;
+            Logger::info("Model '" + entry.displayName + "' capabilities:"
+                         " vae_encoder=" + (entry.capabilities.vaeEncoderAvailable ? "yes" : "no")
+                         + " lora=" + (entry.capabilities.loraCompatible ? "yes" : "no")
+                         + " hires=" + (entry.capabilities.hiresCapable ? "yes" : "no"));
             sp.models.push_back(std::move(entry));
         }
         sp.selectedModelIdx = 0;

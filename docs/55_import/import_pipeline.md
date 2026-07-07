@@ -203,6 +203,7 @@ After export completes, `import_model.py` extends `model.json` with:
   "capabilities": {
     "vae_encoder_available": true,
     "lora_compatible": true,
+    "hires_capable": false,
     "verified": true,
     "components": {
       "text_encoder":   { "dtype": "fp32" },
@@ -214,6 +215,13 @@ After export completes, `import_model.py` extends `model.json` with:
   }
 }
 ```
+
+`hires_capable` is `true` only for SD 1.5 (its VAE decoder exports with dynamic
+H/W axes, so it can decode a hires/second-pass latent larger than native); SDXL
+is `false`. The C++ side reads it into `ModelCapabilities::hiresCapable`, which
+**defaults `false`** when the key is absent — models imported before this key
+existed are treated as static, unlike `vae_encoder_available` / `lora_compatible`
+whose absent-key default is `true`.
 
 ---
 
